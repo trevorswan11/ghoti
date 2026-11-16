@@ -28,7 +28,7 @@ TEST_CASE("GIR dumper formatting") {
     auto& fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 
     SECTION("Dump linear function") {
-        gir::function fn{arena, "add", fn_type};
+        gir::function fn{arena, pool.intern(), "add", fn_type};
         fn.add_param("a", i32_type);
         fn.add_param("b", i32_type);
 
@@ -72,7 +72,7 @@ TEST_CASE("GIR dumper formatting") {
     }
 
     SECTION("Dump control flow function") {
-        function fn{arena, "abs", fn_type};
+        function fn{arena, pool.intern(), "abs", fn_type};
         fn.add_param("x", i32_type);
 
         // seg 0
@@ -84,10 +84,11 @@ TEST_CASE("GIR dumper formatting") {
             .operands = helpers::make_vector<value>(local_id::make_param(0)),
         });
         seg0.append({
-            .kind     = instruction_kind::CONSTANT,
-            .type     = &i32_type,
-            .result   = local_id::make_temp(1),
-            .operands = helpers::make_vector<value>(value{static_cast<i64>(0), &i32_type}),
+            .kind   = instruction_kind::CONSTANT,
+            .type   = &i32_type,
+            .result = local_id::make_temp(1),
+            .operands =
+                helpers::make_vector<value>(value::constant(pool.intern(), i64{0}, i32_type)),
         });
         seg0.append({
             .kind     = instruction_kind::LT,

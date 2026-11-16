@@ -797,8 +797,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
     auto record{writer()};
     record.ref_field(operand)
         .u32_field(bits)
-        .index_field(node.catch_all_idx ? stdx::option<u32>{static_cast<u32>(*node.catch_all_idx)}
-                                        : stdx::none)
+        .index_field(node.catch_all_idx.transform([](usize idx) { return static_cast<u32>(idx); }))
         .count(arms.size());
     for (const auto& arm : arms) {
         record.refs_field(arm.roots)

@@ -328,12 +328,15 @@ auto type_resolver::build_synthetic_enum(gsl::span<const synthetic_tag>        t
     }
 
     auto& enum_type{*ctx_.pool[{type_kind::ENUM, types::mut::CONSTANT, scope_idx}]};
-    enum_type.resolve_if<types::enum_t>(enumerations,
-                                        non_exhaustive,
-                                        tag_type,
-                                        gsl::span<stdx::option<type&>>{},
-                                        resolving_,
-                                        merged_from);
+    enum_type.resolve_if<types::enum_t>(
+        enumerations,
+        non_exhaustive,
+        tag_type,
+        gsl::span<stdx::option<type&>>{},
+        resolving_,
+        merged_from,
+        declared_names(
+            ctx_.arena, resolving_, gsl::span<const ast::enum_expr::enumeration>{enumerations}));
     enum_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&enum_type};
 }
@@ -438,13 +441,16 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
         field_sym.set_status(symbol_status::RESOLVED);
     }
     auto& struct_type{*ctx_.pool[{type_kind::STRUCT, types::mut::CONSTANT, scope_idx}]};
-    struct_type.resolve_if<types::struct_t>(field_types,
-                                            ast_fields,
-                                            gsl::span<stdx::option<type&>>{},
-                                            resolving_,
-                                            *is_extern_v,
-                                            *is_packed_v,
-                                            field_alignments);
+    struct_type.resolve_if<types::struct_t>(
+        field_types,
+        ast_fields,
+        gsl::span<stdx::option<type&>>{},
+        resolving_,
+        *is_extern_v,
+        *is_packed_v,
+        field_alignments,
+        declared_names(
+            ctx_.arena, resolving_, gsl::span<const ast::struct_expr::field>{ast_fields}));
     struct_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&struct_type};
 }
@@ -537,14 +543,17 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     }
 
     auto& union_type{*ctx_.pool[{type_kind::UNION, types::mut::CONSTANT, scope_idx}]};
-    union_type.resolve_if<types::union_t>(field_types,
-                                          ast_fields,
-                                          gsl::span<stdx::option<type&>>{},
-                                          resolving_,
-                                          !*tagged_v,
-                                          *is_extern_v,
-                                          *is_packed_v,
-                                          tag_enum);
+    union_type.resolve_if<types::union_t>(
+        field_types,
+        ast_fields,
+        gsl::span<stdx::option<type&>>{},
+        resolving_,
+        !*tagged_v,
+        *is_extern_v,
+        *is_packed_v,
+        tag_enum,
+        declared_names(
+            ctx_.arena, resolving_, gsl::span<const ast::union_expr::field>{ast_fields}));
     union_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&union_type};
 }

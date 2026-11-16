@@ -194,14 +194,6 @@ class const_eval {
     // Forces a `fn(...): type` deferred-call type to the type it produces
     [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
 
-    [[nodiscard]] static auto type_align_of(const sema::type&           type,
-                                            const codegen::type_layout& layout) -> usize;
-    // A struct field's alignment: its type's, raised by any `@[align(n)]` on the field
-    [[nodiscard]] static auto struct_field_align(const sema::types::struct_t& st,
-                                                 usize                        idx,
-                                                 const codegen::type_layout&  layout) -> usize;
-    [[nodiscard]] static auto type_size_of(const sema::type&           type,
-                                           const codegen::type_layout& layout) -> usize;
     // The type an unannotated type-alias decl (`const X = T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
     [[nodiscard]] static auto

@@ -22,6 +22,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/module/module.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
@@ -642,11 +643,13 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
         });
 }
 
+type_pool::type_pool(ghoti::arena& arena)
+    : arena_{arena}, intern_{stdx::make_box<ip::pool>(arena)} {}
+
+type_pool::~type_pool() = default;
+
 auto type_pool::get_or_emplace(const types::key_t& key) -> gsl::not_null<type*> {
-    if (auto it{cache_.find(key)}; it != cache_.end()) { return it->second; }
-    const gsl::not_null<type*> t{arena_.make<type>(key).get()};
-    cache_.emplace(key, t);
-    return t;
+    return intern_->type_for(key);
 }
 
 auto type_pool::get_many_unsafe(usize count) noexcept -> type_span {

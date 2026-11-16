@@ -31,6 +31,7 @@
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/passes/type_resolver.hh"
@@ -588,9 +589,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
             const auto through_memory{src_sized.get_kind() == type_kind::ARRAY ||
                                       target_sized.get_kind() == type_kind::ARRAY};
             const auto width{[&](const type& t) -> stdx::option<u64> {
-                if (through_memory) {
-                    return u64{gir::const_eval::type_size_of(t, target_layout()) * 8};
-                }
+                if (through_memory) { return u64{gir::size_of(t, target_layout()) * 8}; }
                 if (const auto vec{vector_of(t)}) { return vector_bits(*vec, target_ptr_bits()); }
                 if (t.get_kind() == type_kind::BOOL) { return u64{1}; }
                 return bit_cast_width(t);
@@ -633,8 +632,8 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
             }
         } else if (has_fixed_bit_layout(src) && has_fixed_bit_layout(target)) {
             const auto layout{target_layout()};
-            const auto src_size{gir::const_eval::type_size_of(src, layout)};
-            const auto target_size{gir::const_eval::type_size_of(target, layout)};
+            const auto src_size{gir::size_of(src, layout)};
+            const auto target_size{gir::size_of(target, layout)};
             if (src_size != target_size) {
                 return make_sema_err(
                     fmt::format("`@bitCast` requires equally sized types; '{}' is {} byte(s) but "
@@ -2896,7 +2895,7 @@ auto type_resolver::bit_cast_width(const type& t) const -> stdx::option<u64> {
     }
     if (!has_fixed_bit_layout(t)) { return stdx::none; }
     if (t.get_kind() == type_kind::INT) { return u64{int_width(t)}; }
-    return u64{gir::const_eval::type_size_of(t, target_layout()) * 8};
+    return u64{gir::size_of(t, target_layout()) * 8};
 }
 
 auto type_resolver::has_fixed_bit_layout(const type& t) noexcept -> bool {

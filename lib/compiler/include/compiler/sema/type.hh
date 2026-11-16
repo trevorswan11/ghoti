@@ -26,12 +26,15 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/instance_id.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
+
+namespace ghoti::ip { class pool; } // namespace ghoti::ip
 
 namespace ghoti::sema {
 
@@ -308,6 +311,8 @@ struct enum_t {
     mod::module_t&                               enclosing;
     // The enums an `A || B` merge was built from, empty for any other enum
     gsl::span<const gsl::not_null<type*>> merged_from{};
+    // Each variant's declared name, in declaration order
+    gsl::span<const std::string_view> variant_names{};
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
@@ -336,6 +341,8 @@ struct union_t {
     bool                                    is_packed{false};
     // The enum a `union(MyEnum)` is tagged by, whose variants its fields name
     stdx::option<type&> tag_enum{};
+    // Each field's declared name, in declaration order
+    gsl::span<const std::string_view> field_names{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
@@ -363,6 +370,8 @@ struct struct_t {
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
+    // Each field's declared name, in declaration order
+    gsl::span<const std::string_view> field_names{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
@@ -625,6 +634,8 @@ class type {
     MAKE_DEDUCING_GETTER(data)
 
     [[nodiscard]] auto get_kind() const noexcept -> type_kind { return key_.get_kind(); }
+    // Where the intern pool that created this type holds it
+    [[nodiscard]] auto get_ip_index() const noexcept -> ip::index { return ip_index_; }
 
     // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool". User aggregates
     // found in `names`, at any depth, render by their declared name.
@@ -715,6 +726,7 @@ class type {
 
   private:
     types::key_t              key_;
+    ip::index                 ip_index_{};
     stdx::opt_size            symbol_table_idx_;
     stdx::option<instance_id> instance_id_;
     data_t                    data_;
@@ -723,6 +735,7 @@ class type {
 
     // Initialization is restricted to the pool's arena exclusively
     friend ghoti::arena;
+    friend ip::pool;
 };
 
 static_assert(stdx::TriviallyDestructible<type>);
@@ -787,15 +800,29 @@ struct field_lookup_result {
 [[nodiscard]] auto find_aggregate_field(type& denoted, std::string_view name) noexcept
     -> stdx::option<field_lookup_result>;
 
-// All associated type lifetimes are tied to the pool
+// The declared name of each field or variant in `items`
+template <typename Item>
+[[nodiscard]] auto
+declared_names(ghoti::arena& arena, const mod::module_t& owner, gsl::span<const Item> items)
+    -> gsl::span<const std::string_view> {
+    auto names{arena.make_span<std::string_view>(items.size())};
+    for (usize i{0}; i < items.size(); ++i) {
+        names[i] = owner.ast.get_as<ast::identifier_expr>(items[i].name).name;
+    }
+    return names;
+}
+
+// All associated type lifetimes are tied to the pool, which interns them as `ip` entries
 class type_pool {
   public:
-    explicit type_pool(ghoti::arena& arena) noexcept : arena_{arena} {}
-    ~type_pool() = default;
+    explicit type_pool(ghoti::arena& arena);
+    ~type_pool();
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(type_pool)
 
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
+    // The intern pool every type is created in, which also holds the interned values
+    [[nodiscard]] auto intern(this auto&& self) noexcept -> auto& { return *self.intern_; }
 
     // Gets a type by its key or emplace's it into the internal cache
     [[nodiscard]] auto operator[](const types::key_t& key) -> gsl::not_null<type*> {
@@ -869,8 +896,8 @@ class type_pool {
         -> gsl::not_null<type*>;
 
   private:
-    ghoti::arena&                                                    arena_;
-    ankerl::unordered_dense::map<types::key_t, gsl::not_null<type*>> cache_;
+    ghoti::arena&       arena_;
+    stdx::box<ip::pool> intern_;
 };
 
 // What `t` points at when it is a pointer or a reference

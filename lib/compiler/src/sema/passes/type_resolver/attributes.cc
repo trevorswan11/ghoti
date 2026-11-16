@@ -312,7 +312,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
         const auto      value{evaluator.try_eval(*target_expr)};
         if (const auto closure{value ? value->as_opt<gir::const_closure>() : stdx::none};
             closure && closure->captures.fields.empty()) {
-            owner.emplace(closure->module ? *closure->module : resolving_);
+            owner.emplace(closure->module.value_or(resolving_));
             fn_node.emplace(closure->fn_node);
         }
     }
@@ -391,9 +391,8 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
                               error::TYPE_MISMATCH,
                               target_loc};
         }
-        const auto declared_main{resolving_.root_table_idx ? ctx_.registry.get_from_opt(
-                                                                 *resolving_.root_table_idx, "main")
-                                                           : stdx::none};
+        const auto declared_main{resolving_.root_table_idx.and_then(
+            [this](usize idx) { return ctx_.registry.get_from_opt(idx, "main"); })};
         if (declared_main && fn_name != "main") {
             return diagnostic{fmt::format("'{}' can't be exported as 'main' because this module "
                                           "already declares 'main'",

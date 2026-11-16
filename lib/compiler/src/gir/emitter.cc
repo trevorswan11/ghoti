@@ -528,20 +528,20 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
                 const auto& val{*cxit->second};
-                auto&       btype{val.get_type() ? *val.get_type() : fn_type};
-                value       bound{value{void_val{}, btype}};
+                auto&       btype{val.get_type().value_or(fn_type)};
+                value       bound{constant(void_val{}, btype)};
                 if (val.is<const_closure>()) {
-                    bound = value{emit_comptime_closure(val.as<const_closure>()), btype};
+                    bound = constant(emit_comptime_closure(val.as<const_closure>()), btype);
                 } else if (const auto slice_bytes{comptime_slice_bytes(val, param, fn_mod)}) {
                     // A comptime string or byte array bound to a `[]T` slice param needs a real
                     // {ptr, len} fat pointer, not the raw bytes `btype` alone would store
                     bound = emit_string_as_slice(slice_bytes->bytes, slice_bytes->slice_type);
                 } else if (val.is<std::string>()) {
-                    bound = value{val.as<std::string>(), btype};
+                    bound = constant(val.as<std::string>(), btype);
                 } else {
                     bound = materialize_const(val);
                 }
-                auto& bound_type{bound.type ? *bound.type : btype};
+                auto& bound_type{bound.type.value_or(btype)};
                 scopes_.back().bindings.emplace(p_name,
                                                 local_binding{
                                                     .id        = {0, local_kind::TEMPORARY},
@@ -685,18 +685,18 @@ auto emitter::emit_slice_from_array(value arr_lval, const sema::type& arr_type) 
 
     const auto slice_slot{builder_.emit_alloca(slice_type)};
     const auto elem0_ptr{builder_.emit_get_element_ptr(
-        arr_lval, {value{static_cast<u64>(0), usize_type}}, ptr_type)};
+        arr_lval, {constant(static_cast<u64>(0), usize_type)}, ptr_type)};
 
     const auto field0_ptr{builder_.emit_get_element_ptr(
-        value{slice_slot, slice_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+        value{slice_slot, slice_type}, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
     builder_.emit_store(value{field0_ptr, ptr_type}, value{elem0_ptr, ptr_type}).is_initializer =
         true;
 
     const auto field1_ptr{builder_.emit_get_element_ptr(
-        value{slice_slot, slice_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        value{slice_slot, slice_type}, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
     builder_
         .emit_store(value{field1_ptr, usize_type},
-                    value{static_cast<u64>(arr_data->len), usize_type})
+                    constant(static_cast<u64>(arr_data->len), usize_type))
         .is_initializer = true;
 
     const auto loaded_slice{builder_.emit_load(value{slice_slot, slice_type}, slice_type)};
@@ -741,7 +741,7 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> v
     const auto src_ty{active_mod().get_sema_type_opt(*src)};
     const auto data_ptr{src_ty && (src_ty->get_kind() == sema::type_kind::POINTER ||
                                    src_ty->get_kind() == sema::type_kind::REFERENCE)
-                            ? value{emit_expression_id_raw(*src).data, ptr_ty}
+                            ? retyped(emit_expression_id_raw(*src), ptr_ty)
                             : value{builder_.emit_address_of(emit_lvalue(src), ptr_ty), ptr_ty}};
     const auto vtable_addr{builder_.emit_global_addr(vtable_sym, ptr_ty, true)};
 
@@ -749,10 +749,10 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> v
     auto&      dyn_mut{p ? p->underlying : r->underlying};
     const auto slot{builder_.emit_alloca(dyn_mut)};
     const auto f0{
-        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
-    builder_.emit_store(value{f0, ptr_ty}, value{data_ptr.data, ptr_ty}).is_initializer = true;
+        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {constant(u64{0}, usize_ty)}, ptr_ty)};
+    builder_.emit_store(value{f0, ptr_ty}, retyped(data_ptr, ptr_ty)).is_initializer = true;
     const auto f1{
-        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {value{u64{1}, usize_ty}}, ptr_ty)};
+        builder_.emit_get_element_ptr(value{slot, dyn_mut}, {constant(u64{1}, usize_ty)}, ptr_ty)};
     builder_.emit_store(value{f1, ptr_ty}, value{vtable_addr, ptr_ty}).is_initializer = true;
 
     return value{builder_.emit_load(value{slot, dyn_mut}, fat_type), fat_type};
@@ -786,14 +786,14 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
     auto& ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
                                   ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
 
-    if (src_ty->get_kind() == sema::type_kind::NULLPTR) { return value{zero_val{}, fat_type}; }
+    if (src_ty->get_kind() == sema::type_kind::NULLPTR) { return constant(zero_val{}, fat_type); }
     if (sema::is_fat_callable(*src_ty)) {
         auto fat{emit_expression(src)};
         // A `const f: fn(...) = g;` folds to `g` itself, which still needs its pair built
-        if (fat.is<std::string>()) {
+        if (fat.is_literal<std::string>(constants())) {
             const auto fat_ptr{fat_type.get_data().as_opt<sema::types::pointer>()};
             auto&      thin{ctx_.with_erasure(fat_ptr ? fat_ptr->underlying : fat_type, false)};
-            return value{builder_.emit_make_callable(value{fat.data, thin}, stdx::none, fat_type),
+            return value{builder_.emit_make_callable(retyped(fat, thin), stdx::none, fat_type),
                          fat_type};
         }
         fat.type.emplace(fat_type);
@@ -803,7 +803,7 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
     // A reference or pointer to a closure or a capturing generic already is its environment's
     // address
     if (const auto pointee{sema::pointee_of(*src_ty)}) {
-        const auto env_of{[&] { return value{emit_expression_id_raw(*src).data, ptr_ty}; }};
+        const auto env_of{[&] { return retyped(emit_expression_id_raw(*src), ptr_ty); }};
         if (pointee->get_kind() == sema::type_kind::CLOSURE) {
             return value{builder_.emit_make_callable(env_of(), closure_fn_name(*pointee), fat_type),
                          fat_type};
@@ -816,7 +816,7 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
                 return value{builder_.emit_make_callable(env_of(), *mono, fat_type), fat_type};
             }
             auto& thin{ctx_.with_erasure(fat_ptr ? fat_ptr->underlying : fat_type, false)};
-            return value{builder_.emit_make_callable(value{*mono, thin}, stdx::none, fat_type),
+            return value{builder_.emit_make_callable(constant(*mono, thin), stdx::none, fat_type),
                          fat_type};
         }
     }
@@ -833,7 +833,7 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
                          fat_type};
         }
         auto& thin{ctx_.with_erasure(signature, false)};
-        return value{builder_.emit_make_callable(value{*mono, thin}, stdx::none, fat_type),
+        return value{builder_.emit_make_callable(constant(*mono, thin), stdx::none, fat_type),
                      fat_type};
     }
 
@@ -893,17 +893,21 @@ auto emitter::folded_condition(ast::expr_handle condition) -> stdx::option<bool>
     return stdx::none;
 }
 
-auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
-    if (const auto x{v.as_opt<i64>()}) { return static_cast<i128>(*x); }
-    if (const auto x{v.as_opt<i128>()}) { return *x; }
-    if (const auto x{v.as_opt<u64>()}) { return static_cast<i128>(*x); }
-    if (const auto x{v.as_opt<u128>()}) { return static_cast<i128>(*x); }
+auto emitter::folded_int(const value& v) -> stdx::option<i128> {
+    const auto& pool{constants()};
+    if (const auto x{v.literal_opt<i64>(pool)}) { return static_cast<i128>(*x); }
+    if (const auto x{v.literal_opt<i128>(pool)}) { return *x; }
+    if (const auto x{v.literal_opt<u64>(pool)}) { return static_cast<i128>(*x); }
+    if (const auto x{v.literal_opt<u128>(pool)}) { return static_cast<i128>(*x); }
     return stdx::none;
 }
 
 auto emitter::integer_as_float(const value& v) -> stdx::option<f128> {
-    if (const auto big{v.as_opt<big_int>()}) { return f128::parse(big->to_string()).value; }
-    if (const auto as_unsigned{v.as_opt<u128>()}) { return f128::from_uint(*as_unsigned); }
+    const auto& pool{constants()};
+    if (const auto big{v.literal_opt<big_int>(pool)}) {
+        return f128::parse(big->to_string()).value;
+    }
+    if (const auto as_unsigned{v.literal_opt<u128>(pool)}) { return f128::from_uint(*as_unsigned); }
     if (const auto as_signed{folded_int(v)}) { return f128::from_int(*as_signed); }
     return stdx::none;
 }
@@ -911,9 +915,10 @@ auto emitter::integer_as_float(const value& v) -> stdx::option<f128> {
 auto emitter::check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
     -> void {
     // An integer headed for a float type is checked by its exact value
-    const bool         is_float_value{v.is<f128>()};
+    const auto         float_value{v.literal_opt<f128>(constants())};
+    const bool         is_float_value{float_value.has_value()};
     stdx::option<f128> f{integer_as_float(v)};
-    if (is_float_value) { f = v.as<f128>(); }
+    if (float_value) { f = *float_value; }
     if (!f) { return; }
     // Only a float can already be infinite, so an integer that became one overflowed even f128
     const bool overflowed_quad{!is_float_value && f->is_infinite()};
@@ -949,24 +954,26 @@ auto emitter::widen_untyped_bit_cast_operand(value v, sema::type& target, ast::n
     // A literal has no width of its own, so it takes all of the target's bits or the rest
     // of the reinterpreted bytes are garbage
     if (!v.type || v.type->get_kind() != sema::type_kind::COMPTIME_INT) { return v; }
-    const auto bits{const_eval::type_size_of(target, target_layout_) * 8};
+    const auto bits{gir::size_of(target, target_layout_) * 8};
     if (bits == 0 || bits > std::numeric_limits<u16>::max()) { return v; }
     const auto folded{folded_int(v)};
     const bool is_negative{folded && *folded < 0};
     return coerce_comptime_int(v, ctx_.get_int(static_cast<u16>(bits), is_negative), at);
 }
 
-auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept -> bool {
-    const bool is_constant_number{v.is<f128>() || v.is<i64>() || v.is<u64>() || v.is<i128>() ||
-                                  v.is<u128>()};
+auto emitter::is_foreign_constant(const value& v, const sema::type& t) -> bool {
+    const auto& pool{constants()};
+    const bool  is_constant_number{v.is_literal<f128>(pool) || v.is_literal<i64>(pool) ||
+                                   v.is_literal<u64>(pool) || v.is_literal<i128>(pool) ||
+                                   v.is_literal<u128>(pool)};
     return is_constant_number && (!v.type || !sema::is_same_unqualified(*v.type, t));
 }
 
 auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
     -> value {
     check_comptime_float_fits(v, target, at);
-    if (v.is<f128>()) { return value{v.data, target, v.origin}; }
-    if (const auto as_float{integer_as_float(v)}) { return value{*as_float, target}; }
+    if (v.is_literal<f128>(constants())) { return retyped(v, target, v.origin); }
+    if (const auto as_float{integer_as_float(v)}) { return constant(*as_float, target); }
     return v;
 }
 
@@ -974,7 +981,7 @@ auto emitter::constant_as_use_type(value v, ast::node_id at) -> value {
     const auto use_type{active_mod().get_sema_type_opt(at)};
     if (!use_type || !is_foreign_constant(v, *use_type)) { return v; }
     if (sema::is_float(use_type->get_kind())) { return untyped_number_as_float(v, *use_type, at); }
-    if (sema::is_integer(use_type->get_kind()) && !v.is<f128>()) {
+    if (sema::is_integer(use_type->get_kind()) && !v.is_literal<f128>(constants())) {
         return coerce_comptime_int(v, *use_type, at);
     }
     return v;
@@ -983,7 +990,7 @@ auto emitter::constant_as_use_type(value v, ast::node_id at) -> value {
 auto emitter::prepare_shift_amount(value amount, sema::type& shifted, bool checked, ast::node_id at)
     -> value {
     stdx::option<i128> exact;
-    if (const auto big{amount.as_opt<u128>()}) {
+    if (const auto big{amount.literal_opt<u128>(constants())}) {
         exact = static_cast<i128>(std::min(*big, static_cast<u128>(128)));
     } else {
         exact = folded_int(amount);
@@ -1009,19 +1016,20 @@ auto emitter::prepare_shift_amount(value amount, sema::type& shifted, bool check
     const bool in_range{*exact >= 0 && *exact < domain.bits};
     const auto bits{in_range ? *exact : i128{domain.bits}};
     if (domain.bits > 64) {
-        amount.data =
-            domain.is_signed ? value::data_t{bits} : value::data_t{static_cast<u128>(bits)};
-    } else {
-        amount.data = domain.is_signed ? value::data_t{static_cast<i64>(bits)}
-                                       : value::data_t{static_cast<u64>(bits)};
+        return constant(domain.is_signed ? ip::value_data{bits}
+                                         : ip::value_data{static_cast<u128>(bits)},
+                        shifted,
+                        amount.origin);
     }
-    amount.type.emplace(shifted);
-    return amount;
+    return constant(domain.is_signed ? ip::value_data{static_cast<i64>(bits)}
+                                     : ip::value_data{static_cast<u64>(bits)},
+                    shifted,
+                    amount.origin);
 }
 
 auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value {
     // Past 128 bits only a type at least as wide holds it
-    if (const auto big{v.as_opt<big_int>()}) {
+    if (const auto big{v.literal_opt<big_int>(constants())}) {
         if (!sema::comptime_int_fits(*big, target, target_ptr_bits_)) {
             ctx_.diags.emplace_back(fmt::format("integer value {} is out of range for type '{}'",
                                                 *big,
@@ -1029,12 +1037,11 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
                                     sema::error::LITERAL_OUT_OF_RANGE,
                                     active_ast().location_of(at));
         }
-        v.type.emplace(target);
-        return v;
+        return retyped(v, target, v.origin);
     }
     const auto folded{folded_int(v)};
     // A `u128` past `i128` max views as negative through `folded`, so it is checked exactly
-    const auto wide_unsigned{v.as_opt<u128>()};
+    const auto wide_unsigned{v.literal_opt<u128>(constants())};
     const bool fits{wide_unsigned
                         ? sema::comptime_int_fits(big_int{*wide_unsigned}, target, target_ptr_bits_)
                         : sema::comptime_int_fits(folded.value_or(0), target, target_ptr_bits_)};
@@ -1060,21 +1067,15 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
         }};
         const auto bits{effective_bits(target)};
         if (sema::is_unsigned_integer(target)) {
-            if (bits > 64) {
-                v.data = static_cast<u128>(*folded);
-            } else {
-                v.data = static_cast<u64>(static_cast<u128>(*folded));
-            }
-        } else if (sema::is_signed_integer(target)) {
-            if (bits > 64) {
-                v.data = *folded;
-            } else {
-                v.data = static_cast<i64>(*folded);
-            }
+            if (bits > 64) { return constant(static_cast<u128>(*folded), target, v.origin); }
+            return constant(static_cast<u64>(static_cast<u128>(*folded)), target, v.origin);
+        }
+        if (sema::is_signed_integer(target)) {
+            if (bits > 64) { return constant(*folded, target, v.origin); }
+            return constant(static_cast<i64>(*folded), target, v.origin);
         }
     }
-    v.type.emplace(target);
-    return v;
+    return retyped(v, target, v.origin);
 }
 
 namespace {
@@ -1186,13 +1187,13 @@ auto emitter::emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_ty
         ctx_.diags.emplace_back("an enum literal must be known at compile time",
                                 sema::error::COMPTIME_EVALUATION_FAILED,
                                 active_ast().location_of(*expr_id));
-        return value{undefined_val{}, dest_type};
+        return constant(undefined_val{}, dest_type);
     }
     if (const auto coerced{const_eval_.coerce_enum_literal(*literal, dest_type)}) {
         return materialize_const(*coerced);
     }
     report_missing_enum_member(dest_type, literal->as<const_enum>().name, expr_id);
-    return value{undefined_val{}, dest_type};
+    return constant(undefined_val{}, dest_type);
 }
 
 auto emitter::enum_widen_remaps(const sema::type& from, const sema::type& to)
@@ -1248,13 +1249,13 @@ auto emitter::emit_enum_widen(value v, sema::type& to) -> value {
         builder_.emit_store(slot, dst_int).is_initializer = true;
         for (const auto& [src_val, dst_val] : remaps) {
             const auto is_tag{builder_.emit_binary(
-                instruction_kind::EQ, src_int, value{src_val, from_tag}, bool_type)};
+                instruction_kind::EQ, src_int, constant(src_val, from_tag), bool_type)};
             auto&      rewrite_seg{fn.add_segment()};
             auto&      next_seg{fn.add_segment()};
             builder_.emit_cond_goto(
                 value{is_tag, bool_type}, rewrite_seg.get_id(), next_seg.get_id());
             builder_.set_segment(rewrite_seg);
-            builder_.emit_store(slot, value{dst_val, to_tag});
+            builder_.emit_store(slot, constant(dst_val, to_tag));
             builder_.emit_goto(next_seg.get_id());
             builder_.set_segment(next_seg);
         }
@@ -1279,7 +1280,7 @@ auto emitter::emit_union_tag_as_enum(ast::expr_handle expr_id,
     const auto  variant_of{[&](std::string name) -> value {
         const auto variant{const_eval_.coerce_enum_literal(
             const_value{const_enum{std::move(name), 0}}, enum_type)};
-        return variant ? materialize_const(*variant) : value{undefined_val{}, enum_type};
+        return variant ? materialize_const(*variant) : constant(undefined_val{}, enum_type);
     }};
     if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<const_union>()) {
         return variant_of(cv->as<const_union>().active_field);
@@ -1295,7 +1296,7 @@ auto emitter::emit_union_tag_as_enum(ast::expr_handle expr_id,
     auto&       usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     const auto  tag_ptr{builder_.emit_get_element_ptr(
-        addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     const value tag{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
 
     // The fields need not list the variants in order, so each tag index maps to its variant
@@ -1306,7 +1307,7 @@ auto emitter::emit_union_tag_as_enum(ast::expr_handle expr_id,
         auto&      hit{fn.add_segment()};
         auto&      miss{fn.add_segment()};
         const auto is_field{builder_.emit_binary(
-            instruction_kind::EQ, tag, value{static_cast<i64>(i), i32_type}, bool_type)};
+            instruction_kind::EQ, tag, constant(static_cast<i64>(i), i32_type), bool_type)};
         builder_.emit_cond_goto(value{is_field, bool_type}, hit.get_id(), miss.get_id());
         builder_.set_segment(hit);
         const auto& name{ut.enclosing.ast.get_as<ast::identifier_expr>(ut.ast_fields[i].name).name};
@@ -1345,7 +1346,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     // A generic function where a thin `fn` is expected is the monomorph for that signature
     if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
         src && src->is_generic_value() && dest_type.get_kind() == sema::type_kind::FUNCTION) {
-        if (const auto mono{monomorph_for(*src, dest_type)}) { return value{*mono, dest_type}; }
+        if (const auto mono{monomorph_for(*src, dest_type)}) { return constant(*mono, dest_type); }
     }
 
     // Build the fat pointer for `&T` / `^T` -> `&dyn I` / `^dyn I`
@@ -1433,7 +1434,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
                 sema::error::TYPE_MISMATCH,
                 active_ast().location_of(*expr_id));
             // Same address either way; re-typing keeps later checks from repeating the error
-            return value{emit_expression_id_raw(*expr_id).data, dest_type};
+            return retyped(emit_expression_id_raw(*expr_id), dest_type);
         }
     }
     // A reference destination is one of the few positions that must see the raw reference value
@@ -1441,7 +1442,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         return emit_expression_id_raw(*expr_id);
     }
     // `undefined` carries no type of its own; adopt the destination's so codegen can size it.
-    if (is_undefined_value(*expr_id)) { return value{undefined_val{}, dest_type}; }
+    if (is_undefined_value(*expr_id)) { return constant(undefined_val{}, dest_type); }
 
     const auto val{emit_expression(expr_id)};
 
@@ -1461,7 +1462,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             // int literal -> float context: convert the payload to floating point.
             if (const auto exact{integer_as_float(val)}) {
                 check_comptime_float_fits(val, concrete, *expr_id);
-                return value{*exact, concrete};
+                return constant(*exact, concrete);
             }
         }
         // Reject a compile-time integer that does not fit its concrete integer target.
@@ -1470,7 +1471,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             return coerce_comptime_int(val, concrete, *expr_id);
         }
         check_comptime_float_fits(val, concrete, *expr_id);
-        return value{val.data, concrete, val.origin};
+        return retyped(val, concrete, val.origin);
     }
 
     // A compile-time known integer that provably fits dest_type coerces implicitly
@@ -1485,7 +1486,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             if (const auto cv{const_eval_.try_eval(*expr_id)}) {
                 if (const auto k{cv->as_int_opt()}) {
                     folded = k;
-                    v      = cv->to_gir_value();
+                    v      = cv->to_gir_value(constants());
                 }
             }
         }
@@ -1629,8 +1630,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto is_const{decl.has_modifier(ast::decl_modifiers::LET) ||
                         decl.has_modifier(ast::decl_modifiers::COMPTIME)};
 
-    stdx::option<value>       init_val;
-    stdx::option<const_value> const_init;
+    stdx::option<value>     init_val;
+    stdx::option<ip::index> const_init;
     if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::comptime_context_guard g{const_eval_, true};
         const auto                                    diags_before{ctx_.diags.size()};
@@ -1666,9 +1667,9 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         *why, sema::error::TYPE_MISMATCH, active_ast().location_of(*decl.value));
                     return;
                 }
-                const_init.emplace(std::move(*cv));
+                const_init.emplace(cv->intern_or_zero(constants()));
             } else {
-                auto v{cv->to_gir_value()};
+                auto v{cv->to_gir_value(constants())};
                 if (decl.explicit_type && v.type &&
                     (sema::is_integer(v.type->get_kind()) ||
                      v.type->get_kind() == sema::type_kind::COMPTIME_INT) &&
@@ -1677,11 +1678,12 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                 }
                 if (decl.explicit_type && sema::is_float(sema_type->get_kind())) {
                     // An integer constant bound to a float global needs a real conversion
-                    if (const auto as_float{cv->int_as_float_opt()}; as_float && !v.is<f128>()) {
-                        v = value{*as_float};
+                    if (const auto as_float{cv->int_as_float_opt()};
+                        as_float && !v.is_literal<f128>(constants())) {
+                        v = constant(*as_float);
                     }
                     check_comptime_float_fits(v, *sema_type, *decl.value);
-                    if (v.is<f128>()) { v = value{v.data, *sema_type, v.origin}; }
+                    if (v.is_literal<f128>(constants())) { v = retyped(v, *sema_type, v.origin); }
                 }
                 init_val.emplace(v);
             }
@@ -1904,7 +1906,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     const scope_guard g{scopes_};
     emit_block(active_ast().get_as<ast::block_stmt>(test.block));
     if (const auto cur_seg{builder_.get_segment()}) {
-        if (!cur_seg->has_terminator()) { builder_.emit_return(value{true, bool_type}); }
+        if (!cur_seg->has_terminator()) { builder_.emit_return(constant(true, bool_type)); }
     }
 }
 
@@ -2040,7 +2042,7 @@ auto emitter::emit_function(ast::node_id                   id,
     for (const auto& [name, closure] : std::exchange(ctor_closure_bindings_, {})) {
         auto&       callable_type{closure.module ? closure.module->get_sema_type(closure.fn_node)
                                                  : active_mod().get_sema_type(closure.fn_node)};
-        const value bound{emit_comptime_closure(closure), callable_type};
+        const value bound{constant(emit_comptime_closure(closure), callable_type)};
         scopes_.back().bindings.emplace(name,
                                         local_binding{
                                             .id        = {0, local_kind::TEMPORARY},
@@ -2106,7 +2108,7 @@ auto emitter::emit_implicit_return(sema::type& return_type) -> void {
     if (return_type.get_kind() == sema::type_kind::VOID_) {
         builder_.emit_return();
     } else {
-        builder_.emit_return(value{undefined_val{}, return_type});
+        builder_.emit_return(constant(undefined_val{}, return_type));
     }
 }
 
@@ -2115,7 +2117,7 @@ auto emitter::fold_compile_time_only(ast::node_id id, std::string_view what, sem
     -> value {
     const auto diags_before{ctx_.diags.size()};
     if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
-        return type.get_kind() == sema::type_kind::TYPE ? cv->to_gir_value()
+        return type.get_kind() == sema::type_kind::TYPE ? cv->to_gir_value(constants())
                                                         : materialize_const(*cv);
     }
     if (ctx_.diags.size() == diags_before) {
@@ -2123,7 +2125,7 @@ auto emitter::fold_compile_time_only(ast::node_id id, std::string_view what, sem
                                 sema::error::COMPTIME_EVALUATION_FAILED,
                                 active_ast().location_of(id));
     }
-    return value{undefined_val{}, type};
+    return constant(undefined_val{}, type);
 }
 
 auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr)
@@ -2192,7 +2194,7 @@ auto emitter::emit_named_local_function(std::string_view          name,
                                             .id        = local_id{0, local_kind::TEMPORARY},
                                             .type      = fn_type,
                                             .is_alloca = false,
-                                            .const_val = value{anon_name, fn_type},
+                                            .const_val = constant(anon_name, fn_type),
                                             .is_const  = true,
                                         });
 
@@ -2274,8 +2276,10 @@ auto emitter::bind_env_captures(local_id                      env,
         const bool owned{is_move && capture.mode == sema::types::capture_mode::VALUE};
         auto&      field_type{owned ? *ctx_.pool.with_const(*capture.storage_type, false)
                                     : *capture.storage_type};
-        const auto field_ptr{builder_.emit_get_element_ptr(
-            value{env, env_type}, {value{static_cast<u64>(field_idx++), usize_type}}, field_type)};
+        const auto field_ptr{
+            builder_.emit_get_element_ptr(value{env, env_type},
+                                          {constant(static_cast<u64>(field_idx++), usize_type)},
+                                          field_type)};
         if (owned) {
             scopes_.back().bindings.emplace(capture.name,
                                             local_binding{
@@ -2340,9 +2344,9 @@ auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, b
 
 auto emitter::emit_generic_value(sema::type& generic_fn_type) -> value {
     const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
-    if (!env) { return value{undefined_val{}, generic_fn_type}; }
+    if (!env) { return constant(undefined_val{}, generic_fn_type); }
     const auto built{emit_closure_env(env->get_data().as<sema::types::closure_t>(), *env)};
-    return value{built.data, generic_fn_type};
+    return retyped(built, generic_fn_type);
 }
 
 auto emitter::bind_generic_value(std::string_view name, sema::type& generic_fn_type) -> void {
@@ -2441,7 +2445,7 @@ auto emitter::emit_closure_env(const sema::types::closure_t& cl, sema::type& clo
         const auto field_val{get_capture_source(capture)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{slot, closure_type},
-                                          {value{static_cast<u64>(field_idx), usize_type}},
+                                          {constant(static_cast<u64>(field_idx), usize_type)},
                                           *capture.storage_type)};
         builder_.emit_store(value{field_ptr, *capture.storage_type}, field_val).is_initializer =
             true;
@@ -2483,7 +2487,7 @@ auto emitter::emit_comptime_closure(const const_closure& cl) -> std::string {
     const std::string fn_name{fmt::format("closureconst.{}", key.mangle())};
     if (gir_module_.has_function(fn_name)) { return fn_name; }
 
-    auto&       def_mod{cl.module ? *cl.module : ast_module_};
+    auto&       def_mod{cl.module.value_or(ast_module_)};
     const auto& fn_expr{def_mod.ast.get_as<ast::function_expr>(cl.fn_node)};
     auto&       node_type{def_mod.get_sema_type(cl.fn_node)};
     // A capture-less closure value may wrap a plain function; use its public call signature.
@@ -2588,7 +2592,7 @@ auto emitter::emit_comptime_only_call(ast::node_id id, sema::type& result, sema:
                                 sema::error::COMPTIME_EVALUATION_FAILED,
                                 active_ast().location_of(id));
     }
-    return value{undefined_val{}, dest};
+    return constant(undefined_val{}, dest);
 }
 
 // The declared result of the monomorph `mangled_name`
@@ -2607,9 +2611,10 @@ auto emitter::emit_skip(value msg, ast::node_id at) -> void {
 
     std::vector<value> args;
     args.emplace_back(std::move(msg));
-    args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-    args.emplace_back(value{static_cast<u64>(loc.one_based().line), u32_type});
-    args.emplace_back(value{static_cast<u64>(loc.one_based().column), u32_type});
+    args.emplace_back(
+        const_value::make_string(ctx_, active_mod().path.string()).to_gir_value(constants()));
+    args.emplace_back(constant(static_cast<u64>(loc.one_based().line), u32_type));
+    args.emplace_back(constant(static_cast<u64>(loc.one_based().column), u32_type));
 
     request_builtin_runtime("skip_handler");
     builder_.set_location(loc);
@@ -2617,7 +2622,7 @@ auto emitter::emit_skip(value msg, ast::node_id at) -> void {
     // A skipped test simply passes: return `true` and stop emitting this path
     if (const auto current{builder_.get_function()};
         !current || !current->get_attributes().testing) {
-        builder_.emit_return(value{true, bool_type});
+        builder_.emit_return(constant(true, bool_type));
     }
 }
 
@@ -2625,7 +2630,7 @@ auto emitter::emit_skip(value msg, ast::node_id at) -> void {
 auto emitter::emit_comptime_skip(ast::node_id at) -> bool {
     const auto& msg{const_eval_.last_eval_skipped()};
     if (!msg) { return false; }
-    emit_skip(const_value::make_string(ctx_, *msg).to_gir_value(), at);
+    emit_skip(const_value::make_string(ctx_, *msg).to_gir_value(constants()), at);
     return true;
 }
 
@@ -2648,7 +2653,7 @@ auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at)
 }
 
 auto emitter::retype_if_undefined(value v, sema::type& result_type) -> value {
-    if (v.is<undefined_val>()) { return value{undefined_val{}, result_type}; }
+    if (v.is_literal<undefined_val>(constants())) { return constant(undefined_val{}, result_type); }
     return v;
 }
 
@@ -2657,7 +2662,7 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
     return active_ast()[stmt].visit(
         [&](const auto&) -> value {
             emit_stmt(stmt);
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            return constant(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
         },
         [&](const ast::expr_stmt& expr_st) -> value {
             return emit_expression_id(expr_st.expression);
@@ -2673,10 +2678,10 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
                 } else {
                     DISCARD(emit_comptime_return(*cv, *stmt));
                 }
-                return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+                return constant(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
             }
             emit_block(block);
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            return constant(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
         });
 }
 
@@ -2712,7 +2717,7 @@ auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
                                                     .id        = local_id{0, local_kind::TEMPORARY},
                                                     .type      = cap_type,
                                                     .is_alloca = false,
-                                                    .const_val = value{void_val{}, cap_type},
+                                                    .const_val = constant(void_val{}, cap_type),
                                                     .is_const  = true,
                                                 });
             } else if (entry.modifier.is_ref() || entry.modifier.is_ptr()) {
@@ -2797,7 +2802,7 @@ auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -
     const auto returned_slot{spill_to_temporary(*ret_val, ret_type, false)};
     const auto flow_dest{builder_.emit_call(
         shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_),
-        {value{returned_slot.data, ctx_.get_reference(sema::types::mut::POLY, base_operand)}},
+        {retyped(returned_slot, ctx_.get_reference(sema::types::mut::POLY, base_operand))},
         flow_type)};
     ASSERT(flow_dest, "branch() must return a Flow union value");
     const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
@@ -2810,11 +2815,11 @@ auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -
         }
     }
     const auto tag_ptr{builder_.emit_get_element_ptr(
-        flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        flow_slot, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
     const auto is_failure{builder_.emit_binary(instruction_kind::EQ,
                                                value{tag_val, i32_type},
-                                               value{static_cast<i64>(break_idx), i32_type},
+                                               constant(static_cast<i64>(break_idx), i32_type),
                                                bool_type)};
 
     auto& failure_seg{fn.add_segment()};
@@ -2825,10 +2830,10 @@ auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -
     builder_.set_segment(failure_seg);
     const auto prev_error_slot{current_error_slot_};
     if (from_type.get_kind() == sema::type_kind::VOID_ || shape->residual_is_void) {
-        current_error_slot_ = value{void_val{}, from_type};
+        current_error_slot_ = constant(void_val{}, from_type);
     } else {
         const auto residual_ptr{builder_.emit_get_element_ptr(
-            flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+            flow_slot, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, residual_type)};
         value      residual{builder_.emit_load(value{residual_ptr, residual_type}, residual_type),
                             residual_type};
         residual            = convert_residual(residual, from_type);
@@ -3044,7 +3049,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                                 .id        = {0, local_kind::TEMPORARY},
                                                 .type      = *sema_type,
                                                 .is_alloca = false,
-                                                .const_val = value{anon_name, *sema_type},
+                                                .const_val = constant(anon_name, *sema_type),
                                                 .is_const  = true,
                                             });
             return;
@@ -3064,7 +3069,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                 // No real `gir::value` exists for a folded aggregate
                 stdx::option<value> bound;
                 if (!is_aggregate_cv) {
-                    auto scalar{cv->to_gir_value()};
+                    auto scalar{cv->to_gir_value(constants())};
                     // `const x: iN = <comptime literal>` : range-check, pin the concrete type.
                     if (decl.explicit_type && scalar.type &&
                         (sema::is_integer(scalar.type->get_kind()) ||
@@ -3079,7 +3084,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                 sema::is_implicit_widenable(*scalar.type, *sema_type))) {
                         // An integer constant widening into a float-typed binding needs an
                         // actual numeric conversion
-                        if (const auto f{cv->int_as_float_opt()}) { scalar = value{*f}; }
+                        if (const auto f{cv->int_as_float_opt()}) { scalar = constant(*f); }
                     }
                     if (decl.explicit_type) {
                         check_comptime_float_fits(scalar, *sema_type, *decl.value);
@@ -3094,13 +3099,13 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                             sema::error::TYPE_MISMATCH,
                             active_ast().location_of(*decl.value));
                     }
-                    if (decl.explicit_type && scalar.is<f128>()) {
-                        scalar = value{scalar.data, *sema_type, scalar.origin};
+                    if (decl.explicit_type && scalar.is_literal<f128>(constants())) {
+                        scalar = retyped(scalar, *sema_type, scalar.origin);
                     }
                     // `let p: ^T = nullptr` reads as a `^T`, not as the untyped `nullptr`
-                    if (scalar.is<nullptr_val>() &&
+                    if (scalar.is_literal<nullptr_val>(constants()) &&
                         sema_type->get_kind() != sema::type_kind::NULLPTR) {
-                        scalar = value{scalar.data, *sema_type, scalar.origin};
+                        scalar = retyped(scalar, *sema_type, scalar.origin);
                     }
 
                     bound = scalar;
@@ -3247,9 +3252,9 @@ auto emitter::emit_comptime_value_read(ast::node_id id) -> value {
             (sema::is_integer(sema_type->get_kind()) ||
              sema_type->get_kind() == sema::type_kind::COMPTIME_INT)) {
             if (sema::is_unsigned_integer(*sema_type)) {
-                return value{static_cast<u64>(*iv), sema_type};
+                return constant(static_cast<u64>(*iv), sema_type);
             }
-            return value{static_cast<i64>(*iv), sema_type};
+            return constant(static_cast<i64>(*iv), sema_type);
         }
         if (!is_aggregate || !cv_type || !sema::holds_type_values(*cv_type)) {
             return materialize_const(*cv);
@@ -3266,7 +3271,7 @@ auto emitter::emit_comptime_value_read(ast::node_id id) -> value {
                                 sema::error::COMPILE_TIME_ONLY_VALUE,
                                 active_ast().location_of(id));
     }
-    return value{undefined_val{}, sema_type};
+    return constant(undefined_val{}, sema_type);
 }
 
 auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
@@ -3283,47 +3288,49 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
-                return value{data.as_float(sema::float_format_of(t).value_or(float_format::QUAD)),
-                             t};
+                return constant(
+                    data.as_float(sema::float_format_of(t).value_or(float_format::QUAD)), t);
             }
-            if (data.is_big) { return value{data.exact_value(), t}; }
+            if (data.is_big) { return constant(data.exact_value(), t); }
             // Past `i128` max only an unsigned payload keeps the literal's value
             if (sema::is_unsigned_integer(t) ||
                 data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
                 const u128 v{data.value};
                 if (v <= static_cast<u128>(std::numeric_limits<u64>::max())) {
-                    return value{static_cast<u64>(v), t};
+                    return constant(static_cast<u64>(v), t);
                 }
-                return value{v, t};
+                return constant(v, t);
             }
             const auto v{static_cast<i128>(data.value)};
             if (v >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
                 v <= static_cast<i128>(std::numeric_limits<i64>::max())) {
-                return value{static_cast<i64>(v), t};
+                return constant(static_cast<i64>(v), t);
             }
-            return value{v, t};
+            return constant(v, t);
         },
         [&](const ast::float_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
-            return value{data.value_in(sema::float_format_of(t).value_or(float_format::QUAD)), t};
+            auto&      t{sema_type.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::F64))};
+            return constant(data.value_in(sema::float_format_of(t).value_or(float_format::QUAD)),
+                            t);
         },
         [&](ast::bool_expr) -> value {
-            return value{id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
-                         ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+            return constant(id.get_token_type() == syntax::token_type_t::BOOLEAN_TRUE,
+                            ctx_.get_builtin_resolved_type(sema::type_kind::BOOL));
         },
         [&](const ast::string_expr& data) -> value {
-            return value{std::string{data.value}, active_mod().get_sema_type_opt(id)};
+            return constant(std::string{data.value}, active_mod().get_sema_type_opt(id));
         },
         [&](ast::void_expr) -> value {
-            return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+            return constant(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
         },
         [&](ast::undefined_expr) -> value {
-            return value{undefined_val{},
-                         ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED)};
+            return constant(undefined_val{},
+                            ctx_.get_builtin_resolved_type(sema::type_kind::UNDEFINED));
         },
         [&](ast::nullptr_expr) -> value {
-            return value{nullptr_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
+            return constant(nullptr_val{},
+                            ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR));
         },
         [&](ast::unreachable_expr) -> value {
             // Reaching a `unreachable` is a safety-check violation; `--unsafe` makes it true UB.
@@ -3332,24 +3339,24 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             } else {
                 builder_.emit_unreachable();
             }
-            return value{undefined_val{},
-                         ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+            return constant(undefined_val{},
+                            ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN));
         },
         [&](const ast::identifier_expr& data) -> value { return emit_ident(id, data); },
         // A type spelled only as a type (`dyn I`, `struct { ... }`) carries no runtime value
         [&](const ast::type_expr&) -> value {
-            return value{void_val{}, active_mod().get_sema_type_opt(id)};
+            return constant(void_val{}, active_mod().get_sema_type_opt(id));
         },
         [&](const auto& data) -> value
             requires(std::same_as<std::remove_cvref_t<decltype(data)>, ast::struct_expr> ||
                      std::same_as<std::remove_cvref_t<decltype(data)>, ast::union_expr> ||
                      std::same_as<std::remove_cvref_t<decltype(data)>, ast::enum_expr> ||
                      std::same_as<std::remove_cvref_t<decltype(data)>, ast::interface_expr>)
-        { return value{void_val{}, active_mod().get_sema_type_opt(id)}; },
+        { return constant(void_val{}, active_mod().get_sema_type_opt(id)); },
         [&](const ast::function_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             // A bodyless `fn(...): ret` type expression carries no runtime value.
-            if (data.is_type_expr) { return value{void_val{}, sema_type}; }
+            if (data.is_type_expr) { return constant(void_val{}, sema_type); }
             if (sema_type && sema_type->get_kind() == sema::type_kind::CLOSURE) {
                 return emit_closure(id, data);
             }
@@ -3358,7 +3365,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
                 return emit_generic_value(*sema_type);
             }
             const auto anon_name{emit_anonymous_function(id, data)};
-            return value{anon_name, sema_type};
+            return constant(anon_name, sema_type);
         },
         [&](const ast::if_expr& data) -> value { return emit_if(id, data); },
         [&](const ast::cfg_value_expr&) -> value {
@@ -3366,19 +3373,19 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             const auto it{active_mod().cfg_value_results.find(id.get_index())};
             if (it != active_mod().cfg_value_results.end()) {
                 if (it->second.is_predicate) {
-                    return value{it->second.boolean,
-                                 ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                    return constant(it->second.boolean,
+                                    ctx_.get_builtin_resolved_type(sema::type_kind::BOOL));
                 }
                 if (it->second.chosen) { return emit_expression_id_raw(*it->second.chosen); }
             }
-            return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
+            return constant(undefined_val{}, active_mod().get_sema_type_opt(id));
         },
         [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
         [&](const ast::initializer_expr& data) -> value { return emit_initializer(id, data); },
         [&](const ast::dot_expr& data) -> value {
             // A module's or type's generic function captures nothing, so its value holds nothing
             if (const auto t{active_mod().get_sema_type_opt(id)}; t && t->is_generic_value()) {
-                return value{undefined_val{}, *t};
+                return constant(undefined_val{}, *t);
             }
             return emit_dot(id, data);
         },
@@ -3420,7 +3427,7 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Array expression must have a resolved sema type");
-    if (arr.is_type_expr) { return value{void_val{}, *sema_type}; }
+    if (arr.is_type_expr) { return constant(void_val{}, *sema_type); }
 
     const auto array_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -3430,7 +3437,7 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
     auto& elem_type{arr_data->underlying};
     for (u64 i{0}; const auto& item : arr.items) {
         const auto elem_ptr{builder_.emit_get_element_ptr(
-            value{array_slot, *sema_type}, {value{i++, usize_type}}, elem_type)};
+            value{array_slot, *sema_type}, {constant(i++, usize_type)}, elem_type)};
         const auto val{emit_coerced_expr(item, elem_type)};
         builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
     }
@@ -3474,7 +3481,7 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
             const auto loaded{builder_.emit_load(*own, *named)};
             return value{loaded, *named};
         }
-        return value{undefined_val{}, *named};
+        return constant(undefined_val{}, *named);
     }
 
     // A module-level aggregate `const` or `let mut`: load from its global.
@@ -3506,9 +3513,9 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
     // A bare reference to a sibling `const fn` static member inside a member body lowers to the
     // same function symbol `Type.member` would, not an `undefined` fn value.
     if (sema_type && sema_type->get_kind() == sema::type_kind::FUNCTION) {
-        return value{ref_symbol_name(id, ident.name), sema_type};
+        return constant(ref_symbol_name(id, ident.name), sema_type);
     }
-    return value{undefined_val{}, sema_type};
+    return constant(undefined_val{}, sema_type);
 }
 
 auto emitter::global_ref_in(usize table_idx, std::string_view name, bool allow_fn_vars)
@@ -3574,7 +3581,7 @@ auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
     const auto union_addr = [&](ast::node_id operand, sema::type& union_type) -> value {
         const auto operand_type{active_mod().get_sema_type_opt(operand)};
         if (operand_type && operand_type->get_data().as_opt<sema::types::reference>()) {
-            return value{emit_expression_id_raw(operand).data, union_type};
+            return retyped(emit_expression_id_raw(operand), union_type);
         }
         return emit_lvalue(operand);
     };
@@ -3597,7 +3604,7 @@ auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id
     auto&      i32_type{ctx_.get_int(32, true)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     const auto tag_ptr{builder_.emit_get_element_ptr(
-        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        union_addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
 
     const auto& imp{active_ast().get_as<ast::implicit_access_expr>(member_pattern_id)};
@@ -3610,7 +3617,7 @@ auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     return builder_.emit_binary(instruction_kind::EQ,
                                 value{tag_val, i32_type},
-                                value{static_cast<i64>(proxy->index), i32_type},
+                                constant(static_cast<i64>(proxy->index), i32_type),
                                 bool_type);
 }
 
@@ -3651,7 +3658,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
                                 "array/slice binding does not yet fold through this expression",
                                 sema::error::CONCAT_NOT_FOLDABLE,
                                 active_ast().location_of(id));
-        return value{undefined_val{}, sema_type};
+        return constant(undefined_val{}, sema_type);
     }
     ASSERT(kind_opt, "Binary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Binary expression must have a resolved sema type");
@@ -3722,7 +3729,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
             rhs_ty->get_kind() == sema::type_kind::VOID_) {
             DISCARD(emit_expression(binary.lhs));
             DISCARD(emit_expression(binary.rhs));
-            return value{*kind_opt == instruction_kind::EQ, *sema_type};
+            return constant(*kind_opt == instruction_kind::EQ, *sema_type);
         }
     }
 
@@ -3775,7 +3782,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
     if (op_type == syntax::token_type_t::PLUS) {
-        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(constants()); }
         return emit_expression(unary.rhs);
     }
     const auto kind_opt{map_unary_op(op_type)};
@@ -3791,7 +3798,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
             }
         }
         if (cv->is<const_array>()) { return materialize_const(*cv); }
-        return cv->to_gir_value();
+        return cv->to_gir_value(constants());
     }
     const auto operand{emit_expression(unary.rhs)};
     if (op_type == syntax::token_type_t::BANG && operand.type &&
@@ -3802,8 +3809,8 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     const auto& lane{sema::lane_type_of(*sema_type)};
     if (op_type == syntax::token_type_t::MINUS_PERCENT && sema::is_integer(lane.get_kind()) &&
         !sema::is_signed_integer(lane)) {
-        const value zero{sema::is_vector(*sema_type) ? value{zero_val{}, *sema_type}
-                                                     : value{u64{0}, *sema_type}};
+        const value zero{sema::is_vector(*sema_type) ? constant(zero_val{}, *sema_type)
+                                                     : constant(u64{0}, *sema_type)};
         const auto  dest{
             emit_checked_binary(instruction_kind::SUB, zero, operand, *sema_type, id, true)};
         return value{dest, sema_type};
@@ -3821,10 +3828,10 @@ auto emitter::emit_splat(value scalar, sema::type& vector_type) -> value {
 auto emitter::emit_vector_from_lanes(gsl::span<const value> lanes, sema::type& vector_type)
     -> value {
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-    value vec{undefined_val{}, vector_type};
+    value vec{constant(undefined_val{}, vector_type)};
     for (usize i{0}; i < lanes.size(); ++i) {
         vec = value{builder_.emit_vector_op(instruction_kind::INSERT_LANE,
-                                            {vec, value{u64{i}, usize_type}, lanes[i]},
+                                            {vec, constant(u64{i}, usize_type), lanes[i]},
                                             vector_type),
                     vector_type};
     }
@@ -3865,7 +3872,7 @@ auto emitter::emit_lane_builtin(ast::node_id          id,
     const auto memory_op{[&](std::vector<value> args) -> value {
         const auto res{
             builder_.emit_builtin_call(syntax::builtin_name(kind), std::move(args), result)};
-        return res ? value{*res, result} : value{void_val{}, result};
+        return res ? value{*res, result} : constant(void_val{}, result);
     }};
 
     switch (kind) {
@@ -3907,10 +3914,10 @@ auto emitter::emit_lane_builtin(ast::node_id          id,
         std::vector<value> operands{emit_expression(arg_expr(0)), vector_arg(1, a_type)};
         for (const auto entry : *mask) {
             if (!entry) {
-                operands.emplace_back(undefined_val{}, i64_type);
+                operands.emplace_back(constant(undefined_val{}, i64_type));
                 continue;
             }
-            operands.emplace_back(*entry >= 0 ? *entry : a_len + ~*entry, i64_type);
+            operands.emplace_back(constant(*entry >= 0 ? *entry : a_len + ~*entry, i64_type));
         }
         return value{
             builder_.emit_vector_op(instruction_kind::SHUFFLE, std::move(operands), result),
@@ -3920,7 +3927,7 @@ auto emitter::emit_lane_builtin(ast::node_id          id,
         const auto len{sema::vector_of(result)->len};
         auto&      lane{sema::lane_type_of(result)};
         const auto branch{[&](usize i) {
-            if (is_undefined_value(arg_expr(i))) { return value{undefined_val{}, result}; }
+            if (is_undefined_value(arg_expr(i))) { return constant(undefined_val{}, result); }
             return emit_vector_operand(arg_expr(i), lane, len);
         }};
         auto       pred{emit_expression(arg_expr(0))};
@@ -4027,7 +4034,7 @@ auto emitter::emit_lane_index_check(const value& idx, u32 len, ast::node_id site
             ? idx
             : value{builder_.emit_cast(instruction_kind::INT_CAST, idx, usize_type), usize_type}};
     const auto in_bounds{builder_.emit_binary(
-        instruction_kind::LT, as_usize, value{u64{len}, usize_type}, bool_type)};
+        instruction_kind::LT, as_usize, constant(u64{len}, usize_type), bool_type)};
 
     auto& fn{*builder_.get_function()};
     auto& valid_seg{fn.add_segment()};
@@ -4115,9 +4122,10 @@ auto emitter::sync_tagged_union_tag(ast::node_id assign_lhs) -> void {
     auto&      i32_type{ctx_.get_int(32, true)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     const auto tag_ptr{builder_.emit_get_element_ptr(
-        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        union_addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     // The tag write establishes the active variant, the same as a construction-time write does
-    builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(proxy->index), i32_type})
+    builder_
+        .emit_store(value{tag_ptr, i32_type}, constant(static_cast<i64>(proxy->index), i32_type))
         .is_initializer = true;
 }
 
@@ -4167,12 +4175,12 @@ auto emitter::emit_packed_bits_extract(
     value backing, u32 n, u32 offset, u32 fbits, sema::type& field_type) -> value {
     auto& backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
 
-    const value shifted{
-        offset == 0
-            ? backing
-            : value{builder_.emit_binary(
-                        instruction_kind::SHR, backing, value{u64{offset}, backing_ty}, backing_ty),
-                    backing_ty}};
+    const value shifted{offset == 0 ? backing
+                                    : value{builder_.emit_binary(instruction_kind::SHR,
+                                                                 backing,
+                                                                 constant(u64{offset}, backing_ty),
+                                                                 backing_ty),
+                                            backing_ty}};
 
     const auto kind{field_type.get_kind()};
     if (kind == sema::type_kind::INT) {
@@ -4267,24 +4275,24 @@ auto emitter::emit_packed_bits_merge(
 
     const value zexted{builder_.emit_cast(instruction_kind::WIDEN_CAST, as_fbits, backing_ty),
                        backing_ty};
-    const value shifted{
-        offset == 0
-            ? zexted
-            : value{builder_.emit_binary(
-                        instruction_kind::SHL, zexted, value{u64{offset}, backing_ty}, backing_ty),
-                    backing_ty}};
+    const value shifted{offset == 0 ? zexted
+                                    : value{builder_.emit_binary(instruction_kind::SHL,
+                                                                 zexted,
+                                                                 constant(u64{offset}, backing_ty),
+                                                                 backing_ty),
+                                            backing_ty}};
 
     const u128 field_mask{fbits >= 128 ? ~u128{0} : ((u128{1} << fbits) - 1)};
     const u128 all_ones{n >= 128 ? ~u128{0} : ((u128{1} << n) - 1)};
     const u128 mask{(field_mask << offset) & all_ones};
     const u128 inv_mask{all_ones ^ mask};
 
-    const value bits_in{
-        builder_.emit_binary(instruction_kind::AND, shifted, value{mask, backing_ty}, backing_ty),
-        backing_ty};
+    const value bits_in{builder_.emit_binary(
+                            instruction_kind::AND, shifted, constant(mask, backing_ty), backing_ty),
+                        backing_ty};
     const value cleared{
         builder_.emit_binary(
-            instruction_kind::AND, old_backing, value{inv_mask, backing_ty}, backing_ty),
+            instruction_kind::AND, old_backing, constant(inv_mask, backing_ty), backing_ty),
         backing_ty};
     return value{builder_.emit_binary(instruction_kind::OR, cleared, bits_in, backing_ty),
                  backing_ty};
@@ -4438,11 +4446,11 @@ auto emitter::try_emit_comptime_mut_assignment(ast::node_id id, const ast::assig
             ctx_.diags.emplace_back("`comptime let mut` assignment must be known at compile time",
                                     sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE,
                                     active_ast().location_of(id));
-            return value{undefined_val{}, binding->type};
+            return constant(undefined_val{}, binding->type);
         }
 
         update_comptime_mut(ident->name, *new_val);
-        const auto gv{new_val->to_gir_value()};
+        const auto gv{new_val->to_gir_value(constants())};
         binding->const_val = gv;
         return gv;
     }
@@ -4491,7 +4499,7 @@ auto emitter::try_emit_comptime_mut_place_assignment(ast::node_id               
         ctx_.diags.emplace_back("`comptime let mut` assignment must be known at compile time",
                                 sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE,
                                 active_ast().location_of(id));
-        return value{undefined_val{}, binding->type};
+        return constant(undefined_val{}, binding->type);
     }};
 
     const auto current{ctx_.lookup_comptime_binding(root_name)};
@@ -4543,7 +4551,7 @@ auto emitter::try_emit_comptime_mut_place_assignment(ast::node_id               
     *place = *new_val;
     update_comptime_mut(root_name, std::move(rebuilt));
     binding->const_val = stdx::none;
-    return new_val->to_gir_value();
+    return new_val->to_gir_value(constants());
 }
 
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {
@@ -4578,7 +4586,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     // Copying into a slice range moves the source's elements in; the lengths match statically
     if (const auto dest{sema::slice_copy_destination(active_mod(), assign.lhs)}) {
         emit_mem_intrinsic(id, *dest, assign.rhs, syntax::builtin_t::MEMMOVE, false);
-        return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+        return constant(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
     }
 
     sync_tagged_union_tag(assign.lhs);
@@ -4702,15 +4710,15 @@ auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
         }
     }
 
-    auto&      asm_result_type{result_type ? *result_type : void_type};
+    auto&      asm_result_type{result_type.value_or(void_type)};
     const auto dest{builder_.emit_inline_asm(std::move(info), std::move(inputs), asm_result_type)};
 
     if (node.has_option(ast::asm_expr::option::NORETURN)) {
         builder_.emit_unreachable();
-        return value{undefined_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
+        return constant(undefined_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN));
     }
     if (dest) { return value{*dest, asm_result_type}; }
-    return value{void_val{}, void_type};
+    return constant(void_val{}, void_type);
 }
 
 auto emitter::resolve_static_field_ref(const ast::call_expr& call)
@@ -4804,13 +4812,13 @@ auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::o
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     if (st) {
         const auto field_ptr{builder_.emit_get_element_ptr(
-            base_lval, {value{static_cast<u64>(proxy->index), usize_type}}, field_type)};
+            base_lval, {constant(static_cast<u64>(proxy->index), usize_type)}, field_type)};
         return value{field_ptr, field_type};
     }
     if (ut->is_bit_packed()) { return stdx::none; }
-    if (ut->is_untagged) { return value{base_lval.data, field_type}; }
+    if (ut->is_untagged) { return retyped(base_lval, field_type); }
     const auto payload_ptr{builder_.emit_get_element_ptr(
-        base_lval, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
+        base_lval, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, field_type)};
     return value{payload_ptr, field_type};
 }
 
@@ -4833,8 +4841,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                     active_ast().location_of(id));
         }
         const auto ret{active_mod().get_sema_type_opt(id)};
-        return value{undefined_val{},
-                     ret.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
+        return constant(undefined_val{},
+                        ret.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)));
     }
     auto result{emit_unmodified_call(id, call)};
     builder_.mark_last_call(modifier);
@@ -4937,7 +4945,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                 const auto tag_ptr{builder_.emit_get_element_ptr(
                     emit_lvalue(*op_expr),
-                    {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
+                    {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)},
                     ret_type)};
                 return value{builder_.emit_load(value{tag_ptr, ret_type}, ret_type), ret_type};
             }
@@ -4968,8 +4976,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                         return pointer_to_bool(operand, false);
                     }
                     auto&      op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
-                    const auto zero{sema::is_vector(op_type) ? value{zero_val{}, op_type}
-                                                             : value{u64{0}, op_type}};
+                    const auto zero{sema::is_vector(op_type) ? constant(zero_val{}, op_type)
+                                                             : constant(u64{0}, op_type)};
                     return value{
                         builder_.emit_binary(instruction_kind::NE, operand, zero, ret_type),
                         ret_type};
@@ -5000,11 +5008,11 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                         ctx_.get_pointer(sema::types::mut::CONSTANT,
                                          ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
                     auto&      usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                    const auto fat{value{emit_expression_id_raw(*op_expr).data, dyn_mut}};
+                    const auto fat{retyped(emit_expression_id_raw(*op_expr), dyn_mut)};
                     const auto slot{builder_.emit_alloca(dyn_mut)};
                     builder_.emit_store(value{slot, dyn_mut}, fat);
                     const auto d_ptr{builder_.emit_get_element_ptr(
-                        value{slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
+                        value{slot, dyn_mut}, {constant(u64{0}, usize_ty)}, ptr_ty)};
                     return value{builder_.emit_load(value{d_ptr, ptr_ty}, ret_type), ret_type};
                 }
             }
@@ -5026,7 +5034,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
-                    return value{operand.data, ret_type};
+                    return retyped(operand, ret_type);
                 }
             }
             break;
@@ -5044,12 +5052,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     auto&      ptr_type{ptr_val.type.value_or(ret_type)};
                     const auto field0{
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
-                                                      {value{SLICE_PTR_FIELD_INDEX, usize_type}},
+                                                      {constant(SLICE_PTR_FIELD_INDEX, usize_type)},
                                                       ptr_type)};
                     builder_.emit_store(value{field0, ptr_type}, ptr_val).is_initializer = true;
                     const auto field1{
                         builder_.emit_get_element_ptr(value{slice_slot, ret_type},
-                                                      {value{SLICE_LEN_FIELD_INDEX, usize_type}},
+                                                      {constant(SLICE_LEN_FIELD_INDEX, usize_type)},
                                                       usize_type)};
                     builder_.emit_store(value{field1, usize_type}, len_val).is_initializer = true;
                     return value{builder_.emit_load(value{slice_slot, ret_type}, ret_type),
@@ -5070,7 +5078,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
                 std::vector<value> args;
                 args.emplace_back(emit_expression(*ptr_h));
-                args.emplace_back(value{static_cast<u64>(field_idx), usize_type});
+                args.emplace_back(constant(static_cast<u64>(field_idx), usize_type));
                 if (const auto res{
                         builder_.emit_builtin_call("@fieldParentPtr", std::move(args), ret_type)}) {
                     return value{*res, ret_type};
@@ -5135,7 +5143,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
             emit_panic_call(message, id);
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::COMPILE_ERROR: {
             std::string message{"compilation aborted by @compileError"};
@@ -5151,9 +5159,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             ctx_.diags.emplace_back(std::move(message),
                                     sema::error::COMPILE_ERROR_REACHED,
                                     active_ast().location_of(call.function));
-            return value{undefined_val{}, ret_type};
+            return constant(undefined_val{}, ret_type);
         }
-        case syntax::builtin_t::BRANCH_HINT:        return value{void_val{}, ret_type};
+        case syntax::builtin_t::BRANCH_HINT:        return constant(void_val{}, ret_type);
         case syntax::builtin_t::SET_RUNTIME_SAFETY: {
             const auto arg{*call.arguments[0].as_opt<ast::expr_handle>()};
             if (const auto cv{const_eval_.try_eval(arg)}) {
@@ -5162,12 +5170,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     scopes_.back().safety_owner   = builder_.get_function();
                 }
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::LLVM_INTRINSIC: {
             // The resolver checked the name and the types; the call carries the name itself
@@ -5184,39 +5192,39 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::ENTRY_MAIN:
         case syntax::builtin_t::ENTRY_TEST_RUNNER: {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
-            return value{undefined_val{}, ret_type};
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(constants()); }
+            return constant(undefined_val{}, ret_type);
         }
         case syntax::builtin_t::TEST_FUNCTIONS: {
             // Lowering builds the table once every test function is known
             if (const auto res{builder_.emit_builtin_call("@testFunctions", {}, ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::RETURN_ADDRESS: {
             if (const auto res{builder_.emit_builtin_call("@returnAddress", {}, ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
             const auto         loc{active_ast().location_of(*call.function).one_based()};
             auto&              u32_type{ctx_.get_int(32, false)};
             std::vector<value> args;
-            args.emplace_back(
-                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+            args.emplace_back(const_value::make_string(ctx_, active_mod().path.string())
+                                  .to_gir_value(constants()));
+            args.emplace_back(constant(static_cast<u64>(loc.line), u32_type));
+            args.emplace_back(constant(static_cast<u64>(loc.column), u32_type));
             if (const auto res{builder_.emit_builtin_call("@src", std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::EMBED:
         case syntax::builtin_t::SIZE_OF:
@@ -5229,16 +5237,16 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::TARGET_TRIPLE:
         case syntax::builtin_t::OPTIMIZE_MODE:
         case syntax::builtin_t::RUNTIME_SAFETY: {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(constants()); }
             break;
         }
         case syntax::builtin_t::TAG_NAME: {
             if (const auto cv{const_eval_.try_eval(id)}) {
-                // A bare string constant's `to_gir_value()` carries only a data pointer
+                // A bare string constant's `to_gir_value(constants())` carries only a data pointer
                 if (const auto s{cv->as_opt<std::string>()}) {
                     return materialize_string_slice(*s, ret_type);
                 }
-                return cv->to_gir_value();
+                return cv->to_gir_value(constants());
             }
             if (!call.arguments.empty()) {
                 if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
@@ -5256,7 +5264,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::REQUIRE: {
             const auto is_expect{fn_token == syntax::builtin_t::EXPECT};
 
-            value               cond_val{void_val{}, ret_type};
+            value               cond_val{constant(void_val{}, ret_type)};
             stdx::option<value> msg_val;
             bool                first{true};
             for (const auto& arg : call.arguments) {
@@ -5276,12 +5284,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
             std::vector<value> args;
             args.emplace_back(std::move(cond_val));
-            args.emplace_back(
-                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
-            args.emplace_back(msg_val ? std::move(*msg_val)
-                                      : const_value::make_string(ctx_, "").to_gir_value());
+            args.emplace_back(const_value::make_string(ctx_, active_mod().path.string())
+                                  .to_gir_value(constants()));
+            args.emplace_back(constant(static_cast<u64>(loc.line), u32_type));
+            args.emplace_back(constant(static_cast<u64>(loc.column), u32_type));
+            args.emplace_back(msg_val
+                                  ? std::move(*msg_val)
+                                  : const_value::make_string(ctx_, "").to_gir_value(constants()));
 
             // The failure branch calls a weak context handler
             request_builtin_runtime(is_expect ? "expect_handler" : "require_handler");
@@ -5289,7 +5298,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const auto* name{is_expect ? "@expect" : "@require"};
             const auto  local_res{builder_.emit_builtin_call(name, std::move(args), ret_type)};
             if (is_expect && local_res) { return value{*local_res, ret_type}; }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::ASSERT:
         case syntax::builtin_t::VERIFY: {
@@ -5300,12 +5309,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 if (const auto ch{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     if (const auto cv{const_eval_.try_eval(*ch)}) {
                         if (const auto b{cv->as_opt<bool>()}; b && *b) {
-                            return value{void_val{}, ret_type};
+                            return constant(void_val{}, ret_type);
                         }
                     }
                 }
             }
-            if (!is_verify && !safety_enabled()) { return value{void_val{}, ret_type}; }
+            if (!is_verify && !safety_enabled()) { return constant(void_val{}, ret_type); }
 
             std::string message{is_verify ? "verification failed" : "assertion failed"};
             if (call.arguments.size() > 1) {
@@ -5324,16 +5333,16 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             std::vector<value> args;
             args.emplace_back(
                 coerce_condition(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>())));
-            args.emplace_back(
-                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
-            args.emplace_back(const_value::make_string(ctx_, message).to_gir_value());
+            args.emplace_back(const_value::make_string(ctx_, active_mod().path.string())
+                                  .to_gir_value(constants()));
+            args.emplace_back(constant(static_cast<u64>(loc.line), u32_type));
+            args.emplace_back(constant(static_cast<u64>(loc.column), u32_type));
+            args.emplace_back(const_value::make_string(ctx_, message).to_gir_value(constants()));
 
             request_builtin_runtime(is_verify ? "panic_handler" : "assert_handler");
             builder_.emit_builtin_call(
                 is_verify ? "@verify" : "@assert", std::move(args), ret_type);
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::SKIP: {
             // `@skip(["msg"])` marks the enclosing test as skipped and returns from it.
@@ -5344,9 +5353,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
             emit_skip(msg_val ? std::move(*msg_val)
-                              : const_value::make_string(ctx_, "").to_gir_value(),
+                              : const_value::make_string(ctx_, "").to_gir_value(constants()),
                       *call.function);
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::CLZ:
         case syntax::builtin_t::CTZ:
@@ -5396,7 +5405,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                                                           checked)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::SQRT:
         case syntax::builtin_t::SIN:
@@ -5417,7 +5426,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     name, {emit_coerced_expr(*expr_h, ret_type)}, ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::MUL_ADD: {
             if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
@@ -5433,7 +5442,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::C_VA_START:
         case syntax::builtin_t::C_VA_COPY:
@@ -5474,7 +5483,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         case syntax::builtin_t::ATOMIC_LOAD:
         case syntax::builtin_t::ATOMIC_STORE:
@@ -5495,7 +5504,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
             if (fn_token == syntax::builtin_t::FENCE) {
                 builder_.emit_builtin_call(name, {}, ret_type, stdx::none, eval_order(0));
-                return value{void_val{}, ret_type};
+                return constant(void_val{}, ret_type);
             }
 
             const bool  has_t_arg{fn_token != syntax::builtin_t::ATOMIC_STORE};
@@ -5509,13 +5518,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 const auto order{eval_order(2)};
                 const auto res{
                     builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order)};
-                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+                return res ? value{*res, ret_type} : constant(void_val{}, ret_type);
             }
             case syntax::builtin_t::ATOMIC_STORE: {
                 args.emplace_back(emit_expression(*call.arguments[1].as_opt<ast::expr_handle>()));
                 const auto order{eval_order(2)};
                 builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order);
-                return value{void_val{}, ret_type};
+                return constant(void_val{}, ret_type);
             }
             case syntax::builtin_t::ATOMIC_RMW: {
                 const auto op{eval_order(2)};
@@ -5523,7 +5532,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 const auto order{eval_order(4)};
                 const auto res{
                     builder_.emit_builtin_call(name, std::move(args), ret_type, op, order)};
-                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+                return res ? value{*res, ret_type} : constant(void_val{}, ret_type);
             }
             case syntax::builtin_t::CMPXCHG_WEAK:
             case syntax::builtin_t::CMPXCHG_STRONG: {
@@ -5535,7 +5544,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     emit_expression_id_raw(*call.arguments[6].as_opt<ast::expr_handle>()));
                 const auto res{builder_.emit_builtin_call(
                     name, std::move(args), ret_type, stdx::none, succ, fail)};
-                return res ? value{*res, ret_type} : value{void_val{}, ret_type};
+                return res ? value{*res, ret_type} : constant(void_val{}, ret_type);
             }
             default: UNREACHABLE("Unhandled atomic builtin");
             }
@@ -5555,7 +5564,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                                *call.arguments[0].as_opt<ast::expr_handle>(),
                                *call.arguments[1].as_opt<ast::expr_handle>(),
                                fn_token);
-            return value{void_val{}, ret_type};
+            return constant(void_val{}, ret_type);
         }
         default: {
             if (const auto cv{const_eval_.try_eval(id)}) {
@@ -5564,7 +5573,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     cv->is<const_dyn_fat_ptr>()) {
                     return materialize_const(*cv);
                 }
-                return cv->to_gir_value();
+                return cv->to_gir_value(constants());
             }
             break;
         }
@@ -5623,8 +5632,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const bool is_fn_val_binding{binding->type.get_kind() == sema::type_kind::FUNCTION &&
                                          !binding->type.is_generic_value()};
             const auto fn_ref{binding->type.get_data().as_opt<sema::types::reference>()};
-            if (binding->const_val && binding->const_val->template is<std::string>()) {
-                callee_name.emplace(binding->const_val->template as<std::string>());
+            if (binding->const_val && binding->const_val->is_literal<std::string>(constants())) {
+                callee_name.emplace(*binding->const_val->literal_opt<std::string>(constants()));
             } else if (fn_ref && fn_ref->underlying.get_kind() == sema::type_kind::FUNCTION) {
                 // A reference to a function value is called through the value it refers to
                 const auto ref_val{binding->is_alloca
@@ -5709,13 +5718,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             auto& dyn_mut{*recv_dyn};
 
             // Spill `w` to get its address, then read the `{ data, vtable }` fields.
-            const auto fat{value{emit_expression_id_raw(*dot_call->object).data, dyn_mut}};
+            const auto fat{retyped(emit_expression_id_raw(*dot_call->object), dyn_mut)};
             const auto fat_slot{builder_.emit_alloca(dyn_mut)};
             builder_.emit_store(value{fat_slot, dyn_mut}, fat);
             const auto d_ptr{builder_.emit_get_element_ptr(
-                value{fat_slot, dyn_mut}, {value{u64{0}, usize_ty}}, ptr_ty)};
+                value{fat_slot, dyn_mut}, {constant(u64{0}, usize_ty)}, ptr_ty)};
             const auto v_ptr{builder_.emit_get_element_ptr(
-                value{fat_slot, dyn_mut}, {value{u64{1}, usize_ty}}, ptr_ty)};
+                value{fat_slot, dyn_mut}, {constant(u64{1}, usize_ty)}, ptr_ty)};
 
             auto& self_ty{fn_d && !fn_d->params.empty() ? *fn_d->params[0] : ptr_ty};
             dyn_self_data.emplace(
@@ -5723,8 +5732,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
             const auto vtable{builder_.emit_load(value{v_ptr, ptr_ty}, ptr_ty)};
             const auto slot_ptr{builder_.emit_get_element_ptr(
-                value{vtable, ptr_to_ptr_ty}, {value{slot_idx, usize_ty}}, ptr_ty)};
-            auto&      callee_ty{fn_ty ? *fn_ty : ptr_ty};
+                value{vtable, ptr_to_ptr_ty}, {constant(slot_idx, usize_ty)}, ptr_ty)};
+            auto&      callee_ty{fn_ty.value_or(ptr_ty)};
             indirect_callee.emplace(
                 value{builder_.emit_load(value{slot_ptr, ptr_ty}, callee_ty), callee_ty});
         } else if (fn_d && !fn_d->has_self) {
@@ -5958,7 +5967,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         // The callee's binding is the environment; spill it to an alloca to get its address.
         ASSERT(!fn_data->params.empty(), "Closure implementation signature must have self");
         const auto self_ptr{emit_lvalue(call.function)};
-        args.emplace_back(value{self_ptr.data, *fn_data->params[0]});
+        args.emplace_back(retyped(self_ptr, *fn_data->params[0]));
     } else if (is_fn_ctx_self_call) {
         // Recursing into a closure via @fnCtx(): reuse this body's own self binding
         const auto binding{lookup_binding(CLOSURE_ENV_BINDING)};
@@ -5979,7 +5988,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                              obj_type->get_kind() == sema::type_kind::REFERENCE)) {
                 // A `^T`/`&T` receiver already yields an address, so pass its raw
                 // value retyped to the self-param mode
-                args.emplace_back(value{emit_expression_id_raw(*obj_expr_h).data, self_param_type});
+                args.emplace_back(retyped(emit_expression_id_raw(*obj_expr_h), self_param_type));
             } else {
                 // Anything else is an lvalue to take the address of.
                 const auto addr{builder_.emit_address_of(emit_lvalue(obj_expr_h), self_param_type)};
@@ -5987,7 +5996,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
         } else {
             // Retype to the declared self-param's own const/mut qualifier
-            args.emplace_back(value{emit_expression(obj_expr_h).data, self_param_type});
+            args.emplace_back(retyped(emit_expression(obj_expr_h), self_param_type));
         }
     }
 
@@ -6120,7 +6129,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             if (is_type_arg) {
                 auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
-                args.emplace_back(value{undefined_val{}, type_type});
+                args.emplace_back(constant(undefined_val{}, type_type));
             } else if (const auto inst_param{instantiated_param(p)}) {
                 args.emplace_back(emit_coerced_expr(*expr_h, *inst_param));
             } else if (fn_data && param_idx < fn_data->params.size()) {
@@ -6130,7 +6139,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
         } else if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
             auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
-            args.emplace_back(value{undefined_val{}, type_type});
+            args.emplace_back(constant(undefined_val{}, type_type));
         }
     }
 
@@ -6146,7 +6155,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 builder_.emit_indirect_call(*indirect_callee, std::move(args), ret_type)}) {
             return value{*dest, ret_type};
         }
-        return value{void_val{}, ret_type};
+        return constant(void_val{}, ret_type);
     }
 
     // Fallback match by arg types only, for calls the resolver did not pin above.
@@ -6187,7 +6196,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     if (const auto dest{builder_.emit_call(*callee_name, std::move(args), ret_type)}) {
         return value{*dest, ret_type};
     }
-    return value{void_val{}, ret_type};
+    return constant(void_val{}, ret_type);
 }
 
 auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
@@ -6207,13 +6216,13 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     const auto emit_single_arm{[&](ast::stmt_handle arm) -> value {
         return yields_value ? emit_stmt_as_value(arm)
-                            : (emit_stmt(arm), value{void_val{}, sema_type});
+                            : (emit_stmt(arm), constant(void_val{}, sema_type));
     }};
 
     // Emitted code only ever runs outside of compile-time evaluation
     if (if_expr.is_evaluation_context_branch()) {
         if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
-        return value{void_val{}, sema_type};
+        return constant(void_val{}, sema_type);
     }
 
     const bool in_cx_loop{
@@ -6223,7 +6232,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if (const auto br{active_mod().get_if_branch_opt(id.get_index())}) {
             if (*br == mod::if_branch::CONSEQUENCE) { return emit_single_arm(if_expr.consequence); }
             if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         }
     }
 
@@ -6239,7 +6248,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
                     sema::error::COMPTIME_EVALUATION_FAILED,
                     active_ast().location_of(*if_expr.condition));
             }
-            return value{undefined_val{}, sema_type};
+            return constant(undefined_val{}, sema_type);
         }
         const auto& capture{flow->is_break ? if_expr.else_capture : if_expr.payload_capture};
         sema::comptime_frame frame;
@@ -6251,7 +6260,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(frame)};
         if (!flow->is_break) { return emit_single_arm(if_expr.consequence); }
         if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
-        return value{void_val{}, sema_type};
+        return constant(void_val{}, sema_type);
     }
 
     // Comptime condition evaluation fallback
@@ -6266,7 +6275,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
                     sema::error::COMPTIME_EVALUATION_FAILED,
                     active_ast().location_of(*if_expr.condition));
             }
-            return value{undefined_val{}, sema_type};
+            return constant(undefined_val{}, sema_type);
         }
 
         const auto eval{cond_cv->as_opt<bool>()};
@@ -6274,18 +6283,18 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
             ctx_.diags.emplace_back("Comptime if condition must evaluate to a boolean",
                                     sema::error::TYPE_MISMATCH,
                                     active_ast().location_of(*if_expr.condition));
-            return value{undefined_val{}, sema_type};
+            return constant(undefined_val{}, sema_type);
         }
 
         if (*eval) {
             return yields_value ? emit_stmt_as_value(if_expr.consequence)
-                                : (emit_stmt(if_expr.consequence), value{void_val{}, sema_type});
+                                : (emit_stmt(if_expr.consequence), constant(void_val{}, sema_type));
         }
         if (if_expr.alternate) {
             return yields_value ? emit_stmt_as_value(*if_expr.alternate)
-                                : (emit_stmt(*if_expr.alternate), value{void_val{}, sema_type});
+                                : (emit_stmt(*if_expr.alternate), constant(void_val{}, sema_type));
         }
-        return value{void_val{}, sema_type};
+        return constant(void_val{}, sema_type);
     }
 
     // A statement `if` whose condition is known at compile time only emits the arm it takes, so
@@ -6294,7 +6303,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if (const auto known{folded_condition(*if_expr.condition)}) {
             if (*known) { return emit_single_arm(if_expr.consequence); }
             if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         }
     }
 
@@ -6366,7 +6375,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
         return value{loaded, sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::unroll_limit_reached(usize iterations, std::string_view loop_kind, ast::node_id id)
@@ -6467,7 +6476,7 @@ auto emitter::emit_unrolled_while(ast::node_id id, const ast::while_loop_expr& w
         if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
     }
-    return value{void_val{}, void_type};
+    return constant(void_val{}, void_type);
 }
 
 auto emitter::emit_while(ast::node_id                   id,
@@ -6570,7 +6579,7 @@ auto emitter::emit_while(ast::node_id                   id,
         const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
         return value{loaded, sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::emit_unrolled_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while)
@@ -6590,7 +6599,7 @@ auto emitter::emit_unrolled_do_while(ast::node_id id, const ast::do_while_loop_e
         const auto cond{fold_unrolled_loop_condition(do_while.condition, "`unroll do ... while`")};
         if (!cond || !*cond) { break; }
     }
-    return value{void_val{}, void_type};
+    return constant(void_val{}, void_type);
 }
 
 auto emitter::emit_do_while(ast::node_id                   id,
@@ -6646,7 +6655,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
         const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
         return value{loaded, sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::emit_comptime_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop)
@@ -6662,7 +6671,7 @@ auto emitter::emit_comptime_infinite_loop(ast::node_id id, const ast::infinite_l
         const_eval_.clear_memo();
         if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
     }
-    return value{void_val{}, void_type};
+    return constant(void_val{}, void_type);
 }
 
 auto emitter::emit_infinite_loop(ast::node_id                   id,
@@ -6713,7 +6722,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
         const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
         return value{loaded, sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value {
@@ -6820,7 +6829,7 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
         if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
     }
 
-    return value{void_val{}, void_type};
+    return constant(void_val{}, void_type);
 }
 
 auto emitter::emit_for(ast::node_id                   id,
@@ -6870,9 +6879,10 @@ auto emitter::emit_for(ast::node_id                   id,
 
             // A missing lower bound counts from `0`; a missing upper bound (`for (arr, lo..)`)
             // leans on a sibling iterable to stop the loop.
-            const auto start_val{range->lhs ? emit_bound(*range->lhs) : value{u64{0}, usize_type}};
+            const auto start_val{range->lhs ? emit_bound(*range->lhs)
+                                            : constant(u64{0}, usize_type)};
             const bool open_upper{!range->rhs};
-            const auto end_val{open_upper ? value{u64{0}, usize_type} : emit_bound(*range->rhs)};
+            const auto end_val{open_upper ? constant(u64{0}, usize_type) : emit_bound(*range->rhs)};
             auto&      elem_type{counter_type     ? *counter_type
                                  : start_val.type ? *start_val.type
                                                   : ctx_.get_int(32, true)};
@@ -6905,17 +6915,17 @@ auto emitter::emit_for(ast::node_id                   id,
             const auto arr_val{emit_lvalue(iter_handle)};
             auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             const auto idx_slot{builder_.emit_alloca(usize_type)};
-            builder_.emit_store(idx_slot, value{static_cast<u64>(0), usize_type});
+            builder_.emit_store(idx_slot, constant(static_cast<u64>(0), usize_type));
 
             stdx::option<sema::type&> elem_type{ctx_.get_int(32, true)};
-            value                     end_val{static_cast<u64>(0), usize_type};
+            value                     end_val{constant(static_cast<u64>(0), usize_type)};
 
             if (arr_val.type) {
                 // The container's own mutability governs element const correctness
                 if (const auto arr_data{arr_val.type->get_data().as_opt<sema::types::array>()}) {
                     elem_type.emplace(
                         *ctx_.pool.with_const(arr_data->underlying, arr_val.type->is_constant()));
-                    end_val = value{static_cast<u64>(arr_data->len), usize_type};
+                    end_val = constant(static_cast<u64>(arr_data->len), usize_type);
                 } else if (const auto sl_data{
                                arr_val.type->get_data().as_opt<sema::types::slice>()}) {
                     elem_type.emplace(
@@ -6923,7 +6933,7 @@ auto emitter::emit_for(ast::node_id                   id,
 
                     // Slices carry a runtime length so load it once ahead of the loop
                     const auto len_slot{builder_.emit_get_element_ptr(
-                        arr_val, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+                        arr_val, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
                     const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
                     end_val = value{len_val, usize_type};
                 }
@@ -6969,7 +6979,7 @@ auto emitter::emit_for(ast::node_id                   id,
         builder_.set_segment(cond_seg);
         auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
-        value cond_val{true, bool_type};
+        value cond_val{constant(true, bool_type)};
         for (bool first{true}; const auto& info : iter_infos) {
             // An open-upper range (`for (arr, lo..)`) contributes no stop condition of its own,
             // and an inclusive one always runs once and stops in the step segment
@@ -7021,7 +7031,9 @@ auto emitter::emit_for(ast::node_id                   id,
                                                                  : sema::types::mut::MUTABLE,
                                                              sl_data.underlying)};
                         const auto ptr_slot{builder_.emit_get_element_ptr(
-                            *info.arr_val, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+                            *info.arr_val,
+                            {constant(SLICE_PTR_FIELD_INDEX, usize_type)},
+                            ptr_type)};
                         const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
                         elem_addr = builder_.emit_get_element_ptr(
                             value{ptr_val, ptr_type},
@@ -7108,7 +7120,7 @@ auto emitter::emit_for(ast::node_id                   id,
                     const auto next{
                         builder_.emit_binary(kind,
                                              value{cur, *info.elem_type},
-                                             value{static_cast<i64>(1), *info.elem_type},
+                                             constant(static_cast<i64>(1), *info.elem_type),
                                              *info.elem_type)};
                     builder_.emit_store(info.var_slot, value{next, *info.elem_type});
                 }};
@@ -7132,7 +7144,7 @@ auto emitter::emit_for(ast::node_id                   id,
                 const auto cur{builder_.emit_load(info.var_slot, usize_type)};
                 const auto next{builder_.emit_binary(instruction_kind::ADD,
                                                      value{cur, usize_type},
-                                                     value{static_cast<u64>(1), usize_type},
+                                                     constant(static_cast<u64>(1), usize_type),
                                                      usize_type)};
                 builder_.emit_store(info.var_slot, value{next, usize_type});
             }
@@ -7163,7 +7175,7 @@ auto emitter::emit_for(ast::node_id                   id,
     if (yields_value && res_slot) {
         return value{builder_.emit_load(*res_slot, *sema_type), sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value {
@@ -7174,14 +7186,14 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
     if (label.is_comptime(active_ast())) {
         const auto diags_before{ctx_.diags.size()};
         const auto cv{const_eval_.try_eval(id)};
-        if (emit_comptime_skip(id)) { return value{undefined_val{}, sema_type}; }
+        if (emit_comptime_skip(id)) { return constant(undefined_val{}, sema_type); }
         if (!cv) {
             report_comptime_failure(diags_before, "Comptime block", id);
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         }
-        if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
+        if (emit_comptime_return(*cv, id)) { return constant(void_val{}, sema_type); }
         if (yields_value) { return materialize_const(*cv); }
-        return value{void_val{}, sema_type};
+        return constant(void_val{}, sema_type);
     }
 
     stdx::option<std::string_view> label_name;
@@ -7224,7 +7236,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                 const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
                 return value{loaded, sema_type};
             }
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         },
         [&](const ast::while_loop_expr& wl) -> value {
             return emit_while(body_id, wl, label_name, res_slot, sema_type);
@@ -7267,7 +7279,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                 const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
                 return value{loaded, sema_type};
             }
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         });
 }
 
@@ -7285,9 +7297,9 @@ auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> 
     PROFILE_FUNCTION();
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     // A left side known to be false decides it, and the right side is never evaluated
-    if (folds_to_bool(binary.lhs, false)) { return value{false, bool_type}; }
+    if (folds_to_bool(binary.lhs, false)) { return constant(false, bool_type); }
     const auto res_slot{builder_.emit_alloca(bool_type)};
-    builder_.emit_store(res_slot, value{false, bool_type});
+    builder_.emit_store(res_slot, constant(false, bool_type));
     const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
 
     auto fn_opt{builder_.get_function()};
@@ -7315,9 +7327,9 @@ auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> v
     PROFILE_FUNCTION();
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     // A left side known to be true decides it, and the right side is never evaluated
-    if (folds_to_bool(binary.lhs, true)) { return value{true, bool_type}; }
+    if (folds_to_bool(binary.lhs, true)) { return constant(true, bool_type); }
     const auto res_slot{builder_.emit_alloca(bool_type)};
-    builder_.emit_store(res_slot, value{true, bool_type});
+    builder_.emit_store(res_slot, constant(true, bool_type));
 
     const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
 
@@ -7353,7 +7365,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     // A folded function literal (`const f = ^fn(...) { ... };`) is emitted as code of its own
     if (const auto cl{cv.as_opt<const_closure>()};
         cl && cv.get_type() && cv.get_type()->get_kind() == sema::type_kind::FUNCTION) {
-        return value{emit_comptime_closure(*cl), cv.get_type()};
+        return constant(emit_comptime_closure(*cl), cv.get_type());
     }
 
     if (const auto arr{cv.as_opt<const_array>()}) {
@@ -7377,7 +7389,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             u64        i{0};
             for (const auto& elem : arr->elements) {
                 const auto elem_ptr{builder_.emit_get_element_ptr(
-                    value{slot, backing_type}, {value{i++, usize_type}}, elem_type)};
+                    value{slot, backing_type}, {constant(i++, usize_type)}, elem_type)};
                 builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
                     .is_initializer = true;
             }
@@ -7386,8 +7398,8 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             // that trailing zero byte for real rather than leaving it uninitialized.
             if (slice_data->null_terminated) {
                 const auto sentinel_ptr{builder_.emit_get_element_ptr(
-                    value{slot, backing_type}, {value{i, usize_type}}, elem_type)};
-                builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
+                    value{slot, backing_type}, {constant(i, usize_type)}, elem_type)};
+                builder_.emit_store(value{sentinel_ptr, elem_type}, constant(zero_val{}, elem_type))
                     .is_initializer = true;
             }
             auto decayed{emit_slice_from_array(value{slot, backing_type}, backing_type)};
@@ -7401,7 +7413,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         u64        i{0};
         for (const auto& elem : arr->elements) {
             const auto elem_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{i++, usize_type}}, elem_type)};
+                value{slot, type}, {constant(i++, usize_type)}, elem_type)};
             builder_.emit_store(value{elem_ptr, elem_type}, materialize_const(elem))
                 .is_initializer = true;
         }
@@ -7410,8 +7422,8 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         // sentinel byte that `arr->elements` never includes.
         if (arr_data->null_terminated) {
             const auto sentinel_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{i, usize_type}}, elem_type)};
-            builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
+                value{slot, type}, {constant(i, usize_type)}, elem_type)};
+            builder_.emit_store(value{sentinel_ptr, elem_type}, constant(zero_val{}, elem_type))
                 .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{slot, type}, type)};
@@ -7431,8 +7443,10 @@ auto emitter::materialize_const(const const_value& cv) -> value {
             ASSERT(proxy, "const_struct field must exist in struct symbol table");
             const auto [sym, field_idx]{*proxy};
             auto&      field_type{struct_data->type_at(field_idx)};
-            const auto field_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{static_cast<u64>(field_idx), usize_type}}, field_type)};
+            const auto field_ptr{
+                builder_.emit_get_element_ptr(value{slot, type},
+                                              {constant(static_cast<u64>(field_idx), usize_type)},
+                                              field_type)};
             builder_.emit_store(value{field_ptr, field_type}, materialize_const(field_val))
                 .is_initializer = true;
         }
@@ -7461,16 +7475,19 @@ auto emitter::materialize_const(const const_value& cv) -> value {
 
             auto&      i32_type{ctx_.get_int(32, true)};
             const auto tag_ptr{builder_.emit_get_element_ptr(
-                value{slot, type}, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+                value{slot, type},
+                {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)},
+                i32_type)};
             builder_
-                .emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
+                .emit_store(value{tag_ptr, i32_type},
+                            constant(static_cast<i64>(field_idx), i32_type))
                 .is_initializer = true;
 
             if (!un->payload.empty()) {
-                const auto payload_ptr{
-                    builder_.emit_get_element_ptr(value{slot, type},
-                                                  {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}},
-                                                  field_type)};
+                const auto payload_ptr{builder_.emit_get_element_ptr(
+                    value{slot, type},
+                    {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)},
+                    field_type)};
                 builder_
                     .emit_store(value{payload_ptr, field_type},
                                 materialize_const(un->payload.front()))
@@ -7497,7 +7514,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
                 const auto global_name{fmt::format(".ref_lit.{}", anon_slice_lit_counter_++)};
                 auto&      g{gir_module_.add_global(
                     global_name, *pointee_type, true, stdx::none, gir::linkage::INTERNAL)};
-                g.const_init.emplace(pointee_cv);
+                g.const_init.emplace(pointee_cv.intern_or_zero(constants()));
                 return value{builder_.emit_global_addr(global_name, *pointee_type, true),
                              *type_opt};
             }
@@ -7520,21 +7537,21 @@ auto emitter::materialize_const(const const_value& cv) -> value {
                                       ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
         const auto data_val{
             dyn->data_symbol.empty()
-                ? value{nullptr_val{}, ptr_ty}
+                ? constant(nullptr_val{}, ptr_ty)
                 : value{builder_.emit_global_addr(dyn->data_symbol, ptr_ty, true), ptr_ty}};
         const auto vt_val{
             dyn->vtable_symbol.empty()
-                ? value{nullptr_val{}, ptr_ty}
+                ? constant(nullptr_val{}, ptr_ty)
                 : value{builder_.emit_global_addr(dyn->vtable_symbol, ptr_ty, true), ptr_ty}};
         const auto p{fat_type.get_data().as_opt<sema::types::pointer>()};
         const auto r{fat_type.get_data().as_opt<sema::types::reference>()};
         auto&      dyn_mut{p ? p->underlying : r->underlying};
         const auto slot{builder_.emit_alloca(dyn_mut)};
         const auto f0{builder_.emit_get_element_ptr(
-            value{slot, dyn_mut}, {value{u64{0}, usize_type}}, ptr_ty)};
+            value{slot, dyn_mut}, {constant(u64{0}, usize_type)}, ptr_ty)};
         builder_.emit_store(value{f0, ptr_ty}, data_val).is_initializer = true;
         const auto f1{builder_.emit_get_element_ptr(
-            value{slot, dyn_mut}, {value{u64{1}, usize_type}}, ptr_ty)};
+            value{slot, dyn_mut}, {constant(u64{1}, usize_type)}, ptr_ty)};
         builder_.emit_store(value{f1, ptr_ty}, vt_val).is_initializer = true;
         return value{builder_.emit_load(value{slot, dyn_mut}, fat_type), fat_type};
     }
@@ -7547,7 +7564,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         }
     }
 
-    return cv.to_gir_value();
+    return cv.to_gir_value(constants());
 }
 
 auto emitter::comptime_slice_bytes(const const_value&                   val,
@@ -7581,8 +7598,8 @@ auto emitter::emit_string_as_slice(const std::string& bytes, sema::type& slice_t
     // A mutable destination needs a fresh, per-call writable buffer
     auto& arr_type{ctx_.get_array(sema::types::mut::MUTABLE, true, bytes.size(), sl->underlying)};
     const auto slot{builder_.emit_alloca(arr_type)};
-    builder_.emit_store(value{slot, arr_type}, value{std::string{bytes}, arr_type}).is_initializer =
-        true;
+    builder_.emit_store(value{slot, arr_type}, constant(std::string{bytes}, arr_type))
+        .is_initializer = true;
 
     // Report the slice type the caller asked for
     auto decayed{emit_slice_from_array(value{slot, arr_type}, arr_type)};
@@ -7593,11 +7610,11 @@ auto emitter::emit_string_as_slice(const std::string& bytes, sema::type& slice_t
 auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
     if (const auto ref_data{sema_type.get_data().as_opt<sema::types::reference>()}) {
         auto& referent_type{ref_data->underlying};
-        return value{emit_expression_id_raw(id).data, referent_type};
+        return retyped(emit_expression_id_raw(id), referent_type);
     }
     // Spill using the type the emitted value actually carries
     auto  val{emit_expression_id_raw(id)};
-    auto& spill_type{val.type ? *val.type : sema_type};
+    auto& spill_type{val.type.value_or(sema_type)};
     return spill_to_temporary(std::move(val), spill_type);
 }
 
@@ -7611,14 +7628,14 @@ auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> vo
     // `panic_handler(msg, loc)` takes a `[]u8` slice and a `SourceLocation` aggregate
     std::vector<value> loc_args;
     loc_args.emplace_back(
-        const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-    loc_args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-    loc_args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+        const_value::make_string(ctx_, active_mod().path.string()).to_gir_value(constants()));
+    loc_args.emplace_back(constant(static_cast<u64>(loc.line), u32_type));
+    loc_args.emplace_back(constant(static_cast<u64>(loc.column), u32_type));
     const auto loc_res{builder_.emit_builtin_call("@src", std::move(loc_args), loc_type)};
 
     std::vector<value> args;
     args.emplace_back(materialize_string_slice(message, cstr_type));
-    args.emplace_back(loc_res ? value{*loc_res, loc_type} : value{void_val{}, loc_type});
+    args.emplace_back(loc_res ? value{*loc_res, loc_type} : constant(void_val{}, loc_type));
 
     builder_.emit_call("panic_handler", std::move(args), noreturn_type);
     builder_.emit_unreachable();
@@ -7635,7 +7652,7 @@ auto emitter::emit_null_pointer_check(value ptr, ast::node_id site) -> void {
     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto&      null_type{ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
     const auto is_null{builder_.emit_binary(
-        instruction_kind::EQ, std::move(ptr), value{nullptr_val{}, null_type}, bool_type)};
+        instruction_kind::EQ, std::move(ptr), constant(nullptr_val{}, null_type), bool_type)};
 
     auto& bad_seg{fn_opt->add_segment()};
     auto& ok_seg{fn_opt->add_segment()};
@@ -7692,7 +7709,7 @@ auto emitter::emit_enum_cast_guard(ast::node_id     site,
     // is_valid = (v == d0) || (v == d1) || ...
     stdx::option<value> is_valid;
     for (const auto disc : discriminants) {
-        const value rhs{static_cast<u64>(disc), underlying};
+        const value rhs{constant(static_cast<u64>(disc), underlying)};
         const auto  eq{builder_.emit_binary(instruction_kind::EQ, raw_val, rhs, bool_type)};
         const value eq_val{eq, bool_type};
         if (!is_valid) {
@@ -7803,13 +7820,13 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         const big_int one{u128{1}};
         const auto    span{one.shl(to_signed ? to_bits - 1U : to_bits)};
         const auto    exact{upper ? span - one : to_signed ? -span : big_int{u128{0}}};
-        if (from_bits > 128) { return bound(value{exact, from_lane}); }
+        if (from_bits > 128) { return bound(constant(exact, from_lane)); }
         if (from_bits > 64) {
-            return bound(from_signed ? value{*exact.to_i128(), from_lane}
-                                     : value{*exact.to_u128(), from_lane});
+            return bound(from_signed ? constant(*exact.to_i128(), from_lane)
+                                     : constant(*exact.to_u128(), from_lane));
         }
-        return bound(from_signed ? value{static_cast<i64>(*exact.to_i128()), from_lane}
-                                 : value{static_cast<u64>(*exact.to_u128()), from_lane});
+        return bound(from_signed ? constant(static_cast<i64>(*exact.to_i128()), from_lane)
+                                 : constant(static_cast<u64>(*exact.to_u128()), from_lane));
     }};
 
     if (from_signed && to_signed) {
@@ -7831,7 +7848,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         }
     } else if (from_signed && !to_signed) {
         const value zero_val{
-            bound(from_bits > 64 ? value{i128{0}, from_lane} : value{i64{0}, from_lane})};
+            bound(from_bits > 64 ? constant(i128{0}, from_lane) : constant(i64{0}, from_lane))};
         const auto ge_zero{
             builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
         if (from_bits > to_bits) {
@@ -7882,13 +7899,14 @@ auto emitter::materialize_string_slice(std::string_view text, sema::type& slice_
 
     // A slice value can't be written with a single `store`
     const auto ptr_field{builder_.emit_get_element_ptr(
-        value{slot, slice_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, elem_ptr_type)};
-    builder_.emit_store(value{ptr_field, elem_ptr_type}, value{std::string{text}, elem_ptr_type})
+        value{slot, slice_type}, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, elem_ptr_type)};
+    builder_.emit_store(value{ptr_field, elem_ptr_type}, constant(std::string{text}, elem_ptr_type))
         .is_initializer = true;
     const auto len_field{builder_.emit_get_element_ptr(
-        value{slot, slice_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        value{slot, slice_type}, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
     builder_
-        .emit_store(value{len_field, usize_type}, value{static_cast<u64>(text.size()), usize_type})
+        .emit_store(value{len_field, usize_type},
+                    constant(static_cast<u64>(text.size()), usize_type))
         .is_initializer = true;
 
     return value{builder_.emit_load(value{slot, slice_type}, slice_type), slice_type};
@@ -7938,7 +7956,7 @@ auto emitter::emit_runtime_tag_name(ast::expr_handle operand_expr,
             const auto& vname{
                 en->enclosing.ast.get_as<ast::identifier_expr>(en->ast_enumerations[idx].name)
                     .name};
-            const value rhs{static_cast<u64>(discriminants[idx]), underlying};
+            const value rhs{constant(static_cast<u64>(discriminants[idx]), underlying)};
             const auto  eq{builder_.emit_binary(instruction_kind::EQ, raw_val, rhs, bool_type)};
             emit_named_case(value{eq, bool_type}, vname);
         }
@@ -7964,13 +7982,13 @@ auto emitter::emit_runtime_tag_name(ast::expr_handle operand_expr,
 
         auto&       i32_type{ctx_.get_int(32, true)};
         const auto  tag_ptr{builder_.emit_get_element_ptr(
-            operand_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+            operand_addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
         const value tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
 
         for (usize idx{0}; idx < ut->ast_fields.size(); ++idx) {
             const auto& fname{
                 ut->enclosing.ast.get_as<ast::identifier_expr>(ut->ast_fields[idx].name).name};
-            const value rhs{static_cast<u64>(idx), i32_type};
+            const value rhs{constant(static_cast<u64>(idx), i32_type)};
             const auto  eq{builder_.emit_binary(instruction_kind::EQ, tag_val, rhs, bool_type)};
             emit_named_case(value{eq, bool_type}, fname);
         }
@@ -8023,7 +8041,7 @@ auto emitter::pointer_to_bool(value ptr, bool invert) -> value {
     auto&      null_type{ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
     const auto op{invert ? instruction_kind::EQ : instruction_kind::NE};
     return value{
-        builder_.emit_binary(op, std::move(ptr), value{nullptr_val{}, null_type}, bool_type),
+        builder_.emit_binary(op, std::move(ptr), constant(nullptr_val{}, null_type), bool_type),
         bool_type};
 }
 
@@ -8191,7 +8209,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                                 ident.name),
                     sema::error::ASSIGNMENT_TO_CONST,
                     active_ast().location_of(id));
-                return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
+                return constant(undefined_val{}, active_mod().get_sema_type_opt(id));
             }
             return lvalue_of_binding(ident.name);
         },
@@ -8204,7 +8222,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     const auto sema_type{active_mod().get_sema_type_opt(id)};
                     ASSERT(sema_type, "Cast expression must have a resolved sema type");
-                    return value{emit_lvalue(*op_expr).data, *sema_type};
+                    return retyped(emit_lvalue(*op_expr), *sema_type);
                 }
             }
             // `@field(v, name) = ...`: the field's own address, not a disposable copy of its
@@ -8326,12 +8344,12 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto& field_type{*field_type_ptr};
 
             if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()}) {
-                if (ut->is_untagged) { return value{base_lval.data, field_type}; }
+                if (ut->is_untagged) { return retyped(base_lval, field_type); }
                 member_idx = TAGGED_UNION_PAYLOAD_INDEX;
             }
 
             const auto field_ptr{builder_.emit_get_element_ptr(
-                base_lval, {value{member_idx, usize_type}}, field_type)};
+                base_lval, {constant(member_idx, usize_type)}, field_type)};
             return value{field_ptr, field_type};
         },
         [&](const ast::index_expr& index) -> value {
@@ -8407,7 +8425,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
                     // A sentinel-terminated array has one extra addressable slot: `arr[arr.len]`
                     // reads the terminator.
-                    const auto bound_val{value{static_cast<u64>(arr_data->len), index_type}};
+                    const auto bound_val{constant(static_cast<u64>(arr_data->len), index_type)};
                     const auto is_in_bounds{builder_.emit_binary(
                         arr_data->null_terminated ? instruction_kind::LE : instruction_kind::LT,
                         idx_cmp,
@@ -8440,7 +8458,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                                                 sl_data->underlying)};
 
                 const auto ptr_slot{builder_.emit_get_element_ptr(
-                    base_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+                    base_lval, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
                 const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
 
                 if (safety_enabled()) {
@@ -8448,7 +8466,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
                     const auto len_slot{builder_.emit_get_element_ptr(
-                        base_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+                        base_lval, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
                     const auto len_val{builder_.emit_load(value{len_slot, usize_type}, usize_type)};
 
                     const bool is_signed{idx_val.type && sema::is_signed_integer(*idx_val.type)};
@@ -8494,8 +8512,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             auto&       write_elem_type{*ctx_.pool.with_volatile(
                 *ctx_.pool.with_const(elem_type, element_is_const), element_is_volatile)};
-            const value base{indexed_ptr_type ? value{base_lval.data, *indexed_ptr_type}
-                                              : base_lval};
+            const value base{indexed_ptr_type ? retyped(base_lval, *indexed_ptr_type) : base_lval};
             const auto  elem_ptr{builder_.emit_get_element_ptr(base, {idx_val}, write_elem_type)};
             return value{elem_ptr, write_elem_type};
         },
@@ -8507,13 +8524,13 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             // `*slice` names the slice's elements viewed as one array
             if (ptr_type && ptr_type->get_data().is<sema::types::slice>()) {
                 const auto elems{emit_slice_elements_addr(deref.rhs, *ptr_type, *sema_type)};
-                return value{elems.data, *sema_type};
+                return retyped(elems, *sema_type);
             }
             auto& referent_type{
                 *ctx_.pool.with_const(*sema_type, ptr_type && ptr_type->is_constant())};
             const auto raw_ptr{emit_expression_id_raw(*deref.rhs)};
             emit_null_pointer_check(raw_ptr, id);
-            return value{raw_ptr.data, referent_type};
+            return retyped(raw_ptr, referent_type);
         });
 }
 
@@ -8555,22 +8572,24 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
             const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(cx_frame)};
             if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
             emit_stmt(chosen.dispatch);
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         }
 
         // With no capture there is nothing to bind: emit only the chosen dispatch.
         if (!chosen.capture) {
             if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
             emit_stmt(chosen.dispatch);
-            return value{void_val{}, sema_type};
+            return constant(void_val{}, sema_type);
         }
     }
 
     if (yields_value) {
         if (const auto cv{const_eval_.try_eval(id)}) {
-            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
+            if (const auto i{cv->as_int_opt()}) {
+                return constant(static_cast<i64>(*i), sema_type);
+            }
+            if (const auto b{cv->as_opt<bool>()}) { return constant(*b, sema_type); }
+            if (const auto f{cv->as_opt<f128>()}) { return constant(*f, sema_type); }
         }
     }
 
@@ -8641,7 +8660,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                         active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
     const auto matcher_addr{[&]() -> value {
         if (ref_data) {
-            return value{emit_expression_id_raw(*match.matcher).data, effective_matcher_type};
+            return retyped(emit_expression_id_raw(*match.matcher), effective_matcher_type);
         }
         if (is_place && (holds_alias || is_aggregate)) { return emit_lvalue(match.matcher); }
         return spill_to_temporary(
@@ -8718,7 +8737,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         const auto loaded{builder_.emit_load(*res_slot, *sema_type)};
         return value{loaded, sema_type};
     }
-    return value{void_val{}, sema_type};
+    return constant(void_val{}, sema_type);
 }
 
 auto emitter::const_view_of(sema::type& alias) -> sema::type& {
@@ -8736,7 +8755,7 @@ auto emitter::capture_binding(const match_capture_slot& slot) -> local_binding {
         return local_binding{local_id{0, local_kind::TEMPORARY},
                              slot.type,
                              false,
-                             value{void_val{}, slot.type},
+                             constant(void_val{}, slot.type),
                              true};
     }
     return local_binding{
@@ -8760,7 +8779,7 @@ auto emitter::emit_occurrence_addr(const match_lowering& lowering, usize occ) ->
     case sema::pattern::step_kind::ROOT: UNREACHABLE("Only the root has no parent");
     case sema::pattern::step_kind::PAYLOAD:
         return value{builder_.emit_get_element_ptr(
-                         parent, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type),
+                         parent, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, field_type),
                      field_type};
     case sema::pattern::step_kind::FIELD:
         if (at.bit_packed) {
@@ -8771,22 +8790,22 @@ auto emitter::emit_occurrence_addr(const match_lowering& lowering, usize occ) ->
             return spill_to_temporary(read, field_type, true);
         }
         return value{builder_.emit_get_element_ptr(
-                         parent, {value{static_cast<u64>(at.index), usize_type}}, field_type),
+                         parent, {constant(static_cast<u64>(at.index), usize_type)}, field_type),
                      field_type};
     case sema::pattern::step_kind::ELEMENT:
         return value{builder_.emit_get_element_ptr(
-                         parent, {value{static_cast<u64>(at.index), usize_type}}, field_type),
+                         parent, {constant(static_cast<u64>(at.index), usize_type)}, field_type),
                      field_type};
     case sema::pattern::step_kind::DEREF: {
         auto& ref_type{*lowering.tree.occurrences[*at.parent].value_type};
-        return value{builder_.emit_load(value{parent.data, ref_type}, ref_type), field_type};
+        return value{builder_.emit_load(retyped(parent, ref_type), ref_type), field_type};
     }
     case sema::pattern::step_kind::SLICE_BYTES: {
         auto& slice_type{*lowering.tree.occurrences[*at.parent].value_type};
         auto& ptr_type{ctx_.get_pointer(sema::types::mut::CONSTANT,
                                         slice_type.get_data().as<sema::types::slice>().underlying)};
         const auto ptr_slot{builder_.emit_get_element_ptr(
-            parent, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+            parent, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
         return value{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type), ptr_type};
     }
     }
@@ -8873,10 +8892,10 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
             if (slot->is_void) { continue; }
             const auto addr{emit_occurrence_addr(lowering, bind.occ)};
             if (slot->is_alias) {
-                builder_.emit_store(value{slot->slot, slot->type}, value{addr.data, slot->type})
+                builder_.emit_store(value{slot->slot, slot->type}, retyped(addr, slot->type))
                     .is_initializer = true;
             } else {
-                const auto loaded{builder_.emit_load(value{addr.data, slot->type}, slot->type)};
+                const auto loaded{builder_.emit_load(retyped(addr, slot->type), slot->type)};
                 builder_.emit_store(value{slot->slot, slot->type}, value{loaded, slot->type})
                     .is_initializer = true;
             }
@@ -8914,7 +8933,7 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
     case sema::pattern::decision_kind::SEQUENCE: {
         const auto  addr{emit_occurrence_addr(lowering, d.occ)};
         auto&       subject_type{*lowering.tree.occurrences[d.occ].value_type};
-        const value subject{builder_.emit_load(value{addr.data, subject_type}, subject_type),
+        const value subject{builder_.emit_load(retyped(addr, subject_type), subject_type),
                             subject_type};
         const auto  test{emit_opaque_test(subject, *d.test)};
         auto&       on_true{fn.add_segment()};
@@ -8935,11 +8954,11 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
     const auto is_tag{d.cases.front().kind == sema::pattern::test_kind::TAG};
     const auto subject{[&]() -> value {
         if (!is_tag) {
-            return value{builder_.emit_load(value{addr.data, subject_type}, subject_type),
+            return value{builder_.emit_load(retyped(addr, subject_type), subject_type),
                          subject_type};
         }
         const auto tag_ptr{builder_.emit_get_element_ptr(
-            addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+            addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
         return value{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
     }()};
 
@@ -8956,7 +8975,7 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
             case sema::pattern::test_kind::TAG:
                 return value{builder_.emit_binary(instruction_kind::EQ,
                                                   subject,
-                                                  value{static_cast<i64>(test.index), i32_type},
+                                                  constant(static_cast<i64>(test.index), i32_type),
                                                   bool_type),
                              bool_type};
             case sema::pattern::test_kind::ENUM:
@@ -8965,10 +8984,11 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
                         instruction_kind::EQ, subject, emit_expression_id(*test.source), bool_type),
                     bool_type};
             case sema::pattern::test_kind::BOOL:
-                return value{
-                    builder_.emit_binary(
-                        instruction_kind::EQ, subject, value{test.boolean, bool_type}, bool_type),
-                    bool_type};
+                return value{builder_.emit_binary(instruction_kind::EQ,
+                                                  subject,
+                                                  constant(test.boolean, bool_type),
+                                                  bool_type),
+                             bool_type};
             case sema::pattern::test_kind::INTERVAL: return emit_interval_test(subject, test);
             }
             UNREACHABLE("Unhandled test kind");
@@ -9001,11 +9021,11 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
     auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 
     const auto tag_ptr{builder_.emit_get_element_ptr(
-        union_addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        union_addr, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
     const auto is_active{builder_.emit_binary(instruction_kind::EQ,
                                               value{tag_val, i32_type},
-                                              value{static_cast<i64>(field_idx), i32_type},
+                                              constant(static_cast<i64>(field_idx), i32_type),
                                               bool_type)};
 
     auto& active_seg{fn.add_segment()};
@@ -9027,7 +9047,7 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
         ctx_.diags.emplace_back("'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`",
                                 sema::error::TYPE_MISMATCH,
                                 active_ast().location_of(call.function));
-        return value{void_val{}, ret_type};
+        return constant(void_val{}, ret_type);
     }
 
     // `@cVaArg`'s trailing type argument only shapes the result type
@@ -9041,7 +9061,7 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
     if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
         return value{*res, ret_type};
     }
-    return value{void_val{}, ret_type};
+    return constant(void_val{}, ret_type);
 }
 
 auto emitter::current_function_is_c_variadic() -> bool {
@@ -9088,17 +9108,17 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
             const auto& arr{s->get_data().as<sema::types::array>()};
             const auto  lval{emit_lvalue(h)};
             const auto  ptr{
-                builder_.emit_get_element_ptr(lval, {value{u64{0}, usize_type}}, byte_ptr_ty)};
-            return {value{ptr, byte_ptr_ty}, value{static_cast<u64>(arr.len), usize_type}};
+                builder_.emit_get_element_ptr(lval, {constant(u64{0}, usize_type)}, byte_ptr_ty)};
+            return {value{ptr, byte_ptr_ty}, constant(static_cast<u64>(arr.len), usize_type)};
         }
 
         // A slice: spill to its address, then load `.ptr` / `.len`.
         const auto val{emit_expression(h)};
-        const auto addr{spill_to_temporary(val, s ? *s : void_type)};
+        const auto addr{spill_to_temporary(val, s.value_or(void_type))};
         const auto pf{builder_.emit_get_element_ptr(
-            addr, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, byte_ptr_ty)};
+            addr, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, byte_ptr_ty)};
         const auto lf{builder_.emit_get_element_ptr(
-            addr, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+            addr, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
         return {value{builder_.emit_load(value{pf, byte_ptr_ty}, byte_ptr_ty), byte_ptr_ty},
                 value{builder_.emit_load(value{lf, usize_type}, usize_type), usize_type}};
     }};
@@ -9116,7 +9136,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
 
         return elem
             .transform([this](const sema::type& e) {
-                return static_cast<u64>(const_eval::type_size_of(e, target_layout_));
+                return static_cast<u64>(gir::size_of(e, target_layout_));
             })
             .value_or(1UZ);
     }};
@@ -9124,7 +9144,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
     const auto to_bytes{[&](value count, u64 esize) -> value {
         if (esize == 1) { return count; }
         return value{builder_.emit_binary(
-                         instruction_kind::MUL, count, value{esize, usize_type}, usize_type),
+                         instruction_kind::MUL, count, constant(esize, usize_type), usize_type),
                      usize_type};
     }};
 
@@ -9191,7 +9211,7 @@ auto emitter::emit_flow(ast::expr_handle operand) -> flow_result {
     auto& self_ref{ctx_.get_reference(sema::types::mut::POLY, base_operand)};
 
     const auto flow_dest{
-        builder_.emit_call(branch_name, {value{operand_addr.data, self_ref}}, flow_type)};
+        builder_.emit_call(branch_name, {retyped(operand_addr, self_ref)}, flow_type)};
     ASSERT(flow_dest, "branch() must return a Flow union value");
     // Spill the Flow result to a stack slot so we can inspect its tag and extract payloads.
     const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
@@ -9201,7 +9221,7 @@ auto emitter::emit_flow(ast::expr_handle operand) -> flow_result {
 
     // Read the discriminant tag from the Flow tagged-union slot.
     const auto tag_ptr{builder_.emit_get_element_ptr(
-        flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        flow_slot, {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)}, i32_type)};
     const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
 
     // Find the tag index corresponding to the `@"break"` variant in Flow (default index 1).
@@ -9216,7 +9236,7 @@ auto emitter::emit_flow(ast::expr_handle operand) -> flow_result {
     auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     const auto is_break_dest{builder_.emit_binary(instruction_kind::EQ,
                                                   value{tag_val, i32_type},
-                                                  value{static_cast<i64>(break_idx), i32_type},
+                                                  constant(static_cast<i64>(break_idx), i32_type),
                                                   bool_type)};
     return flow_result{
         .flow_slot = flow_slot,
@@ -9235,7 +9255,7 @@ auto emitter::bind_unwrap_payload(const ast::capture_t& capture, const flow_resu
     auto&      out_type{*flow.shape.output_type};
     auto&      out_ref{ctx_.get_reference(sema::types::mut::POLY, out_type)};
     const auto payload_ptr{builder_.emit_get_element_ptr(
-        flow.flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_ref)};
+        flow.flow_slot, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, out_ref)};
     const auto out_addr{builder_.emit_load(value{payload_ptr, out_ref}, out_ref)};
 
     // A `|v|` capture copies the output; the reference and pointer forms keep its address
@@ -9263,7 +9283,7 @@ auto emitter::bind_unwrap_residual(const ast::capture_t& capture, const flow_res
     auto&      residual_type{*flow.shape.residual_type};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     const auto residual_ptr{builder_.emit_get_element_ptr(
-        flow.flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+        flow.flow_slot, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, residual_type)};
     const auto residual{builder_.emit_load(value{residual_ptr, residual_type}, residual_type)};
     const auto slot{builder_.emit_alloca(residual_type, ident->name, true)};
     builder_.emit_store(slot, value{residual, residual_type}).is_initializer = true;
@@ -9310,7 +9330,7 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
     auto&      out_type{*shape->output_type};
     auto&      out_ref{ctx_.get_reference(sema::types::mut::POLY, out_type)};
     const auto payload_ptr{builder_.emit_get_element_ptr(
-        flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_ref)};
+        flow_slot, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, out_ref)};
     const auto out_addr{builder_.emit_load(value{payload_ptr, out_ref}, out_ref)};
     const auto payload_val{builder_.emit_load(value{out_addr, out_ref}, out_type)};
     return value{payload_val, out_type};
@@ -9332,10 +9352,10 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     auto& residual_type{*shape.residual_type};
 
     // Extract the residual payload from the Flow union (if non-void).
-    value res_val{void_val{}, residual_type};
+    value res_val{constant(void_val{}, residual_type)};
     if (!shape.residual_is_void) {
         const auto payload_ptr{builder_.emit_get_element_ptr(
-            flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+            flow_slot, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, residual_type)};
         const auto loaded_res{builder_.emit_load(value{payload_ptr, residual_type}, residual_type)};
         res_val = value{loaded_res, residual_type};
     }
@@ -9357,7 +9377,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     if (from_type.get_kind() != sema::type_kind::VOID_) {
         current_error_slot_ = spill_to_temporary(res_val, from_type, false);
     } else {
-        current_error_slot_ = value{void_val{}, from_type};
+        current_error_slot_ = constant(void_val{}, from_type);
     }
 
     const auto from_residual_name{
@@ -9365,7 +9385,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     auto&      final_ret_type{*rewrap->return_type};
     const auto rewrapped_dest{builder_.emit_call(from_residual_name, {res_val}, final_ret_type)};
     value      ret_val{rewrapped_dest ? value{*rewrapped_dest, final_ret_type}
-                                      : value{void_val{}, final_ret_type}};
+                                      : constant(void_val{}, final_ret_type)};
 
     // Run deferred scopes before returning from the enclosing function.
     emit_defers_up_to(0, true);
@@ -9380,9 +9400,9 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     ASSERT(sema_type, "Initializer expression must have a resolved sema type");
 
     if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
+        if (const auto i{cv->as_int_opt()}) { return constant(static_cast<i64>(*i), sema_type); }
+        if (const auto b{cv->as_opt<bool>()}) { return constant(*b, sema_type); }
+        if (const auto f{cv->as_opt<f128>()}) { return constant(*f, sema_type); }
     }
 
     if (const auto vec{sema::vector_of(*sema_type)}) {
@@ -9406,7 +9426,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         for (const auto& [accessor, val_expr] : init.initializers) {
             if (!elem_is_type) {
                 const auto elem_ptr{builder_.emit_get_element_ptr(
-                    value{struct_slot, *sema_type}, {value{count, usize_type}}, elem_type)};
+                    value{struct_slot, *sema_type}, {constant(count, usize_type)}, elem_type)};
                 const auto val{emit_coerced_expr(val_expr, elem_type)};
                 builder_.emit_store(value{elem_ptr, elem_type}, val).is_initializer = true;
             }
@@ -9417,9 +9437,9 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         if (arr->null_terminated) {
             const auto sentinel_ptr{
                 builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
-                                              {value{static_cast<u64>(arr->len), usize_type}},
+                                              {constant(static_cast<u64>(arr->len), usize_type)},
                                               elem_type)};
-            builder_.emit_store(value{sentinel_ptr, elem_type}, value{zero_val{}, elem_type})
+            builder_.emit_store(value{sentinel_ptr, elem_type}, constant(zero_val{}, elem_type))
                 .is_initializer = true;
         }
         const auto loaded{builder_.emit_load(value{struct_slot, *sema_type}, *sema_type)};
@@ -9432,7 +9452,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
             const auto  n{sema::packed_union_backing_bits(*ut, target_ptr_bits_).value_or(1)};
             auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
             const auto& table{ctx_.registry.get(sema_type->get_symbol_table_idx())};
-            builder_.emit_store(value{struct_slot, backing_ty}, value{u64{0}, backing_ty})
+            builder_.emit_store(value{struct_slot, backing_ty}, constant(u64{0}, backing_ty))
                 .is_initializer = true;
             for (const auto& [accessor, val_expr] : init.initializers) {
                 const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
@@ -9470,15 +9490,16 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         auto&      i32_type{ctx_.get_int(32, true)};
         const auto tag_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
-                                          {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}},
+                                          {constant(TAGGED_UNION_DISCRIMINANT_INDEX, usize_type)},
                                           i32_type)};
-        builder_.emit_store(value{tag_ptr, i32_type}, value{static_cast<i64>(field_idx), i32_type})
+        builder_
+            .emit_store(value{tag_ptr, i32_type}, constant(static_cast<i64>(field_idx), i32_type))
             .is_initializer = true;
 
         auto&      field_type{ut->type_at(field_idx)};
         const auto payload_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
-                                          {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}},
+                                          {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)},
                                           field_type)};
         const auto val{emit_coerced_expr(val_expr, field_type)};
         builder_.emit_store(value{payload_ptr, field_type}, val).is_initializer = true;
@@ -9495,7 +9516,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
     if (st->is_bit_packed()) {
         const auto n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
         auto&      backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
-        builder_.emit_store(value{struct_slot, backing_ty}, value{u64{0}, backing_ty})
+        builder_.emit_store(value{struct_slot, backing_ty}, constant(u64{0}, backing_ty))
             .is_initializer = true;
         for (const auto& [accessor, val_expr] : init.initializers) {
             const auto& imp{active_ast().get_as<ast::implicit_access_expr>(*accessor)};
@@ -9525,7 +9546,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         if (field_type.get_kind() == sema::type_kind::TYPE) { continue; }
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
-                                          {value{static_cast<u64>(field_idx), usize_type}},
+                                          {constant(static_cast<u64>(field_idx), usize_type)},
                                           field_type)};
         const auto val{emit_coerced_expr(val_expr, field_type)};
         builder_.emit_store(value{field_ptr, field_type}, val).is_initializer = true;
@@ -9537,7 +9558,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         auto&      field_type{st->type_at(idx)};
         const auto field_ptr{
             builder_.emit_get_element_ptr(value{struct_slot, *sema_type},
-                                          {value{static_cast<u64>(idx), usize_type}},
+                                          {constant(static_cast<u64>(idx), usize_type)},
                                           field_type)};
         const auto val{
             emit_field_default(*st->ast_fields[idx].default_value, st->enclosing, field_type)};
@@ -9595,7 +9616,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot.object)}) {
         if (const auto pack{pack_named(ident->name)}) {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            return value{static_cast<u64>(pack->element_count), sema_type};
+            return constant(static_cast<u64>(pack->element_count), sema_type);
         }
     }
     const auto sema_type{active_mod().get_sema_type_opt(id)};
@@ -9620,8 +9641,8 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                 return value{builder_.emit_load(*gref, *gref->type), *gref->type};
             }
         }
-        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
-        return value{ref_symbol_name(id, member_ident.name), sema_type};
+        if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(constants()); }
+        return constant(ref_symbol_name(id, member_ident.name), sema_type);
     }
 
     if (dot_object_is_type_namespace(dot)) {
@@ -9638,13 +9659,15 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             return value{builder_.emit_load(*gref, gtype), gtype};
         }
         if (const auto cv{const_eval_.try_eval(id)}) {
-            if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-            if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-            if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
+            if (const auto i{cv->as_int_opt()}) {
+                return constant(static_cast<i64>(*i), sema_type);
+            }
+            if (const auto b{cv->as_opt<bool>()}) { return constant(*b, sema_type); }
+            if (const auto f{cv->as_opt<f128>()}) { return constant(*f, sema_type); }
             if (const auto cv_type{cv->get_type()};
                 cv_type && cv_type->get_kind() == sema::type_kind::FUNCTION) {
                 if (const auto sym_name{cv->as_opt<std::string>()}) {
-                    return value{*sym_name, cv_type};
+                    return constant(*sym_name, cv_type);
                 }
             }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
@@ -9659,7 +9682,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         }};
         if (sema_type &&
             (sema_type->get_kind() == sema::type_kind::FUNCTION || is_fn_pointer(*sema_type))) {
-            return value{ref_symbol_name(id, member_ident.name), sema_type};
+            return constant(ref_symbol_name(id, member_ident.name), sema_type);
         }
         // e.g. a `const` static member whose initializer reads a `let mut` one
         ctx_.diags.emplace_back(
@@ -9667,7 +9690,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                         member_ident.name),
             sema::error::COMPTIME_EVALUATION_FAILED,
             active_ast().location_of(id));
-        return value{undefined_val{}, sema_type};
+        return constant(undefined_val{}, sema_type);
     }
 
     // A directly-held bit-packed struct value has no addressable fields
@@ -9680,18 +9703,17 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto  n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
-        auto&       field_type{sema_type ? *sema_type : *obj_type};
+        auto&       field_type{sema_type.value_or(*obj_type)};
         return emit_packed_field_extract(backing, *st, proxy->index, field_type);
     }
     if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
         ut && ut->is_bit_packed()) {
         const auto n{sema::packed_union_backing_bits(*ut, target_ptr_bits_).value_or(1)};
         const auto fbits{
-            sema::packed_field_bits(sema_type ? *sema_type : *obj_type, target_ptr_bits_)
-                .value_or(n)};
+            sema::packed_field_bits(sema_type.value_or(*obj_type), target_ptr_bits_).value_or(n)};
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
-        auto&       field_type{sema_type ? *sema_type : *obj_type};
+        auto&       field_type{sema_type.value_or(*obj_type)};
         return emit_packed_bits_extract(backing, n, 0, fbits, field_type);
     }
 
@@ -9713,16 +9735,16 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
     // The thunk itself is static, so this ignores base_lval entirely
     if (obj_type->get_kind() == sema::type_kind::CLOSURE && member_ident.name == "thunk") {
-        return value{closure_fn_name(*obj_type), sema_type};
+        return constant(closure_fn_name(*obj_type), sema_type);
     }
 
     if (obj_type->get_kind() == sema::type_kind::SLICE) {
         const u64  member_idx{member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX
                                                          : SLICE_LEN_FIELD_INDEX};
         auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-        auto&      field_type{sema_type ? *sema_type : *obj_type};
-        const auto field_ptr{
-            builder_.emit_get_element_ptr(base_lval, {value{member_idx, usize_type}}, field_type)};
+        auto&      field_type{sema_type.value_or(*obj_type)};
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            base_lval, {constant(member_idx, usize_type)}, field_type)};
         const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
         return value{loaded, field_type};
     }
@@ -9731,13 +9753,13 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()};
         auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         if (member_ident.name == "len") {
-            return value{static_cast<u64>(arr_data->len), usize_type};
+            return constant(static_cast<u64>(arr_data->len), usize_type);
         }
 
         if (member_ident.name == "ptr") {
-            auto&      field_type{sema_type ? *sema_type : arr_data->underlying};
+            auto&      field_type{sema_type.value_or(arr_data->underlying)};
             const auto field_ptr{builder_.emit_get_element_ptr(
-                base_lval, {value{ARRAY_PTR_FIELD_INDEX, usize_type}}, field_type)};
+                base_lval, {constant(ARRAY_PTR_FIELD_INDEX, usize_type)}, field_type)};
             return value{field_ptr, field_type};
         }
     }
@@ -9750,24 +9772,23 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         // Fields come first in the symbol table; anything past them is a member declaration
         if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
             st && member_idx < st->fields.size()) {
-            auto& raw_ft{sema_type ? *sema_type : *obj_type};
+            auto& raw_ft{sema_type.value_or(*obj_type)};
             auto& field_type{*ctx_.pool.with_volatile(raw_ft, obj_type->is_volatile())};
             if (st->is_bit_packed()) {
                 return emit_packed_field_read(base_lval, *st, member_idx, field_type);
             }
             const auto field_ptr{builder_.emit_get_element_ptr(
-                base_lval, {value{static_cast<u64>(member_idx), usize_type}}, field_type)};
+                base_lval, {constant(static_cast<u64>(member_idx), usize_type)}, field_type)};
             const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
             return value{loaded, field_type};
         }
 
         if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
             ut && member_idx < ut->fields.size()) {
-            auto& field_type{sema_type ? *sema_type : *obj_type};
+            auto& field_type{sema_type.value_or(*obj_type)};
             if (ut->is_bit_packed()) { return emit_packed_field_read(base_lval, *ut, field_type); }
             if (ut->is_untagged) {
-                const auto loaded{
-                    builder_.emit_load(value{base_lval.data, field_type}, field_type)};
+                const auto loaded{builder_.emit_load(retyped(base_lval, field_type), field_type)};
                 return value{loaded, field_type};
             }
 
@@ -9775,23 +9796,23 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                 base_lval, static_cast<u64>(member_idx), member_ident.name, id);
 
             const auto payload_ptr{builder_.emit_get_element_ptr(
-                base_lval, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type)};
+                base_lval, {constant(TAGGED_UNION_PAYLOAD_INDEX, usize_type)}, field_type)};
             const auto loaded{builder_.emit_load(value{payload_ptr, field_type}, field_type)};
             return value{loaded, field_type};
         }
     }
 
     if (const auto cv{const_eval_.try_eval(id)}) {
-        if (const auto i{cv->as_int_opt()}) { return value{static_cast<i64>(*i), sema_type}; }
-        if (const auto b{cv->as_opt<bool>()}) { return value{*b, sema_type}; }
-        if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
+        if (const auto i{cv->as_int_opt()}) { return constant(static_cast<i64>(*i), sema_type); }
+        if (const auto b{cv->as_opt<bool>()}) { return constant(*b, sema_type); }
+        if (const auto f{cv->as_opt<f128>()}) { return constant(*f, sema_type); }
         if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
             cv->is<const_addr>() || cv->is<const_dyn_fat_ptr>() || cv->is<std::string>()) {
             return materialize_const(*cv);
         }
     }
 
-    return value{ref_symbol_name(id, member_ident.name), sema_type};
+    return constant(ref_symbol_name(id, member_ident.name), sema_type);
 }
 
 auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value {
@@ -9829,7 +9850,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     // An omitted lower bound is `0`; an omitted upper bound is the source length, filled in once
     // it is known below.
     const auto lo{range.lhs ? emit_coerced_expr(*range.lhs, usize_type)
-                            : value{u64{0}, usize_type}};
+                            : constant(u64{0}, usize_type)};
 
     // Base element pointer and (for arrays / slices) the source length.
     auto          src_lval{emit_lvalue(index.array)};
@@ -9842,28 +9863,28 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     src_type = &const_eval_.force_deferred_array(*src_type);
     // One that never folds was reported where it was declared, and has no storage to slice
     if (src_type->get_data().is<sema::types::deferred_array>()) {
-        return value{undefined_val{}, *result_type};
+        return constant(undefined_val{}, *result_type);
     }
 
     value               base_ptr{};
     stdx::option<value> src_len;
     if (const auto arr_d{src_type->get_data().as_opt<sema::types::array>()}) {
         base_ptr =
-            value{builder_.emit_get_element_ptr(src_lval, {value{u64{0}, usize_type}}, ptr_type),
+            value{builder_.emit_get_element_ptr(src_lval, {constant(u64{0}, usize_type)}, ptr_type),
                   ptr_type};
-        src_len.emplace(value{static_cast<u64>(arr_d->len), usize_type});
+        src_len.emplace(constant(static_cast<u64>(arr_d->len), usize_type));
     } else if (src_type->get_data().as_opt<sema::types::slice>()) {
         const auto ptr_slot{builder_.emit_get_element_ptr(
-            src_lval, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+            src_lval, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
         base_ptr = value{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type), ptr_type};
         const auto len_slot{builder_.emit_get_element_ptr(
-            src_lval, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+            src_lval, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
         src_len.emplace(
             value{builder_.emit_load(value{len_slot, usize_type}, usize_type), usize_type});
     } else if (src_type->get_data().as_opt<sema::types::pointer>()) {
         const value loaded_ptr{builder_.emit_load(src_lval, *src_type), *src_type};
         emit_null_pointer_check(loaded_ptr, id);
-        base_ptr = value{loaded_ptr.data, ptr_type};
+        base_ptr = retyped(loaded_ptr, ptr_type);
     } else {
         UNREACHABLE("Range index source must be an array, slice, or pointer");
     }
@@ -9873,7 +9894,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
         hi = emit_coerced_expr(*range.rhs, usize_type);
         if (inclusive) {
             hi = value{builder_.emit_binary(
-                           instruction_kind::ADD, hi, value{u64{1}, usize_type}, usize_type),
+                           instruction_kind::ADD, hi, constant(u64{1}, usize_type), usize_type),
                        usize_type};
         }
     } else {
@@ -9909,10 +9930,10 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
 
     const auto slot{builder_.emit_alloca(*result_type)};
     const auto f0{builder_.emit_get_element_ptr(
-        value{slot, *result_type}, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+        value{slot, *result_type}, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
     builder_.emit_store(value{f0, ptr_type}, value{new_ptr, ptr_type}).is_initializer = true;
     const auto f1{builder_.emit_get_element_ptr(
-        value{slot, *result_type}, {value{SLICE_LEN_FIELD_INDEX, usize_type}}, usize_type)};
+        value{slot, *result_type}, {constant(SLICE_LEN_FIELD_INDEX, usize_type)}, usize_type)};
     builder_.emit_store(value{f1, usize_type}, value{new_len, usize_type}).is_initializer = true;
 
     return value{builder_.emit_load(value{slot, *result_type}, *result_type), result_type};
@@ -9931,7 +9952,7 @@ auto emitter::emit_slice_literal_address(const ast::address_of_expr& addr, sema:
         const auto global_name{fmt::format(".slice_lit.{}", anon_slice_lit_counter_++)};
         auto&      g{gir_module_.add_global(
             global_name, arr_type, true, stdx::none, gir::linkage::INTERNAL)};
-        g.const_init.emplace(*cv);
+        g.const_init.emplace(cv->intern_or_zero(constants()));
         const auto addr_id{builder_.emit_global_addr(global_name, arr_type, true)};
         auto       decayed{emit_slice_from_array(value{addr_id, arr_type}, arr_type)};
         decayed.type.emplace(slice_type);
@@ -9976,7 +9997,7 @@ auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr)
     const auto rhs_type{active_mod().get_sema_type_opt(*addr.rhs)};
     if (rhs_type && rhs_type->get_kind() == sema::type_kind::REFERENCE) {
         const auto ref_val{emit_expression_id_raw(*addr.rhs)};
-        return value{ref_val.data, sema_type};
+        return retyped(ref_val, sema_type);
     }
 
     // A function value already is its code address, and `^fn(...)` is that function pointer
@@ -9997,12 +10018,12 @@ auto emitter::emit_comptime(ast::node_id id, const ast::comptime_expr& cx) -> va
     const sema::comptime_evaluation_scope         cx_scope{ctx_, true};
     const auto                                    diags_before{ctx_.diags.size()};
     const auto                                    cv{const_eval_.try_eval(id)};
-    if (emit_comptime_skip(id)) { return value{undefined_val{}, sema_type}; }
+    if (emit_comptime_skip(id)) { return constant(undefined_val{}, sema_type); }
     if (!cv) {
         report_comptime_failure(diags_before, "The operand of 'comptime'", *cx.rhs);
-        return value{undefined_val{}, sema_type};
+        return constant(undefined_val{}, sema_type);
     }
-    if (!yields_runtime_value(sema_type)) { return value{void_val{}, sema_type}; }
+    if (!yields_runtime_value(sema_type)) { return constant(void_val{}, sema_type); }
     return materialize_const(*cv);
 }
 
@@ -10022,9 +10043,7 @@ auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& der
     const auto ptr_val{emit_expression_id_raw(*deref.rhs)};
     if (!rhs_type || !sema::is_fat_callable(*rhs_type)) { emit_null_pointer_check(ptr_val, id); }
     // `*f` on a `^fn(...)` names the same code address as `f`
-    if (elem_type.get_kind() == sema::type_kind::FUNCTION) {
-        return value{ptr_val.data, sema_type};
-    }
+    if (elem_type.get_kind() == sema::type_kind::FUNCTION) { return retyped(ptr_val, sema_type); }
     const auto loaded{builder_.emit_load(ptr_val, elem_type)};
     return value{loaded, sema_type};
 }
@@ -10039,8 +10058,8 @@ auto emitter::emit_slice_elements_addr(ast::expr_handle slice_expr,
                                     elems_type)};
 
     const auto slot{spill_to_temporary(emit_expression(slice_expr), slice_type)};
-    const auto ptr_field{
-        builder_.emit_get_element_ptr(slot, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+    const auto ptr_field{builder_.emit_get_element_ptr(
+        slot, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, ptr_type)};
     return value{builder_.emit_load(value{ptr_field, ptr_type}, ptr_type), ptr_type};
 }
 
@@ -10077,9 +10096,9 @@ auto emitter::emit_implicit_access(ast::node_id id, const ast::implicit_access_e
             }
             return materialize_const(*cv);
         }
-        return cv->to_gir_value();
+        return cv->to_gir_value(constants());
     }
-    return value{ref_symbol_name(id, ident.name), sema_type};
+    return constant(ref_symbol_name(id, ident.name), sema_type);
 }
 
 } // namespace ghoti::gir

@@ -10,11 +10,14 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/pointers>
+#include <stdx/assert.hh>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
 #include "support/big_int.hh"
@@ -64,25 +67,193 @@ auto const_value::as_bytes_opt() const -> stdx::option<std::string> {
     return out;
 }
 
+namespace {
+
+// The struct type a value of `t` lays its fields out by
+[[nodiscard]] auto struct_of(stdx::option<sema::type&> t)
+    -> stdx::option<const sema::types::struct_t&> {
+    if (!t) { return stdx::none; }
+    return t->get_data().as_opt<sema::types::struct_t>();
+}
+
+[[nodiscard]] auto intern_all(ip::pool& pool, const std::vector<const_value>& items)
+    -> stdx::option<std::vector<ip::index>> {
+    std::vector<ip::index> out;
+    out.reserve(items.size());
+    for (const auto& item : items) {
+        const auto at{item.intern(pool)};
+        if (!at) { return stdx::none; }
+        out.emplace_back(*at);
+    }
+    return out;
+}
+
+[[nodiscard]] auto from_all(const ip::pool& pool, const std::vector<ip::index>& items)
+    -> std::vector<const_value> {
+    std::vector<const_value> out;
+    out.reserve(items.size());
+    for (const auto at : items) { out.emplace_back(const_value::from_interned(pool, at)); }
+    return out;
+}
+
+} // namespace
+
+auto const_value::intern(ip::pool& pool) const -> stdx::option<ip::index> {
+    using result = stdx::option<ip::index>;
+    return data_.visit(
+        [&](const stdx::option<sema::type&>& t) -> result {
+            if (t) { return t->get_ip_index(); }
+            return pool.intern(ip::no_type_value{}, type_);
+        },
+        [&](const const_array& arr) -> result {
+            const auto elements{intern_all(pool, arr.elements)};
+            if (!elements) { return stdx::none; }
+            return pool.intern(ip::aggregate_value{{elements->begin(), elements->end()}}, type_);
+        },
+        [&](const const_struct& st) -> result {
+            const auto layout{struct_of(type_)};
+            if (!layout) { return stdx::none; }
+            ip::aggregate_value fields;
+            fields.elements.reserve(layout->field_names.size());
+            for (const auto name : layout->field_names) {
+                const auto field{st.get_field_opt(name)};
+                if (!field) {
+                    fields.elements.emplace_back(stdx::none);
+                    continue;
+                }
+                const auto at{field->intern(pool)};
+                if (!at) { return stdx::none; }
+                fields.elements.emplace_back(*at);
+            }
+            return pool.intern(std::move(fields), type_);
+        },
+        [&](const const_enum& en) -> result {
+            return pool.intern(ip::enum_value{en.name, en.value}, type_);
+        },
+        [&](const const_union& un) -> result {
+            const auto payload{intern_all(pool, un.payload)};
+            if (!payload) { return stdx::none; }
+            return pool.intern(ip::union_value{un.active_field, *payload}, type_);
+        },
+        [&](const const_addr& addr) -> result {
+            const auto pointee{intern_all(pool, addr.pointee)};
+            if (!pointee) { return stdx::none; }
+            return pool.intern(ip::address_value{addr.symbol, *pointee}, type_);
+        },
+        [&](const const_dyn_fat_ptr& dyn) -> result {
+            return pool.intern(ip::dyn_value{dyn.data_symbol, dyn.vtable_symbol}, type_);
+        },
+        [](const const_closure&) -> result { return stdx::none; },
+        [](const const_ref&) -> result { return stdx::none; },
+        [&](const void_val&) -> result { return pool.intern(ip::void_value{}, type_); },
+        [&](const undefined_val&) -> result { return pool.intern(ip::undefined_value{}, type_); },
+        [&](const nullptr_val&) -> result { return pool.intern(ip::nullptr_value{}, type_); },
+        [&](const poison_val&) -> result { return pool.intern(ip::poison_value{}, type_); },
+        [&](const auto& scalar) -> result { return pool.intern(scalar, type_); });
+}
+
+auto const_value::intern_or_zero(ip::pool& pool) const -> ip::index {
+    const auto zero{[&] { return pool.intern(ip::zero_value{}, type_); }};
+    const auto all{[&](const std::vector<const_value>& items) {
+        std::vector<ip::index> out;
+        out.reserve(items.size());
+        for (const auto& item : items) { out.emplace_back(item.intern_or_zero(pool)); }
+        return out;
+    }};
+    return data_.visit(
+        [&](const const_array& arr) {
+            const auto elements{all(arr.elements)};
+            return pool.intern(ip::aggregate_value{{elements.begin(), elements.end()}}, type_);
+        },
+        [&](const const_struct& st) {
+            const auto layout{struct_of(type_)};
+            if (!layout) { return zero(); }
+            ip::aggregate_value fields;
+            fields.elements.reserve(layout->field_names.size());
+            for (const auto name : layout->field_names) {
+                const auto field{st.get_field_opt(name)};
+                fields.elements.emplace_back(
+                    field ? stdx::option<ip::index>{field->intern_or_zero(pool)} : stdx::none);
+            }
+            return pool.intern(std::move(fields), type_);
+        },
+        [&](const const_union& un) {
+            return pool.intern(ip::union_value{un.active_field, all(un.payload)}, type_);
+        },
+        [&](const const_addr& addr) {
+            return pool.intern(ip::address_value{addr.symbol, all(addr.pointee)}, type_);
+        },
+        [&](const const_closure&) { return zero(); },
+        [&](const const_ref&) { return zero(); },
+        [&](const auto&) { return *intern(pool); });
+}
+
+auto const_value::from_interned(const ip::pool& pool, ip::index at) -> const_value {
+    if (pool.is_type(at)) { return const_value{pool.type_at(at)}; }
+    const auto& v{pool.value_at(at)};
+    return v.data.visit(
+        [&](const ip::no_type_value&) { return const_value{stdx::option<sema::type&>{}, v.type}; },
+        [&](const ip::aggregate_value& agg) {
+            if (const auto layout{struct_of(v.type)}) {
+                const_struct st;
+                for (usize i{0}; i < agg.elements.size() && i < layout->field_names.size(); ++i) {
+                    if (!agg.elements[i]) { continue; }
+                    st.fields.emplace(std::string{layout->field_names[i]},
+                                      from_interned(pool, *agg.elements[i]));
+                }
+                return const_value{std::move(st), v.type};
+            }
+            const_array arr;
+            arr.elements.reserve(agg.elements.size());
+            for (const auto e : agg.elements) {
+                arr.elements.emplace_back(from_interned(pool, *e));
+            }
+            return const_value{std::move(arr), v.type};
+        },
+        [&](const ip::enum_value& en) {
+            return const_value{const_enum{en.name, en.value}, v.type};
+        },
+        [&](const ip::union_value& un) {
+            return const_value{const_union{un.active_field, from_all(pool, un.payload)}, v.type};
+        },
+        [&](const ip::address_value& addr) {
+            return const_value{const_addr{addr.symbol, from_all(pool, addr.pointee)}, v.type};
+        },
+        [&](const ip::dyn_value& dyn) {
+            return const_value{const_dyn_fat_ptr{dyn.data_symbol, dyn.vtable_symbol}, v.type};
+        },
+        [&](const ip::void_value&) { return const_value{void_val{}, v.type}; },
+        [&](const ip::undefined_value&) { return const_value{undefined_val{}, v.type}; },
+        [&](const ip::nullptr_value&) { return const_value{nullptr_val{}, v.type}; },
+        [&](const ip::poison_value&) { return const_value{poison_val{}, v.type}; },
+        [](const ip::zero_value&) -> const_value {
+            UNREACHABLE("`zero` is a GIR operand, which the evaluator never interns");
+        },
+        [&](const auto& scalar) { return const_value{scalar, v.type}; });
+}
+
 auto const_value::make_string(sema::context& ctx, std::string str) -> const_value {
     auto& t_u8{ctx.get_int(8, false)};
     auto& t_c_str{ctx.get_slice(sema::types::mut::CONSTANT, true, t_u8)};
     return const_value{std::string{str}, t_c_str};
 }
 
-auto const_value::to_gir_value() const noexcept -> value {
+auto const_value::to_gir_value(ip::pool& pool) const -> value {
+    const auto make{
+        [&](ip::value_data payload) { return value::constant(pool, std::move(payload), type_); }};
     return data_.visit(
-        [this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
-        [this](const const_array&) -> value { return value{void_val{}, type_}; },
-        [this](const const_struct&) -> value { return value{void_val{}, type_}; },
-        [this](const const_enum& e) -> value { return value{e.value, type_}; },
-        [this](const const_union&) -> value { return value{void_val{}, type_}; },
-        [this](const const_closure&) -> value { return value{void_val{}, type_}; },
-        [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
-        [this](const const_ref&) -> value { return value{void_val{}, type_}; },
-        [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
-        [this](const f128& f) -> value { return value{f, type_, origin_}; },
-        [this](const auto& v) -> value { return value{v, type_}; });
+        [&](const poison_val&) { return make(undefined_val{}); },
+        [&](const const_array&) { return make(void_val{}); },
+        [&](const const_struct&) { return make(void_val{}); },
+        [&](const const_enum& e) { return make(e.value); },
+        [&](const const_union&) { return make(void_val{}); },
+        [&](const const_closure&) { return make(void_val{}); },
+        [&](const const_addr& a) { return make(a.symbol); },
+        [&](const const_ref&) { return make(void_val{}); },
+        [&](const const_dyn_fat_ptr&) { return make(void_val{}); },
+        [&](const f128& f) { return value::constant(pool, f, type_, origin_); },
+        [&](const stdx::option<sema::type&>& t) { return value::type_constant(pool, t, type_); },
+        [&](const auto& v) { return make(v); });
 }
 
 auto const_value::operator==(const const_value& other) const noexcept -> bool {

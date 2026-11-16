@@ -34,7 +34,7 @@ namespace {
 
 // The argument a parameter takes as the call was written, 1-based, else its slot's
 [[nodiscard]] auto argument_position(const gir::function::parameter& param, usize slot) -> usize {
-    return param.source_position ? *param.source_position : slot + 1;
+    return param.source_position.value_or(slot + 1);
 }
 
 // A cast between vectors of as many lanes is checked lane by lane
@@ -155,11 +155,11 @@ auto type_checker::format_return_mismatch(const type& ret_t, const type& expecte
 
 namespace {
 
-auto folded_int(const gir::value& v) noexcept -> stdx::option<i128> {
-    if (const auto x{v.as_opt<i64>()}) { return static_cast<i128>(*x); }
-    if (const auto x{v.as_opt<i128>()}) { return *x; }
-    if (const auto x{v.as_opt<u64>()}) { return static_cast<i128>(*x); }
-    if (const auto x{v.as_opt<u128>()}) { return static_cast<i128>(*x); }
+auto folded_int(const ip::pool& constants, const gir::value& v) -> stdx::option<i128> {
+    if (const auto x{v.literal_opt<i64>(constants)}) { return static_cast<i128>(*x); }
+    if (const auto x{v.literal_opt<i128>(constants)}) { return *x; }
+    if (const auto x{v.literal_opt<u64>(constants)}) { return static_cast<i128>(*x); }
+    if (const auto x{v.literal_opt<u128>(constants)}) { return static_cast<i128>(*x); }
     return stdx::none;
 }
 
@@ -171,7 +171,7 @@ auto type_checker::is_value_assignable(const gir::value&             val,
                                        stdx::option<source_location> loc) -> bool {
     if (is_assignable(val_t, dest_t)) { return true; }
     if (is_integer(val_t.get_kind()) && is_integer(dest_t.get_kind())) {
-        if (const auto folded{folded_int(val)}) {
+        if (const auto folded{folded_int(gir_mod_.constants(), val)}) {
             if (comptime_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
             emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
                                         *folded,
@@ -202,7 +202,7 @@ auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&
     if (val.type) {
         // An untyped float the emitter coerced into an integer slot is still a float, which no
         // integer destination accepts
-        if (val.data.is<f128>() && is_integer(val.type->get_kind())) {
+        if (val.is_literal<f128>(gir_mod_.constants()) && is_integer(val.type->get_kind())) {
             return ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         }
         return ctx_.default_concrete(*val.type);
@@ -685,12 +685,13 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             }
         } else {
-            if (inst.operands.empty() || inst.operands[0].data.is<gir::void_val>()) {
+            if (inst.operands.empty() ||
+                inst.operands[0].is_literal<gir::void_val>(gir_mod_.constants())) {
                 emit_diagnostic(fmt::format("Empty return in function expecting return type '{}'",
                                             ctx_.type_display_name(expected_ret_t)),
                                 error::RETURN_TYPE_MISMATCH,
                                 inst.location);
-            } else if (inst.operands[0].data.is<gir::undefined_val>()) {
+            } else if (inst.operands[0].is_literal<gir::undefined_val>(gir_mod_.constants())) {
                 const auto ret_t{get_operand_type(inst.operands[0])};
                 // A generic function that captures nothing has no state, so nothing to define
                 if (!ret_t ||
@@ -939,7 +940,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 } else if (both_int) {
                     if (is_implicit_widenable(*src_t, *dest_t)) {
                         allowed = true;
-                    } else if (const auto folded{folded_int(inst.operands[0])}) {
+                    } else if (const auto folded{
+                                   folded_int(gir_mod_.constants(), inst.operands[0])}) {
                         allowed = comptime_int_fits(*folded, *dest_t, target_ptr_bits_);
                     }
                 } else if (is_enum_repr_cast || is_float_cast) {
@@ -1078,8 +1080,8 @@ auto type_checker::check_runtime_untyped_store(const gir::value&             val
                                                stdx::option<source_location> loc) -> void {
     if (slot_t.get_kind() != type_kind::COMPTIME_INT) { return; }
     const auto& runtime_t{ctx_.default_concrete(slot_t)};
-    const auto  folded{folded_int(val)};
-    const auto  big{val.as_opt<big_int>()};
+    const auto  folded{folded_int(gir_mod_.constants(), val)};
+    const auto  big{val.literal_opt<big_int>(gir_mod_.constants())};
     const bool  fits{folded ? comptime_int_fits(*folded, runtime_t, target_ptr_bits_)
                      : big  ? comptime_int_fits(*big, runtime_t, target_ptr_bits_)
                             : true};

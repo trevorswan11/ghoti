@@ -1,11 +1,9 @@
 #include "compiler/codegen/llvm_lowering.hh"
-#include "compiler/codegen/runtime_libcalls.hh"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
-#include <llvm/ADT/STLFunctionalExtras.h>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -18,6 +16,7 @@
 #include <gsl/pointers>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/Attributes.h>
@@ -53,6 +52,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
 #include "compiler/codegen/c_abi.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -61,9 +61,12 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -93,29 +96,35 @@ auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibil
     }
 }
 
+// Any integer constant, or an enum's value, widened to 128 bits
+[[nodiscard]] auto int_payload_of(const ip::value& constant) -> stdx::option<i128> {
+    const auto& data{constant.data};
+    if (const auto v{data.as_opt<i64>()}) { return static_cast<i128>(*v); }
+    if (const auto v{data.as_opt<u64>()}) { return static_cast<i128>(*v); }
+    if (const auto v{data.as_opt<i128>()}) { return *v; }
+    if (const auto v{data.as_opt<u128>()}) { return static_cast<i128>(*v); }
+    if (const auto e{data.as_opt<ip::enum_value>()}) { return static_cast<i128>(e->value); }
+    return stdx::none;
+}
+
 // The little-endian bytes of a scalar union payload, zero past its width
-[[nodiscard]] auto union_payload_bytes(const gir::const_value& payload, usize size) -> std::string {
+[[nodiscard]] auto union_payload_bytes(const ip::value& payload, usize size) -> std::string {
     std::string bytes(size, '\0');
-    if (const auto iv{payload.as_int_opt()}) {
+    if (const auto iv{int_payload_of(payload)}) {
         const u64   v{static_cast<u64>(*iv)};
         const usize copy_len{std::min<usize>(sizeof(v), size)};
         std::memcpy(bytes.data(), &v, copy_len);
-    } else if (const auto fv{payload.as_opt<f128>()}) {
-        const auto payload_type{payload.get_type()};
-        const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
+    } else if (const auto fv{payload.data.as_opt<f128>()}) {
+        const auto format{payload.type ? sema::float_format_of(*payload.type) : stdx::none};
         const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
         const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
         const std::array<u64, 2> words{encoded.low, encoded.high};
         const usize              copy_len{std::min<usize>(width / 8, size)};
         std::memcpy(bytes.data(), words.data(), copy_len);
-    } else if (const auto bv{payload.as_opt<bool>()}) {
+    } else if (const auto bv{payload.data.as_opt<bool>()}) {
         if (size > 0) { bytes[0] = *bv ? 1 : 0; }
     }
     return bytes;
-}
-
-[[nodiscard]] auto is_aggregate_const(const gir::const_value& cv) -> bool {
-    return cv.is<gir::const_struct>() || cv.is<gir::const_array>() || cv.is<gir::const_union>();
 }
 
 // Reads `source`'s bytes back as a constant of `ty` starting `offset` bytes in, one scalar at a
@@ -246,10 +255,11 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return val && val->getType()->isFPOrFPVectorTy();
 }
 
-[[nodiscard]] auto comptime_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
-    if (const auto v{val.as_opt<i64>()}) { return *v >= 0; }
-    if (const auto v{val.as_opt<i128>()}) { return *v >= 0; }
-    return val.is<u64>() || val.is<u128>();
+[[nodiscard]] auto comptime_operand_is_nonnegative(const ip::pool& constants, const gir::value& val)
+    -> bool {
+    if (const auto v{val.literal_opt<i64>(constants)}) { return *v >= 0; }
+    if (const auto v{val.literal_opt<i128>(constants)}) { return *v >= 0; }
+    return val.is_literal<u64>(constants) || val.is_literal<u128>(constants);
 }
 
 // A mask known to pick every lane
@@ -258,7 +268,7 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return constant && constant->isAllOnesValue();
 }
 
-[[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
+[[nodiscard]] auto is_signed_type(const ip::pool& constants, const gir::instruction& inst) -> bool {
     if (!inst.operands.empty() && inst.operands[0].type &&
         inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
         // `comptime_int` alone carries no real signedness
@@ -267,8 +277,9 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
                 return sema::is_signed_integer(*op.type);
             }
         }
-        return !std::ranges::all_of(
-            inst.operands, [](const auto& op) { return comptime_operand_is_nonnegative(op); });
+        return !std::ranges::all_of(inst.operands, [&constants](const auto& op) {
+            return comptime_operand_is_nonnegative(constants, op);
+        });
     }
     if (!inst.operands.empty() && inst.operands[0].type) {
         return sema::is_signed_integer(sema::lane_type_of(*inst.operands[0].type));
@@ -431,6 +442,7 @@ auto llvm_lowering::lower_definitions(const gir::module_t& gir_mod) -> void {
 auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
     finalize_runtime_support();
@@ -489,6 +501,7 @@ auto llvm_lowering::lower_executable(const gir::module_t& gir_mod, std::string_v
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
     finalize_runtime_support();
@@ -518,6 +531,7 @@ auto llvm_lowering::lower_test_executable(const gir::module_t& gir_mod,
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     define_test_take_skipped();
     lower_definitions(gir_mod);
@@ -709,7 +723,7 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
     if (msg_idx >= inst.operands.size() || loc_idx + 2 >= inst.operands.size()) { return; }
 
     const auto make_arg{[&](const gir::value& op, llvm::Type* param_ty) -> llvm::Value* {
-        if (const auto str{op.as_opt<std::string>()}) {
+        if (const auto str{op.literal_opt<std::string>(constants())}) {
             // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
             auto* gstr{builder_.CreateGlobalString(*str, "ch.str")};
             if (param_ty->isStructTy()) {
@@ -962,37 +976,57 @@ auto llvm_lowering::const_callable(std::string_view          fn_symbol,
     return llvm::ConstantStruct::get(st, {code_ptr, get_or_create_fn_trampoline(*fn)});
 }
 
-auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
+auto llvm_lowering::int_constant_of(ip::index at) const -> stdx::option<i128> {
+    if (constants().is_type(at)) { return stdx::none; }
+    return int_payload_of(constants().value_at(at));
+}
+
+auto llvm_lowering::is_aggregate_constant(ip::index at) const -> bool {
+    if (constants().is_type(at)) { return false; }
+    const auto& data{constants().value_at(at).data};
+    return data.is<ip::aggregate_value>() || data.is<ip::union_value>();
+}
+
+auto llvm_lowering::union_payload_bytes(ip::index at, usize size) const -> std::string {
+    if (constants().is_type(at)) { return std::string(size, '\0'); }
+    return ghoti::codegen::union_payload_bytes(constants().value_at(at), size);
+}
+
+auto llvm_lowering::const_to_llvm(ip::index at, llvm::Type* ty) -> llvm::Constant* {
     PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
-    if (const auto i{cv.as_opt<i64>()}) {
+    // A type has no runtime form
+    if (constants().is_type(at)) { return llvm::Constant::getNullValue(ty); }
+    const auto& constant{constants().value_at(at)};
+    const auto& data{constant.data};
+    const auto  sema_ty{constant.type};
+    if (const auto i{data.as_opt<i64>()}) {
         return int_or_ptr_constant(static_cast<u128>(*i), ty, true);
     }
-    if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
-    if (const auto w{cv.as_opt<i128>()}) {
+    if (const auto u{data.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
+    if (const auto w{data.as_opt<i128>()}) {
         return int_or_ptr_constant(static_cast<u128>(*w), ty, true);
     }
-    if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
-    if (const auto f{cv.as_opt<f128>()}) { return float_constant(*f, ty); }
-    if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
-    if (const auto e{cv.as_opt<gir::const_enum>()}) {
+    if (const auto w{data.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
+    if (const auto f{data.as_opt<f128>()}) { return float_constant(*f, ty); }
+    if (const auto b{data.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
+    if (const auto e{data.as_opt<ip::enum_value>()}) {
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
     }
-    if (const auto s{cv.as_opt<std::string>()}) {
-        if (auto* callable{const_callable(*s, cv.get_type(), ty)}) { return callable; }
+    if (const auto s{data.as_opt<std::string>()}) {
+        if (auto* callable{const_callable(*s, sema_ty, ty)}) { return callable; }
         if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
             if (st->getNumElements() == 2 && st->getElementType(0)->isPointerTy() &&
                 st->getElementType(1)->isIntegerTy()) {
-                const auto slice_data{cv.get_type()
-                                          ? cv.get_type()->get_data().as_opt<sema::types::slice>()
-                                          : stdx::none};
+                const auto slice_data{sema_ty ? sema_ty->get_data().as_opt<sema::types::slice>()
+                                              : stdx::none};
                 const bool add_nul{slice_data && slice_data->null_terminated};
-                auto*      data{llvm::ConstantDataArray::getString(context_, *s, add_nul)};
+                auto*      bytes{llvm::ConstantDataArray::getString(context_, *s, add_nul)};
                 auto*      data_gv{new llvm::GlobalVariable{*llvm_module_,
-                                                            data->getType(),
+                                                            bytes->getType(),
                                                             true,
                                                             llvm::GlobalValue::PrivateLinkage,
-                                                            data,
+                                                            bytes,
                                                             ".str.data"}};
                 data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
                 auto* len{llvm::ConstantInt::get(st->getElementType(1), s->size())};
@@ -1005,20 +1039,20 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
             // globals, where the IRBuilder has no insertion block to source it from.
             return builder_.CreateGlobalString(*s, "gstr", 0, llvm_module_.get());
         }
-        if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
-            std::string bytes{*s};
-            bytes.resize(static_cast<usize>(at->getNumElements()), '\0');
-            return llvm::ConstantDataArray::getString(context_, bytes, false);
+        if (auto* arr_ty{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            std::string padded{*s};
+            padded.resize(static_cast<usize>(arr_ty->getNumElements()), '\0');
+            return llvm::ConstantDataArray::getString(context_, padded, false);
         }
         return llvm::Constant::getNullValue(ty);
     }
-    if (const auto addr{cv.as_opt<gir::const_addr>()}) {
+    if (const auto addr{data.as_opt<ip::address_value>()}) {
         if (ty->isPointerTy()) {
             if (auto* c{resolve_named_constant(addr->symbol)}) { return c; }
         }
         return llvm::Constant::getNullValue(ty);
     }
-    if (const auto dyn{cv.as_opt<gir::const_dyn_fat_ptr>()}) {
+    if (const auto dyn{data.as_opt<ip::dyn_value>()}) {
         auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
         if (!st || st->getNumElements() != 2) { return llvm::Constant::getNullValue(ty); }
         auto* ptr_ty{types_.get_ptr_ty()};
@@ -1030,17 +1064,14 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         if (!vt_c) { vt_c = llvm::ConstantPointerNull::get(ptr_ty); }
         return llvm::ConstantStruct::get(st, {data_c, vt_c});
     }
-    if (cv.is<gir::nullptr_val>()) { return llvm::Constant::getNullValue(ty); }
-    if (const auto un{cv.as_opt<gir::const_union>()}) {
-        const auto sema_ty{cv.get_type()};
+    if (data.is<ip::nullptr_value>()) { return llvm::Constant::getNullValue(ty); }
+    if (const auto un{data.as_opt<ip::union_value>()}) {
         const auto ud{sema_ty ? sema_ty->get_data().as_opt<sema::types::union_t>() : stdx::none};
         if (!ud) { return llvm::Constant::getNullValue(ty); }
 
         u32 active_idx{0};
         for (usize i{0}; i < ud->fields.size(); ++i) {
-            const auto& fname{
-                ud->enclosing.ast.get_as<ast::identifier_expr>(ud->ast_fields[i].name).name};
-            if (fname == un->active_field) {
+            if (ud->field_names[i] == un->active_field) {
                 active_idx = static_cast<u32>(i);
                 break;
             }
@@ -1048,7 +1079,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
 
         if (ud->is_bit_packed()) {
             if (!un->payload.empty()) {
-                if (const auto int_val{un->payload.front().as_int_opt()}) {
+                if (const auto int_val{int_constant_of(un->payload.front())}) {
                     return llvm::ConstantInt::get(ty, static_cast<u64>(*int_val));
                 }
             }
@@ -1060,9 +1091,9 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
             if (!st || un->payload.empty() || active_idx >= ud->fields.size()) {
                 return llvm::Constant::getNullValue(ty);
             }
-            const auto& payload{un->payload.front()};
-            auto*       member_ty{types_.translate(*ud->fields[active_idx])};
-            auto*       member{const_to_llvm(payload, member_ty)};
+            const auto payload{un->payload.front()};
+            auto*      member_ty{types_.translate(*ud->fields[active_idx])};
+            auto*      member{const_to_llvm(payload, member_ty)};
             if (member_ty == st->getElementType(0)) {
                 std::vector<llvm::Constant*> elems{member};
                 if (st->getNumElements() > 1) {
@@ -1087,7 +1118,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
 
         // An aggregate payload is lowered as its own type and then read back as payload bytes
         if (!un->payload.empty() && active_idx < ud->fields.size() &&
-            is_aggregate_const(un->payload.front())) {
+            is_aggregate_constant(un->payload.front())) {
             auto* member{
                 const_to_llvm(un->payload.front(), types_.translate(*ud->fields[active_idx]))};
             return llvm::ConstantStruct::get(
@@ -1102,49 +1133,47 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         auto*      payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
-    if (const auto st{cv.as_opt<gir::const_struct>()}) {
-        auto*      llvm_st{llvm::dyn_cast<llvm::StructType>(ty)};
-        const auto sema_ty{cv.get_type()};
-        const auto sd{sema_ty ? sema_ty->get_data().as_opt<sema::types::struct_t>() : stdx::none};
-        if (!llvm_st || !sd) { return llvm::Constant::getNullValue(ty); }
-        std::vector<llvm::Constant*> elems;
-        elems.reserve(llvm_st->getNumElements());
-        for (auto* elem_ty : llvm_st->elements()) {
-            elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
-        }
-        for (usize i{0}; i < sd->fields.size(); ++i) {
-            const auto elem_idx{types_.struct_field_index(llvm_st, static_cast<u32>(i))};
-            if (elem_idx >= elems.size()) { break; }
-            const auto& fname{
-                sd->enclosing.ast.get_as<ast::identifier_expr>(sd->ast_fields[i].name).name};
-            if (const auto fv{st->get_field_opt(fname)}) {
-                elems[elem_idx] = const_to_llvm(*fv, llvm_st->getElementType(elem_idx));
+    if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+        if (const auto sd{sema_ty ? sema_ty->get_data().as_opt<sema::types::struct_t>()
+                                  : stdx::none}) {
+            auto* llvm_st{llvm::dyn_cast<llvm::StructType>(ty)};
+            if (!llvm_st) { return llvm::Constant::getNullValue(ty); }
+            std::vector<llvm::Constant*> elems;
+            elems.reserve(llvm_st->getNumElements());
+            for (auto* elem_ty : llvm_st->elements()) {
+                elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
             }
+            for (usize i{0}; i < sd->fields.size(); ++i) {
+                const auto elem_idx{types_.struct_field_index(llvm_st, static_cast<u32>(i))};
+                if (elem_idx >= elems.size()) { break; }
+                if (i < agg->elements.size() && agg->elements[i]) {
+                    elems[elem_idx] =
+                        const_to_llvm(*agg->elements[i], llvm_st->getElementType(elem_idx));
+                }
+            }
+            return llvm::ConstantStruct::get(llvm_st, elems);
         }
-        return llvm::ConstantStruct::get(llvm_st, elems);
-    }
-    if (const auto arr{cv.as_opt<gir::const_array>()}) {
         if (auto* vt{llvm::dyn_cast<llvm::FixedVectorType>(ty)}) {
             std::vector<llvm::Constant*> lanes;
             lanes.reserve(vt->getNumElements());
-            for (const auto& lane : arr->elements) {
-                lanes.emplace_back(const_to_llvm(lane, vt->getElementType()));
+            for (const auto lane : agg->elements) {
+                lanes.emplace_back(const_to_llvm(*lane, vt->getElementType()));
             }
             while (lanes.size() < vt->getNumElements()) {
                 lanes.emplace_back(llvm::Constant::getNullValue(vt->getElementType()));
             }
             return llvm::ConstantVector::get(lanes);
         }
-        auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
-        if (!at) { return llvm::Constant::getNullValue(ty); }
-        auto*                        elem_ty{at->getElementType()};
+        auto* arr_ty{llvm::dyn_cast<llvm::ArrayType>(ty)};
+        if (!arr_ty) { return llvm::Constant::getNullValue(ty); }
+        auto*                        elem_ty{arr_ty->getElementType()};
         std::vector<llvm::Constant*> elems;
-        elems.reserve(static_cast<usize>(at->getNumElements()));
-        for (const auto& elem : arr->elements) { elems.emplace_back(const_to_llvm(elem, elem_ty)); }
-        while (elems.size() < at->getNumElements()) {
+        elems.reserve(static_cast<usize>(arr_ty->getNumElements()));
+        for (const auto elem : agg->elements) { elems.emplace_back(const_to_llvm(*elem, elem_ty)); }
+        while (elems.size() < arr_ty->getNumElements()) {
             elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
         }
-        return llvm::ConstantArray::get(at, elems);
+        return llvm::ConstantArray::get(arr_ty, elems);
     }
     return llvm::Constant::getNullValue(ty);
 }
@@ -1193,10 +1222,10 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     llvm::Constant* init{nullptr};
     if (g.const_init) {
         init = const_to_llvm(*g.const_init, g_type);
-    } else if (g.init_value && g.init_value->is<std::string>() &&
+    } else if (g.init_value && g.init_value->is_literal<std::string>(constants()) &&
                g.type.get_kind() == sema::type_kind::SLICE) {
         // The folded value of a comptime str slice is a bare str, but the global's type is a slice
-        const auto& bytes{g.init_value->as<std::string>()};
+        const auto& bytes{*g.init_value->literal_opt<std::string>(constants())};
         const auto  slice_data{g.type.get_data().as_opt<sema::types::slice>()};
         const bool  add_nul{slice_data && slice_data->null_terminated};
         auto*       data{llvm::ConstantDataArray::getString(context_, bytes, add_nul)};
@@ -1210,7 +1239,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
         init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
     } else if (g.init_value) {
-        if (const auto fn_symbol{g.init_value->as_opt<std::string>()}) {
+        if (const auto fn_symbol{g.init_value->literal_opt<std::string>(constants())}) {
             init = const_callable(*fn_symbol, g.init_value->type, g_type);
         }
         auto* init_v{init ? nullptr : lower_value(*g.init_value, g.type)};
@@ -1250,6 +1279,8 @@ auto llvm_lowering::private_symbol_name(std::string_view name) const -> std::str
 
 auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
+    // A function lowered on its own brings the pool its constants live in
+    if (!constants_) { constants_.emplace(fn.constants()); }
     if (const auto it{globals_.find(fn.get_name())}; it != globals_.end()) {
         if (auto* existing{llvm::dyn_cast<llvm::Function>(it->second)}) { return existing; }
     }
@@ -1434,6 +1465,45 @@ auto llvm_lowering::lower_value(const gir::value&               val,
             ASSERT(it != locals_.end(), "Referenced GIR local was never lowered");
             return it->second;
         },
+        [this, &val, expected_type](ip::index at) -> llvm::Value* {
+            return lower_constant(val, at, expected_type);
+        });
+}
+
+auto llvm_lowering::lower_string(const std::string&              str,
+                                 stdx::option<const sema::type&> value_type,
+                                 stdx::option<const sema::type&> expected_type) -> llvm::Value* {
+    auto ty{expected_type};
+    if (!ty && value_type) { ty = value_type; }
+    // A fn-typed string value names a function rather than holding string data
+    if (value_type && value_type->get_kind() == sema::type_kind::FUNCTION) {
+        ty = value_type;
+    } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>() : stdx::none};
+               p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
+        ty = p->underlying;
+    }
+    if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
+        if (auto* fn{resolve_named_function(str)}) { return fn; }
+        // Not yet declared in this translation unit for the linker to resolve
+        const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
+        auto* fn_ty{types_.translate_function_type(*fn_data)};
+        return llvm::Function::Create(
+            fn_ty, llvm::Function::ExternalLinkage, str, llvm_module_.get());
+    }
+    if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
+        return llvm::ConstantDataArray::getString(context_, str, true);
+    }
+    // Give `CreateGlobalString` the module directly
+    return builder_.CreateGlobalString(str, "str", 0, llvm_module_.get());
+}
+
+auto llvm_lowering::lower_constant(const gir::value&               val,
+                                   ip::index                       at,
+                                   stdx::option<const sema::type&> expected_type) -> llvm::Value* {
+    // A type has no runtime form
+    if (constants().is_type(at)) { return nullptr; }
+    return constants().value_at(at).data.visit(
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
@@ -1497,31 +1567,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
-            auto ty{expected_type};
-            if (!ty && val.type) { ty = val.type; }
-            // A fn-typed string value names a function rather than holding string data, even when
-            // stored into a `^fn(...)` slot (that pointer is the function's own address)
-            if (val.type && val.type->get_kind() == sema::type_kind::FUNCTION) {
-                ty = val.type;
-            } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>()
-                                       : stdx::none};
-                       p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
-                ty = p->underlying;
-            }
-            if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
-                if (auto* fn{resolve_named_function(str)}) { return fn; }
-                // Not yet declared in this translation unit for the linnker to resolve
-                const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
-                auto* fn_ty{types_.translate_function_type(*fn_data)};
-                return llvm::Function::Create(
-                    fn_ty, llvm::Function::ExternalLinkage, str, llvm_module_.get());
-            }
-            if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
-                return llvm::ConstantDataArray::getString(context_, str, true);
-            }
-            // Give `CreateGlobalString` the module directly
-            return builder_.CreateGlobalString(str, "str", 0, llvm_module_.get());
+            return lower_string(str, val.type, expected_type);
         },
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
             // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back
@@ -1547,7 +1593,11 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this](gir::nullptr_val) -> llvm::Value* {
             return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
         },
-        [](stdx::option<sema::type&>) -> llvm::Value* { return nullptr; });
+        [](ip::no_type_value) -> llvm::Value* { return nullptr; },
+        [](const auto&) -> llvm::Value* {
+            UNREACHABLE(
+                "An aggregate, enum, union, address, or poison constant is never an operand");
+        });
 }
 
 auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
@@ -1902,7 +1952,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
-    const bool is_sgn{is_signed_type(inst)};
+    const bool is_sgn{is_signed_type(constants(), inst)};
 
     if (is_shift && !is_flt) {
         rhs = fit_shift_amount(
@@ -2012,7 +2062,7 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     rhs = callable_code(rhs);
 
     const bool is_flt{is_float_type(inst, lhs)};
-    const bool is_sgn{is_signed_type(inst)};
+    const bool is_sgn{is_signed_type(constants(), inst)};
 
     if (!is_flt && lhs->getType() != rhs->getType()) {
         if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
@@ -2090,8 +2140,8 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     case gir::instruction_kind::INT_CAST: {
         const bool is_sgn{inst.operands[0].type &&
                                   inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT
-                              ? !comptime_operand_is_nonnegative(inst.operands[0])
-                              : is_signed_type(inst)};
+                              ? !comptime_operand_is_nonnegative(constants(), inst.operands[0])
+                              : is_signed_type(constants(), inst)};
         return builder_.CreateIntCast(val, target_ty, is_sgn);
     }
     case gir::instruction_kind::TRUNC_CAST: return builder_.CreateTrunc(val, target_ty, "trunc");
@@ -2101,8 +2151,9 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 
         if (src_is_flt && dst_is_flt) { return builder_.CreateFPCast(val, target_ty, "fpcast"); }
         if (!src_is_flt && dst_is_flt) {
-            return is_signed_type(inst) ? builder_.CreateSIToFP(val, target_ty, "sitofp")
-                                        : builder_.CreateUIToFP(val, target_ty, "uitofp");
+            return is_signed_type(constants(), inst)
+                       ? builder_.CreateSIToFP(val, target_ty, "sitofp")
+                       : builder_.CreateUIToFP(val, target_ty, "uitofp");
         }
         if (src_is_flt && !dst_is_flt) {
             const bool dst_is_sgn{sema::is_signed_integer(sema::lane_type_of(*inst.type))};
@@ -2110,7 +2161,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
-        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
+        return builder_.CreateIntCast(val, target_ty, is_signed_type(constants(), inst));
     }
     case gir::instruction_kind::BIT_CAST: {
         if (!src_ty->isAggregateType() && !target_ty->isAggregateType()) {
@@ -2534,7 +2585,7 @@ auto llvm_lowering::emit_vector_op(const gir::instruction& inst) -> llvm::Value*
     case gir::instruction_kind::SHUFFLE: {
         llvm::SmallVector<i32, 16> mask;
         for (const auto& entry : inst.operands | std::views::drop(2)) {
-            const auto idx{entry.as_opt<i64>()};
+            const auto idx{entry.literal_opt<i64>(constants())};
             mask.emplace_back(idx ? static_cast<i32>(*idx) : llvm::PoisonMaskElem);
         }
         // Operands of different lengths are padded to the longer one's
@@ -2788,7 +2839,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (is_verify) {
                 std::string_view msg{"verification failed"};
                 if (inst.operands.size() > 4) {
-                    if (const auto s{inst.operands[4].as_opt<std::string>()}) { msg = *s; }
+                    if (const auto s{inst.operands[4].literal_opt<std::string>(constants())}) {
+                        msg = *s;
+                    }
                 }
                 emit_lowered_panic(msg, inst);
                 builder_.CreateUnreachable();
@@ -2819,7 +2872,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* slice_ty{types_.translate_slice_type()};
 
             llvm::Value* file_slice{llvm::UndefValue::get(slice_ty)};
-            if (const auto path{inst.operands[0].as_opt<std::string>()}) {
+            if (const auto path{inst.operands[0].literal_opt<std::string>(constants())}) {
                 auto* gstr{builder_.CreateGlobalString(*path, "src.file")};
                 file_slice = builder_.CreateInsertValue(
                     file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
@@ -2840,16 +2893,17 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
         case syntax::builtin_t::TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
+            return lower_string(std::string{triple.getOSName()}, inst.type, stdx::none);
         }
         case syntax::builtin_t::TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{
-                std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
+            return lower_string(std::string{llvm::Triple::getArchTypeName(triple.getArch())},
+                                inst.type,
+                                stdx::none);
         }
         case syntax::builtin_t::TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{triple.str(), inst.type});
+            return lower_string(triple.str(), inst.type, stdx::none);
         }
 
         // Memory operations
@@ -3394,7 +3448,7 @@ auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
         if (val->getType()->isPointerTy() && !ret_ty->isPointerTy()) {
             val = builder_.CreateLoad(ret_ty, val, "retval");
         } else if (val->getType()->isIntegerTy() && ret_ty->isIntegerTy()) {
-            val = builder_.CreateIntCast(val, ret_ty, is_signed_type(inst));
+            val = builder_.CreateIntCast(val, ret_ty, is_signed_type(constants(), inst));
         }
     }
 

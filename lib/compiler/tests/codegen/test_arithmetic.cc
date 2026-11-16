@@ -30,16 +30,19 @@ TEST_CASE("LLVM lowering integer and float constants") {
     auto&           f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
     auto&           bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
 
-    auto* c_i32{lowering.lower_value(gir::value{i64{42}, &i32_t})};
+    auto& constants{pool.intern()};
+    lowering.use_constants(constants);
+
+    auto* c_i32{lowering.lower_value(gir::value::constant(constants, i64{42}, i32_t))};
     REQUIRE(c_i32 != nullptr);
     CHECK(c_i32->getType()->isIntegerTy(32));
     CHECK(llvm::cast<llvm::ConstantInt>(c_i32)->getSExtValue() == 42);
 
-    auto* c_f64{lowering.lower_value(gir::value{f128::from_f64(3.14), &f64_t})};
+    auto* c_f64{lowering.lower_value(gir::value::constant(constants, f128::from_f64(3.14), f64_t))};
     REQUIRE(c_f64 != nullptr);
     CHECK(c_f64->getType()->isDoubleTy());
 
-    auto* c_bool{lowering.lower_value(gir::value{true, &bool_t})};
+    auto* c_bool{lowering.lower_value(gir::value::constant(constants, true, bool_t))};
     REQUIRE(c_bool != nullptr);
     CHECK(c_bool->getType()->isIntegerTy(1));
     CHECK(llvm::cast<llvm::ConstantInt>(c_bool)->getZExtValue() == 1);
@@ -51,7 +54,8 @@ TEST_CASE("LLVM lowering binary arithmetic instructions") {
 
     ghoti::arena    arena;
     sema::type_pool pool{arena};
-    auto&           i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    lowering.use_constants(pool.intern());
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& u32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, false}]};
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
 
@@ -144,8 +148,9 @@ TEST_CASE("LLVM lowering unary and comparison instructions") {
 
     ghoti::arena    arena;
     sema::type_pool pool{arena};
-    auto&           i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
-    auto&           bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
+    lowering.use_constants(pool.intern());
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    auto& bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
 
     auto* fn_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                         {llvm::Type::getInt32Ty(context),
@@ -204,9 +209,10 @@ TEST_CASE("LLVM lowering cast instructions") {
 
     ghoti::arena    arena;
     sema::type_pool pool{arena};
-    auto&           i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
-    auto&           i64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, true}]};
-    auto&           u8_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{8}, false}]};
+    lowering.use_constants(pool.intern());
+    auto& i32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    auto& i64_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{64}, true}]};
+    auto& u8_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{8}, false}]};
     auto& u32_t{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, false}]};
     auto& ptr_t{*pool[{sema::type_kind::POINTER, sema::types::mut::CONSTANT, &i32_t}]};
 

@@ -920,7 +920,7 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
 
     for (usize i{0}; const auto& at : node.assoc_types) {
         add_member(ast_.location_of(at.name).line,
-                   ast_.end_location_of(at.default_type ? *at.default_type : at.annotation).line,
+                   ast_.end_location_of(at.default_type.value_or(at.annotation)).line,
                    i == 0,
                    [&] {
                        std::vector<syntax::doc_id> parts{

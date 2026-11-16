@@ -17,6 +17,7 @@
 #include "compiler/codegen/soft_f80.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::codegen {
@@ -222,7 +223,7 @@ auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
     wanted.reserve(element_types.size());
     for (usize i{0}; i < element_types.size(); ++i) {
         wanted.emplace_back(s.is_packed ? s.explicit_field_alignment(i)
-                                        : gir::const_eval::struct_field_align(s, i, layout));
+                                        : gir::struct_field_align(s, i, layout));
     }
     set_padded_body(struct_ty, element_types, wanted, s.is_packed);
 }
@@ -404,7 +405,7 @@ auto type_translator::translate_closure(const sema::types::closure_t& c, const s
     wanted.reserve(c.captures.size());
     for (const auto& capture : c.captures) {
         element_types.emplace_back(translate(*capture.storage_type));
-        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, layout));
+        wanted.emplace_back(gir::align_of(*capture.storage_type, layout));
     }
     set_padded_body(closure_ty, element_types, wanted, false);
     return closure_ty;

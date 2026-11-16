@@ -15,16 +15,20 @@
 
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
 
-namespace ghoti::sema { struct context; } // namespace ghoti::sema
-namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
+namespace ghoti {
 
-namespace ghoti::gir {
+namespace sema { struct context; } // namespace sema
+namespace mod { struct module_t; } // namespace mod
+namespace ip { class pool; }       // namespace ip
+
+namespace gir {
 
 class const_value;
 
@@ -272,14 +276,21 @@ class const_value {
         fit_float_payload();
     }
     MAKE_GETTER(origin, stdx::option<math_origin>);
-    [[nodiscard]] auto to_gir_value() const noexcept -> value;
+    // An aggregate or other value with no scalar operand form becomes `void`
+    [[nodiscard]] auto to_gir_value(ip::pool& pool) const -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
-    // `==`, except floats compare by bit pattern: `-0.0` and `0.0` differ, a NaN matches itself.
-    // For keying on a value, where numerically equal floats are still different arguments.
+    // `==`, except floats compare by bit pattern: `-0.0` and `0.0` differ, a NaN matches itself
     [[nodiscard]] auto identical(const const_value& other) const noexcept -> bool;
 
     [[nodiscard]] auto hash() const noexcept -> u64;
     [[nodiscard]] auto mangle() const -> std::string;
+
+    // This value in `pool`, or none for what the pool doesn't hold
+    [[nodiscard]] auto intern(ip::pool& pool) const -> stdx::option<ip::index>;
+    // As `intern`, but each part the pool can't hold becomes a `zero` of its type
+    [[nodiscard]] auto intern_or_zero(ip::pool& pool) const -> ip::index;
+    // The value `pool` holds at `at`, in the evaluator's own representation
+    [[nodiscard]] static auto from_interned(const ip::pool& pool, ip::index at) -> const_value;
 
   private:
     auto fit_float_payload() -> void {
@@ -295,8 +306,7 @@ class const_value {
     stdx::option<math_origin> origin_;
 };
 
-// A number as its declared type rather than its untyped initializer's: an integer bound to a float
-// type converts, other numbers just retype, and anything else is returned unchanged
+// A number as its declared type rather than its untyped initializer's
 [[nodiscard]] auto with_declared_type(const_value value, sema::type& declared) -> const_value;
 
 // A name a matched pattern binds, and its value
@@ -305,4 +315,6 @@ struct pattern_binding {
     const_value      value;
 };
 
-} // namespace ghoti::gir
+} // namespace gir
+
+} // namespace ghoti

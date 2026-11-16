@@ -1132,7 +1132,7 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
             if (dc_w->call.arguments.size() == dc_h->call.arguments.size()) {
                 bool        args_match{true};
                 const auto& mod_w{iface.enclosing};
-                const auto& mod_h{rec.enclosing ? *rec.enclosing : resolving_};
+                const auto& mod_h{rec.enclosing.value_or(resolving_)};
                 for (usize i{0}; i < dc_w->call.arguments.size(); ++i) {
                     const auto arg_w{get_arg_type(mod_w, dc_w->call.arguments[i])};
                     const auto arg_h{get_arg_type(mod_h, dc_h->call.arguments[i])};
@@ -1264,7 +1264,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
     PROFILE_FUNCTION();
     // A parameterized impl may be conformance-checked while a different module is being
     // resolved (at the point its target first monomorphizes), so read AST from where it lives.
-    const auto& cmod{rec.enclosing ? *rec.enclosing : resolving_};
+    const auto& cmod{rec.enclosing.value_or(resolving_)};
     const auto  site_loc{cmod.ast.location_of(rec.site)};
     const auto  iface_name{ctx_.type_display_name(*rec.interface_type)};
     const auto  target_name{ctx_.type_display_name(*rec.target_type)};
@@ -1397,7 +1397,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
     auto&       imod{iface.enclosing};
     const auto  iface_scope{rec.interface_type->get_symbol_table_idx()};
     auto&       target{*rec.target_type};
-    const auto& impl_mod{rec.enclosing ? *rec.enclosing : resolving_};
+    const auto& impl_mod{rec.enclosing.value_or(resolving_)};
 
     // Rebind the interface's associated types to what this impl supplies
     struct saved_assoc {

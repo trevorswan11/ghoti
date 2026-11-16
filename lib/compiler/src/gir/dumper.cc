@@ -7,6 +7,8 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -15,6 +17,8 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/keywords.hh"
 
@@ -22,7 +26,37 @@ namespace ghoti::gir {
 
 namespace {
 
-auto format_value(const value& val) -> std::string {
+auto format_constant(const ip::pool& constants, ip::index at) -> std::string {
+    if (constants.is_type(at)) { return constants.type_at(at).to_string(); }
+    return constants.value_at(at).data.visit(
+        [](const std::string& str) { return fmt::format("\"{}\"", str); },
+        [](ip::no_type_value) -> std::string { return "<null_type>"; },
+        [](ip::void_value) -> std::string { return "void"; },
+        [](ip::undefined_value) -> std::string { return "undefined"; },
+        [](ip::zero_value) -> std::string { return "zero"; },
+        [](ip::nullptr_value) -> std::string { return "nullptr"; },
+        [](const ip::aggregate_value&) -> std::string {
+            UNREACHABLE("An aggregate constant is never an operand");
+        },
+        [](const ip::enum_value&) -> std::string {
+            UNREACHABLE("An enum constant is never an operand");
+        },
+        [](const ip::union_value&) -> std::string {
+            UNREACHABLE("A union constant is never an operand");
+        },
+        [](const ip::address_value&) -> std::string {
+            UNREACHABLE("An address constant is never an operand");
+        },
+        [](const ip::dyn_value&) -> std::string {
+            UNREACHABLE("A dyn constant is never an operand");
+        },
+        [](ip::poison_value) -> std::string {
+            UNREACHABLE("A poison constant is never an operand");
+        },
+        [](const auto& v) { return fmt::format("{}", v); });
+}
+
+auto format_value(const ip::pool& constants, const value& val) -> std::string {
     return val.data.visit(
         [](local_id loc) {
             switch (loc.get_kind()) {
@@ -33,16 +67,12 @@ auto format_value(const value& val) -> std::string {
             default:                    UNREACHABLE("Unknown local ID");
             }
         },
-        [](const std::string& str) { return fmt::format("\"{}\"", str); },
-        [](stdx::option<sema::type&> t) { return t ? t->to_string() : "<null_type>"; },
-        [](void_val) { return "void"; },
-        [](undefined_val) { return "undefined"; },
-        [](zero_val) { return "zero"; },
-        [](nullptr_val) { return "nullptr"; },
-        [](auto v) { return fmt::format("{}", v); });
+        [&constants](ip::index at) { return format_constant(constants, at); });
 }
 
-auto format_instruction(const instruction& inst) -> std::string {
+auto format_instruction(const ip::pool& constants, const instruction& inst) -> std::string {
+    const auto format_value{
+        [&constants](const value& val) { return gir::format_value(constants, val); }};
     const auto type_str = inst.type ? inst.type->to_string() : "";
     const auto prefix   = inst.result ? fmt::format("%{} = ", inst.result->get_index()) : "";
 
@@ -170,8 +200,13 @@ auto format_instruction(const instruction& inst) -> std::string {
 
 } // namespace
 
+auto dumper::constants() const -> const ip::pool& {
+    ASSERT(constants_, "Dumping GIR outside a module or function needs the intern pool");
+    return *constants_;
+}
+
 auto dumper::dump(const instruction& inst) -> void {
-    fmt::println(out_, "    {}", format_instruction(inst));
+    fmt::println(out_, "    {}", format_instruction(constants(), inst));
 }
 
 auto dumper::dump(const segment& seg) -> void {
@@ -180,6 +215,8 @@ auto dumper::dump(const segment& seg) -> void {
 }
 
 auto dumper::dump(const function& fn) -> void {
+    const auto outer{std::exchange(constants_, fn.constants())};
+    const auto restore{gsl::finally([&] { constants_ = outer; })};
     if (fn.get_is_test()) {
         const auto test_name{fn.get_test_desc().empty() ? fn.get_name() : fn.get_test_desc()};
         fmt::println(out_, "test \"{}\"", test_name);
@@ -213,6 +250,8 @@ auto dumper::dump(const function& fn) -> void {
 }
 
 auto dumper::dump(const module_t& mod) -> void {
+    const auto outer{std::exchange(constants_, mod.constants())};
+    const auto restore{gsl::finally([&] { constants_ = outer; })};
     for (const auto& type_decl : mod.get_types()) {
         fmt::println(out_, "type {} = {}", type_decl->name, type_decl->type.to_string());
     }
@@ -225,7 +264,7 @@ auto dumper::dump(const module_t& mod) -> void {
                          kw,
                          global->name,
                          global->type.to_string(),
-                         format_value(*global->init_value));
+                         format_value(constants(), *global->init_value));
         } else {
             fmt::println(out_, "{} {}: {}", kw, global->name, global->type.to_string());
         }
@@ -237,6 +276,8 @@ auto dumper::dump(const module_t& mod) -> void {
     }
 }
 
-auto dumper::dump(const value& val) -> void { fmt::print(out_, "{}", format_value(val)); }
+auto dumper::dump(const value& val) -> void {
+    fmt::print(out_, "{}", format_value(constants(), val));
+}
 
 } // namespace ghoti::gir

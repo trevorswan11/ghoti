@@ -2,7 +2,16 @@
 
 #include <stdx/types.hh>
 
+#include "compiler/codegen/target.hh"
+#include "compiler/sema/type.hh"
+
 namespace ghoti::gir {
+
+[[nodiscard]] auto align_of(const sema::type& type, const codegen::type_layout& layout) -> usize;
+[[nodiscard]] auto size_of(const sema::type& type, const codegen::type_layout& layout) -> usize;
+[[nodiscard]] auto struct_field_align(const sema::types::struct_t& st,
+                                      usize                        idx,
+                                      const codegen::type_layout&  layout) -> usize;
 
 // A slice lowers to { ptr: T*, len: usize } everywhere it is constructed or indexed.
 constexpr u64 SLICE_PTR_FIELD_INDEX{0};

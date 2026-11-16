@@ -47,7 +47,7 @@ class emitter {
   public:
     explicit emitter(sema::context& ctx, mod::module_t& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
-          gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
+          gir_module_{ast_mod, ctx_.arena, ctx_.pool.intern()}, runtime_safety_{ctx.runtime_safety},
           target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits},
           target_layout_{codegen::type_layout::resolve(ctx.target_opts.triple_str)} {
         const_eval_.set_vtable_root_module(ast_module_);
@@ -164,6 +164,24 @@ class emitter {
     };
 
   private:
+    // A constant operand, interned in the compilation's pool
+    [[nodiscard]] auto constant(ip::value_data            payload,
+                                stdx::option<sema::type&> t      = stdx::none,
+                                stdx::option<math_origin> origin = stdx::none) -> value {
+        return value::constant(ctx_.pool.intern(), std::move(payload), t, origin);
+    }
+    // `denoted` used as a `type` operand
+    [[nodiscard]] auto type_constant(stdx::option<sema::type&> denoted,
+                                     stdx::option<sema::type&> t = stdx::none) -> value {
+        return value::type_constant(ctx_.pool.intern(), denoted, t);
+    }
+    [[nodiscard]] auto retyped(const value&              v,
+                               stdx::option<sema::type&> t,
+                               stdx::option<math_origin> origin = stdx::none) -> value {
+        return v.retyped(ctx_.pool.intern(), t, origin);
+    }
+    [[nodiscard]] auto constants() -> ip::pool& { return ctx_.pool.intern(); }
+
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
     // Whether a control-flow expression of `type` produces a value to store (not a scope/label)
@@ -594,7 +612,7 @@ class emitter {
 
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
-    [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    [[nodiscard]] auto folded_int(const value& v) -> stdx::option<i128>;
     [[nodiscard]] auto emit_comptime_return(const const_value& returned, ast::node_id at) -> bool;
     auto               emit_skip(value msg, ast::node_id at) -> void;
     [[nodiscard]] auto emit_comptime_skip(ast::node_id at) -> bool;
@@ -612,8 +630,7 @@ class emitter {
     [[nodiscard]] static auto is_concrete_float(const value& v) noexcept -> bool;
     [[nodiscard]] static auto is_untyped_number(const value& v) noexcept -> bool;
     // A compile-time number whose type isn't `t`
-    [[nodiscard]] static auto is_foreign_constant(const value& v, const sema::type& t) noexcept
-        -> bool;
+    [[nodiscard]] auto is_foreign_constant(const value& v, const sema::type& t) -> bool;
     // A constant operand reads as the number type its use was given, like a literal written in
     // its place: `x + n` with `const n = 24;`, or `x & bits(T)`
     [[nodiscard]] auto constant_as_use_type(value v, ast::node_id at) -> value;

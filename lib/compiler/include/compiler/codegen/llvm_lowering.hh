@@ -16,6 +16,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
+#include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -27,9 +28,11 @@
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "support/float_math.hh"
+#include "support/int128.hh"
 
 namespace ghoti::codegen {
 
@@ -55,6 +58,10 @@ class llvm_lowering {
     [[nodiscard]] auto builder() noexcept -> llvm::IRBuilder<>& { return builder_; }
     [[nodiscard]] auto types() noexcept -> type_translator& { return types_; }
 
+    // The pool constant operands read from when values are lowered outside a module
+    auto use_constants(const ip::pool& constants) noexcept -> void {
+        constants_.emplace(constants);
+    }
     auto set_local(gir::local_id id, llvm::Value* val) noexcept -> void { locals_[id] = val; }
     [[nodiscard]] auto get_local_opt(gir::local_id id) const noexcept
         -> stdx::option<llvm::Value*> {
@@ -67,6 +74,17 @@ class llvm_lowering {
         segment_blocks_.clear();
     }
 
+    auto lower_string(const std::string&              str,
+                      stdx::option<const sema::type&> value_type,
+                      stdx::option<const sema::type&> expected_type) -> llvm::Value*;
+    auto lower_constant(const gir::value&               val,
+                        ip::index                       at,
+                        stdx::option<const sema::type&> expected_type) -> llvm::Value*;
+    // The pool the module being lowered keeps its constants in
+    [[nodiscard]] auto constants() const -> const ip::pool& {
+        ASSERT(constants_, "Lowering a constant needs the intern pool that holds it");
+        return *constants_;
+    }
     auto lower_value(const gir::value&               val,
                      stdx::option<const sema::type&> expected_type = stdx::none) -> llvm::Value*;
     auto lower_instruction(const gir::instruction& inst) -> void;
@@ -77,7 +95,11 @@ class llvm_lowering {
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
     // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
     auto lower_dyn_vtables(const gir::module_t& gir_mod) -> void;
-    auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
+    // A folded initializer the pool holds at `at`, as an LLVM constant of `ty`
+    auto               const_to_llvm(ip::index at, llvm::Type* ty) -> llvm::Constant*;
+    [[nodiscard]] auto int_constant_of(ip::index at) const -> stdx::option<i128>;
+    [[nodiscard]] auto is_aggregate_constant(ip::index at) const -> bool;
+    [[nodiscard]] auto union_payload_bytes(ip::index at, usize size) const -> std::string;
     // `{fn, trampoline}` when a thin function constant initializes an erased `fn(...)` slot
     auto const_callable(std::string_view          fn_symbol,
                         stdx::option<sema::type&> fn_type,
@@ -231,6 +253,7 @@ class llvm_lowering {
     bool                               reserved_symbols_built_{false};
     bool                               is_executable_{false};
     stdx::option<const gir::module_t&> gir_module_;
+    stdx::option<const ip::pool&>      constants_;
     std::string                        user_main_name_{"main"};
 };
 

@@ -161,12 +161,16 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
     }
 
     auto member_types{ctx_.pool.get_many_pending(enum_expr.members.size())};
-    committable_resolution<types::enum_t> resolution{enum_type,
-                                                     enum_expr.enumerations,
-                                                     enum_expr.non_exhaustive,
-                                                     underlying_type,
-                                                     member_types,
-                                                     resolving_};
+    const gsl::span<const ast::enum_expr::enumeration> enumerations{enum_expr.enumerations};
+    committable_resolution<types::enum_t>              resolution{
+        enum_type,
+        enumerations,
+        enum_expr.non_exhaustive,
+        underlying_type,
+        member_types,
+        resolving_,
+        gsl::span<const gsl::not_null<type*>>{},
+        declared_names(ctx_.arena, resolving_, enumerations)};
     lend_shape_to_pending_instance(id.get_index(), enum_type);
     if (!resolve_members(member_types, enum_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -401,14 +405,17 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         }
     }
 
-    committable_resolution<types::struct_t> resolution{struct_type,
-                                                       field_types,
-                                                       struct_expr.fields,
-                                                       member_types,
-                                                       resolving_,
-                                                       struct_expr.is_extern,
-                                                       struct_expr.is_packed,
-                                                       field_alignments};
+    const gsl::span<const ast::struct_expr::field> fields{struct_expr.fields};
+    committable_resolution<types::struct_t>        resolution{
+        struct_type,
+        field_types,
+        fields,
+        member_types,
+        resolving_,
+        struct_expr.is_extern,
+        struct_expr.is_packed,
+        field_alignments,
+        declared_names(ctx_.arena, resolving_, fields)};
     lend_shape_to_pending_instance(id.get_index(), struct_type);
     if (!resolve_members(member_types, struct_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -618,16 +625,18 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     }
 
     auto member_types{ctx_.pool.get_many_pending(union_expr.members.size())};
-    committable_resolution<types::union_t> resolution{union_type,
-                                                      field_types,
-                                                      union_expr.fields,
-                                                      member_types,
-                                                      resolving_,
-                                                      union_expr.is_extern ||
-                                                          union_expr.is_packed || void_tag,
-                                                      union_expr.is_extern,
-                                                      union_expr.is_packed,
-                                                      tag_enum};
+    const gsl::span<const ast::union_expr::field> fields{union_expr.fields};
+    committable_resolution<types::union_t>        resolution{
+        union_type,
+        field_types,
+        fields,
+        member_types,
+        resolving_,
+        union_expr.is_extern || union_expr.is_packed || void_tag,
+        union_expr.is_extern,
+        union_expr.is_packed,
+        tag_enum,
+        declared_names(ctx_.arena, resolving_, fields)};
     lend_shape_to_pending_instance(id.get_index(), union_type);
     if (!resolve_members(member_types, union_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
