@@ -7,7 +7,7 @@ test "meta programming" {
         .count_balance = -1,
         .bike_flag = true,
     };
-    @expect(data.countStuff() == 111.34000015258789);
+    @expect(data.count_stuff() == 111.34000015258789);
 }
 
 const Data = struct {
@@ -16,7 +16,7 @@ const Data = struct {
     count_balance: i32,
     bike_flag: bool,
 
-    const countStuff = fn(self): f64 {
+    const count_stuff = fn(self): f64 {
         let mut accumulator: f64 = 0;
         unroll for (@typeInfo(@This()).struct.fields) |field| {
             if (std.mem.starts_with(u8, field.name, "count_")) {

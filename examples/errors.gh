@@ -1,25 +1,25 @@
 import std;
 
-// `std.fmt.Error` is `std.io.Error || enum { ... }`, so every io failure below `?`s into it as is
 pub const main = fn(args: [][:0]u8): std.Result(i32, std.fmt.Error) {
     if (args.len <= 1) {
         std.io.eprintln("Expected at least 1 arg")!;
         return .of(1);
     }
 
-    // This will print the error name on failure from a ? propagation
+    // This will print the error name on failure through an error path
     errdefer |e| std.io.eprintln("{}", e)!;
 
+    // `std.fmt.Error` is `std.io.Error || enum { ... }` so io errors are a subset of it
     let mut file: std.io.File = .open(args[1], .{})?;
     defer file.close();
 
     let mut buf: [4096]mut u8 = undefined;
     loop {
-        let n = file.read(buf)?;
-        if (n == 0) {
-            break;
-        } else {
-            std.io.print("{}", buf[0..n])?;
+        // Match patterms can branch based on captures
+        match (file.read(buf)) {
+            .ok(0) => break, // This must come before the next |n| branch
+            .ok(|n|) => std.io.print("{}", buf[0..n])?,
+            .err(|e|) => return .fail(e), // Will trigger both `errdefer`s and `defer`s
         }
     }
 
