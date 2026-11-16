@@ -16,6 +16,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
+#include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -27,9 +28,11 @@
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "support/float_math.hh"
+#include "support/int128.hh"
 
 namespace ghoti::codegen {
 
@@ -71,7 +74,6 @@ class llvm_lowering {
         segment_blocks_.clear();
     }
 
-    // A string constant: a function's name when typed as one, else the bytes of a global
     auto lower_string(const std::string&              str,
                       stdx::option<const sema::type&> value_type,
                       stdx::option<const sema::type&> expected_type) -> llvm::Value*;

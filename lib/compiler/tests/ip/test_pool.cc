@@ -2,12 +2,15 @@
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
+#include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "helpers/sema.hh"
 #include "support/big_int.hh"
@@ -100,29 +103,29 @@ TEST_CASE("Evaluator values come back from the pool as they went in") {
     auto&           i32_type{*types[int_key(32, true)]};
     using gir::const_value;
 
-    for (const auto& value :
-         {const_value{i64{-3}, i32_type},
-          const_value{u64{7}},
-          const_value{i128{-1} << 100},
-          const_value{u128{1} << 120},
-          const_value{big_int::parse("1" + std::string(50, '0'), 10).value()},
-          const_value{true},
-          const_value{std::string{"text"}},
-          const_value{gir::const_enum{"red", 2}, i32_type},
-          const_value{gir::const_union{"some", {const_value{i64{4}}}}},
-          const_value{gir::const_addr{"global", {}}},
-          const_value{gir::const_dyn_fat_ptr{"data", "vtable"}},
-          const_value{gir::const_array{{const_value{i64{1}}, const_value{i64{2}}}}},
-          const_value{gir::void_val{}},
-          const_value{gir::undefined_val{}},
-          const_value{gir::nullptr_val{}},
-          const_value{gir::poison_val{}},
-          const_value{i32_type}}) {
-        const auto back{round_trip(pool, value)};
-        CHECK(back.identical(value));
-        CHECK(back.get_type().transform([](const sema::type& t) { return &t; }) ==
-              value.get_type().transform([](const sema::type& t) { return &t; }));
-    }
+    const auto& value{
+        GENERATE_REF(const_value{i64{-3}, i32_type},
+                     const_value{u64{7}},
+                     const_value{i128{-1} << 100},
+                     const_value{u128{1} << 120},
+                     const_value{big_int::parse("1" + std::string(50, '0'), 10).value()},
+                     const_value{true},
+                     const_value{std::string{"text"}},
+                     const_value{gir::const_enum{"red", 2}, i32_type},
+                     const_value{gir::const_union{"some", {const_value{i64{4}}}}},
+                     const_value{gir::const_addr{"global", {}}},
+                     const_value{gir::const_dyn_fat_ptr{"data", "vtable"}},
+                     const_value{gir::const_array{{const_value{i64{1}}, const_value{i64{2}}}}},
+                     const_value{gir::void_val{}},
+                     const_value{gir::undefined_val{}},
+                     const_value{gir::nullptr_val{}},
+                     const_value{gir::poison_val{}},
+                     const_value{i32_type})};
+
+    const auto back{round_trip(pool, value)};
+    CHECK(back.identical(value));
+    CHECK(back.get_type().transform([](const sema::type& t) { return &t; }) ==
+          value.get_type().transform([](const sema::type& t) { return &t; }));
 }
 
 TEST_CASE("A type as a value is the type's own entry") {

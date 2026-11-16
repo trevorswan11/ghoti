@@ -16,6 +16,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"

@@ -1,11 +1,9 @@
 #include "compiler/codegen/llvm_lowering.hh"
-#include "compiler/codegen/runtime_libcalls.hh"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
-#include <llvm/ADT/STLFunctionalExtras.h>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -18,6 +16,7 @@
 #include <gsl/pointers>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/Attributes.h>
@@ -53,6 +52,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
 #include "compiler/codegen/c_abi.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -61,9 +61,12 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -1472,8 +1475,7 @@ auto llvm_lowering::lower_string(const std::string&              str,
                                  stdx::option<const sema::type&> expected_type) -> llvm::Value* {
     auto ty{expected_type};
     if (!ty && value_type) { ty = value_type; }
-    // A fn-typed string value names a function rather than holding string data, even when
-    // stored into a `^fn(...)` slot (that pointer is the function's own address)
+    // A fn-typed string value names a function rather than holding string data
     if (value_type && value_type->get_kind() == sema::type_kind::FUNCTION) {
         ty = value_type;
     } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>() : stdx::none};
@@ -1482,7 +1484,7 @@ auto llvm_lowering::lower_string(const std::string&              str,
     }
     if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
         if (auto* fn{resolve_named_function(str)}) { return fn; }
-        // Not yet declared in this translation unit for the linnker to resolve
+        // Not yet declared in this translation unit for the linker to resolve
         const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
         ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
         auto* fn_ty{types_.translate_function_type(*fn_data)};

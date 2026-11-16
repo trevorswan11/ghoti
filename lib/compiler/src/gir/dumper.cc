@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -16,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/keywords.hh"

@@ -8,21 +8,25 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/ip/pool.hh"
 
 namespace ghoti::gir {
 
-// Dumping a module or a function reads its constants from that one's pool. A segment,
-// instruction, or value dumped alone needs `constants` given
 class dumper {
   public:
     explicit dumper(std::ostream&                 out,
                     stdx::option<const ip::pool&> constants = stdx::none) noexcept
         : out_{out}, constants_{constants} {}
 
+    // Uses the module's own pool
     auto dump(const module_t& mod) -> void;
+    // Uses the function's own pool
     auto dump(const function& fn) -> void;
+    // Requires the dumper's `constants` to be set
     auto dump(const segment& seg) -> void;
+    // Requires the dumper's `constants` to be set
     auto dump(const instruction& inst) -> void;
+    // Requires the dumper's `constants` to be set
     auto dump(const value& val) -> void;
 
   private:

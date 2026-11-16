@@ -7,10 +7,8 @@
 
 namespace ghoti::gir {
 
-// The ABI alignment and size of a type, as codegen lays it out on the target
 [[nodiscard]] auto align_of(const sema::type& type, const codegen::type_layout& layout) -> usize;
 [[nodiscard]] auto size_of(const sema::type& type, const codegen::type_layout& layout) -> usize;
-// A struct field's alignment: its type's, raised by any `@[align(n)]` on the field
 [[nodiscard]] auto struct_field_align(const sema::types::struct_t& st,
                                       usize                        idx,
                                       const codegen::type_layout&  layout) -> usize;

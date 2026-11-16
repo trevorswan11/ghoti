@@ -18,15 +18,16 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
 
 struct global_decl {
-    std::string                          name;
-    sema::type&                          type;
-    stdx::option<value>                  init_value;
+    std::string         name;
+    sema::type&         type;
+    stdx::option<value> init_value;
     // An aggregate or other folded initializer, which has no operand form
     stdx::option<ip::index>              const_init;
     gir::linkage                         linkage{linkage::INTERNAL};

@@ -4,12 +4,16 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
@@ -19,8 +23,7 @@ namespace ghoti::ip {
 
 namespace {
 
-// A value's identity as text: its arm, its type, then its payload, with every variable-length
-// part length-prefixed so that no two values share a key
+// A value's identity as text formatted such that no two values share a key
 class key_writer {
   public:
     explicit key_writer(const value_data& data, stdx::option<sema::type&> type) {

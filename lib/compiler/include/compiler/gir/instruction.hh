@@ -1,6 +1,5 @@
 #pragma once
 
-#include <concepts>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,11 +23,8 @@
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
-#include "support/big_int.hh"
 #include "support/diagnostic.hh"
-#include "support/float128.hh"
 #include "support/float_math.hh"
-#include "support/int128.hh"
 
 namespace ghoti::gir {
 
@@ -201,11 +197,10 @@ class local_id {
 
 using void_val      = ip::void_value;
 using undefined_val = ip::undefined_value;
-// A zero-valued placeholder for an arbitrary type, lowered via `llvm::Constant::getNullValue`
-using zero_val    = ip::zero_value;
-using nullptr_val = ip::nullptr_value;
+using zero_val      = ip::zero_value;
+using nullptr_val   = ip::nullptr_value;
 
-// An operand: a local, or a constant the compilation's intern pool holds
+// A local, or a constant the compilation's intern pool holds
 struct value {
     using data_t = stdx::variant<local_id, ip::index>;
 

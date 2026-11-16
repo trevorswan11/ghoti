@@ -800,8 +800,7 @@ struct field_lookup_result {
 [[nodiscard]] auto find_aggregate_field(type& denoted, std::string_view name) noexcept
     -> stdx::option<field_lookup_result>;
 
-// The declared name of each field or variant in `items`, which a type keeps so that codegen and
-// the intern pool never have to read them from the AST
+// The declared name of each field or variant in `items`
 template <typename Item>
 [[nodiscard]] auto
 declared_names(ghoti::arena& arena, const mod::module_t& owner, gsl::span<const Item> items)
@@ -823,8 +822,7 @@ class type_pool {
 
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
     // The intern pool every type is created in, which also holds the interned values
-    [[nodiscard]] auto intern() noexcept -> ip::pool& { return *intern_; }
-    [[nodiscard]] auto intern() const noexcept -> const ip::pool& { return *intern_; }
+    [[nodiscard]] auto intern(this auto&& self) noexcept -> auto& { return *self.intern_; }
 
     // Gets a type by its key or emplace's it into the internal cache
     [[nodiscard]] auto operator[](const types::key_t& key) -> gsl::not_null<type*> {

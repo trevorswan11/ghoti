@@ -1,7 +1,7 @@
 #include "compiler/gir/layout.hh"
 
 #include <algorithm>
-#include <functional>
+#include <bit>
 #include <ranges>
 
 #include <stdx/assert.hh>
@@ -17,17 +17,10 @@ namespace {
 
 [[nodiscard]] auto int_abi_bytes(u16 bits) -> usize {
     if (bits == 0) { return 0; }
-    if (bits <= 8) { return 1; }
-    if (bits <= 16) { return 2; }
-    if (bits <= 32) { return 4; }
-    if (bits <= 64) { return 8; }
-    usize bytes{1};
-    while (bytes * 8 < bits) { bytes *= 2; }
-    return bytes;
+    return std::bit_ceil((static_cast<usize>(bits) + 7) / 8);
 }
 
-// Integers wider than 32 bits and at most 64 take the target's 64-bit alignment, which is 4 on
-// i386 SysV
+// Integers wider than 32 bits and at most 64 take the target's 64-bit alignment
 [[nodiscard]] auto int_abi_align(u16 bits, const codegen::type_layout& layout) -> usize {
     if (bits > 32 && bits <= 64) { return layout.i64_align; }
     return std::max<usize>(int_abi_bytes(bits), 1);

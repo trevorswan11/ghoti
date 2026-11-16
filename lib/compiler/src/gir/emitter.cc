@@ -1630,8 +1630,8 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     const auto is_const{decl.has_modifier(ast::decl_modifiers::LET) ||
                         decl.has_modifier(ast::decl_modifiers::COMPTIME)};
 
-    stdx::option<value>       init_val;
-    stdx::option<ip::index>   const_init;
+    stdx::option<value>     init_val;
+    stdx::option<ip::index> const_init;
     if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::comptime_context_guard g{const_eval_, true};
         const auto                                    diags_before{ctx_.diags.size()};

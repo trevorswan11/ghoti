@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
@@ -30,6 +29,7 @@ struct undefined_value {
     [[nodiscard]] constexpr auto operator==(const undefined_value&) const noexcept
         -> bool = default;
 };
+
 // Every bit zero, whatever the type
 struct zero_value {
     [[nodiscard]] constexpr auto operator==(const zero_value&) const noexcept -> bool = default;
@@ -40,15 +40,15 @@ struct nullptr_value {
 struct poison_value {
     [[nodiscard]] constexpr auto operator==(const poison_value&) const noexcept -> bool = default;
 };
+
 // A `type` operand that names no type
 struct no_type_value {
     [[nodiscard]] constexpr auto operator==(const no_type_value&) const noexcept -> bool = default;
 };
 
-// A struct's fields or an array's elements, in declaration order. A struct field nothing set is
-// none
+// A struct's fields or an array's elements, in declaration order
 struct aggregate_value {
-    std::vector<stdx::option<index>> elements;
+    std::vector<stdx::option<index>> elements; // A struct field nothing set is none
     [[nodiscard]] auto operator==(const aggregate_value&) const noexcept -> bool = default;
 };
 
@@ -104,8 +104,8 @@ struct value {
     stdx::option<sema::type&> type;
 };
 
-// One per compilation: every type and every interned value, each named by its `index`. A type's
-// own index is also its value as a `type`
+// One per compilation: every type and every interned value, each named by its `index`.
+// A type's own index is also its value as a `type`
 class pool {
   public:
     explicit pool(ghoti::arena& arena) noexcept : arena_{arena} {}
@@ -120,8 +120,7 @@ class pool {
     [[nodiscard]] auto type_at(index i) const noexcept -> sema::type&;
     [[nodiscard]] auto is_type(index i) const noexcept -> bool;
 
-    // The value `data` of `type`, interned once. A float is interned as the bits it was given,
-    // so a caller rounds it into its type first
+    // The value `data` of `type`, interned once. A float is interned as the bits it was given
     [[nodiscard]] auto intern(value_data data, stdx::option<sema::type&> type = stdx::none)
         -> index;
     [[nodiscard]] auto value_at(index i) const noexcept -> const value&;
@@ -132,19 +131,21 @@ class pool {
         u32                       value_slot{0};
     };
 
+    using type_key_map_t  = ankerl::unordered_dense::map<sema::types::key_t, index>;
+    using value_key_map_t = ankerl::unordered_dense::
+        map<std::string, index, stdx::string_transparent_hash, stdx::string_transparent_eq>;
+
   private:
     [[nodiscard]] auto next_index() const noexcept -> index {
         return index{static_cast<u32>(entries_.size())};
     }
 
   private:
-    ghoti::arena&                                           arena_;
-    std::vector<entry>                                      entries_;
-    std::vector<value>                                      values_;
-    ankerl::unordered_dense::map<sema::types::key_t, index> type_keys_;
-    ankerl::unordered_dense::
-        map<std::string, index, stdx::string_transparent_hash, stdx::string_transparent_eq>
-            value_keys_;
+    ghoti::arena&      arena_;
+    std::vector<entry> entries_;
+    std::vector<value> values_;
+    type_key_map_t     type_keys_;
+    value_key_map_t    value_keys_;
 };
 
 } // namespace ghoti::ip
