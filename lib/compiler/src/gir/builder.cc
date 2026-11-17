@@ -22,6 +22,7 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     PROFILE_FUNCTION();
     ASSERT(segment_, "Cannot emit instruction without an active segment");
     if (!inst.location && location_) { inst.location = location_; }
+    if (splice_) { return segment_->insert_before_terminator(std::move(inst)); }
     return segment_->append(std::move(inst));
 }
 
