@@ -30,6 +30,7 @@
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/dumper.hh"
+#include "compiler/uir/sema/sema.hh"
 #include "driver/clap/error.hh"
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
@@ -236,13 +237,8 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
     TRY(ensure_output_directory());
     TRY(setup_module_manager());
     if (opts_.emit_uir_path || opts_.sema_uir) {
-        TRY(run_astgen(for_test_executable));
-        if (opts_.sema_uir) {
-            return clap::fatal_error(error_stream_,
-                                     "--sema=uir lowers through AstGen and stops there: UIR's "
-                                     "Sema is not implemented yet",
-                                     clap::error::COMPILATION_FAILED);
-        }
+        const auto lowered{TRY(run_astgen(for_test_executable))};
+        if (opts_.sema_uir) { return analyze_uir(lowered, for_test_executable); }
     }
 
     auto gir_mod_res{analyzer_.analyze(opts_.input_path, for_test_executable)};
@@ -273,7 +269,8 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
     return std::make_pair(module, std::move(*gir_mod_res));
 }
 
-auto compilation::run_astgen(bool for_test_executable) -> stdx::result<void, clap::error> {
+auto compilation::run_astgen(bool for_test_executable)
+    -> stdx::result<std::vector<uir::lowered_module>, clap::error> {
     auto root{manager_.try_get_file_module(opts_.input_path)};
     if (!root) {
         return clap::fatal_error(error_stream_,
@@ -319,7 +316,49 @@ auto compilation::run_astgen(bool for_test_executable) -> stdx::result<void, cla
         manager_.print_all_diagnostics(error_stream_);
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
-    return {};
+    return lowered;
+}
+
+auto compilation::analyze_uir(gsl::span<const uir::lowered_module> lowered,
+                              bool                                 for_test_executable)
+    -> stdx::result<analyzed_module, clap::error> {
+    if (for_test_executable || analyzer_.is_entry_point()) {
+        return clap::fatal_error(error_stream_,
+                                 "--sema=uir can't build an executable or tests yet: the program "
+                                 "entry code needs compile-time reflection, which UIR's Sema "
+                                 "doesn't analyze yet",
+                                 clap::error::COMPILATION_FAILED);
+    }
+    auto root{*manager_.try_get_file_module(opts_.input_path)};
+    auto out{uir::sema::analyze(analyzer_.get_ctx(), {.root = root.get(), .modules = lowered})};
+    if (out.stopped_at) {
+        const auto& at{*out.stopped_at};
+        const auto  where{at.where ? fmt::format("{}:{}:{}",
+                                                 path_utils::display(at.path),
+                                                 at.where->one_based().line,
+                                                 at.where->one_based().column)
+                                   : path_utils::display(at.path)};
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("--sema=uir doesn't analyze {} yet ({})", at.what, where),
+            clap::error::COMPILATION_FAILED);
+    }
+    if (!out.succeeded()) {
+        // Each diagnostic is its own module's, printed with that module's others
+        for (auto& d : out.diagnostics) {
+            auto&             owner{d.origin()
+                                        .and_then([&](const mod::module_t& m) {
+                                return manager_.find_file_module(m.path);
+                                        })
+                                        .value_or(*root)};
+            sema::diagnostics single{};
+            single.push_back(d);
+            owner.absorb_sema_diagnostics(std::move(single));
+        }
+        manager_.print_all_diagnostics(error_stream_);
+        return stdx::err{clap::error::COMPILATION_FAILED};
+    }
+    return std::make_pair(root, std::move(*out.gir));
 }
 
 auto compilation::linker_options() const -> codegen::extra_linker_options {

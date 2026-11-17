@@ -95,6 +95,7 @@ class analyzer {
     auto set_library_keeps_handlers(bool keep) noexcept -> void { library_keeps_handlers_ = keep; }
     // Whether the program is built as an executable, which `std/start.gh`'s entry code joins
     auto set_entry_point(bool entry_point) noexcept -> void { entry_point_ = entry_point; }
+    [[nodiscard]] auto is_entry_point() const noexcept -> bool { return entry_point_; }
 
     // Runs the entire sema pipeline
     auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
