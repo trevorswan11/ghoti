@@ -237,6 +237,10 @@ auto astgen::identifier(source src, source_location at, std::string_view name, u
 auto astgen::identifier_node(ast::node_id id, use u) -> place_result {
     const auto& ident{ast_.get_as<ast::identifier_expr>(id)};
     const auto  token{id.get_token_type()};
+    // A raw `@"i32"` is a plain identifier, so a binding it names wins over the primitive
+    if (token == token_type_t::IDENT && lookup(ident.name).is<lookup_hit>()) {
+        return identifier(id, location_of(id), ident.name, u);
+    }
     if (const auto prim{primitive_named(ident.name, token, id)}) { return {*prim, false}; }
     if (const auto builtin{id.get_builtin()}) {
         return {add_un(tag::builtin_ref, {}, static_cast<u32>(*builtin), id), false};
