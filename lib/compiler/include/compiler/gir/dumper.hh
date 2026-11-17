@@ -18,6 +18,9 @@ class dumper {
                     stdx::option<const ip::pool&> constants = stdx::none) noexcept
         : out_{out}, constants_{constants} {}
 
+    // Also prints what the plain dump leaves out: `.checked` arithmetic and each symbol's linkage
+    auto set_show_flags(bool show) noexcept -> void { show_flags_ = show; }
+
     // Uses the module's own pool
     auto dump(const module_t& mod) -> void;
     // Uses the function's own pool
@@ -35,6 +38,7 @@ class dumper {
   private:
     std::ostream&                 out_;
     stdx::option<const ip::pool&> constants_;
+    bool                          show_flags_{false};
 };
 
 } // namespace ghoti::gir

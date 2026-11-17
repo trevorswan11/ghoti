@@ -70,7 +70,18 @@ auto format_value(const ip::pool& constants, const value& val) -> std::string {
         [&constants](ip::index at) { return format_constant(constants, at); });
 }
 
-auto format_instruction(const ip::pool& constants, const instruction& inst) -> std::string {
+auto linkage_name(gir::linkage l) noexcept -> std::string_view {
+    switch (l) {
+    case linkage::INTERNAL: return "internal";
+    case linkage::PUBLIC:   return "public";
+    case linkage::EXPORT:   return "export";
+    case linkage::EXTERN:   return "extern";
+    }
+    return "internal";
+}
+
+auto format_instruction(const ip::pool& constants, const instruction& inst, bool show_flags)
+    -> std::string {
     const auto format_value{
         [&constants](const value& val) { return gir::format_value(constants, val); }};
     const auto type_str = inst.type ? inst.type->to_string() : "";
@@ -179,7 +190,8 @@ auto format_instruction(const ip::pool& constants, const instruction& inst) -> s
     }
 
     // Binary / unary / comparison / cast operations
-    const auto sat{inst.is_saturating ? ".sat" : ""};
+    const auto sat{fmt::format(
+        "{}{}", inst.is_saturating ? ".sat" : "", show_flags && inst.is_checked ? ".checked" : "")};
     if (!type_str.empty() && !inst.operands.empty()) {
         return fmt::format("{}{}{} {} {}",
                            prefix,
@@ -206,7 +218,7 @@ auto dumper::constants() const -> const ip::pool& {
 }
 
 auto dumper::dump(const instruction& inst) -> void {
-    fmt::println(out_, "    {}", format_instruction(constants(), inst));
+    fmt::println(out_, "    {}", format_instruction(constants(), inst, show_flags_));
 }
 
 auto dumper::dump(const segment& seg) -> void {
@@ -242,8 +254,12 @@ auto dumper::dump(const function& fn) -> void {
             }
         }
 
-        fmt::println(
-            out_, "fn {}({}) -> {}", syntax::ascii_spelling(fn.get_name()), params_str, return_str);
+        fmt::println(out_,
+                     "fn {}({}) -> {}{}",
+                     syntax::ascii_spelling(fn.get_name()),
+                     params_str,
+                     return_str,
+                     show_flags_ ? fmt::format(" [{}]", linkage_name(fn.get_linkage())) : "");
     }
 
     for (const auto& seg : fn.get_segments()) { dump(*seg); }
@@ -258,15 +274,17 @@ auto dumper::dump(const module_t& mod) -> void {
 
     for (const auto& global : mod.get_globals()) {
         const auto kw{global->is_constant ? "const" : "var"};
+        const auto flags{show_flags_ ? fmt::format(" [{}]", linkage_name(global->linkage)) : ""};
         if (global->init_value) {
             fmt::println(out_,
-                         "{} {}: {} = {}",
+                         "{} {}: {} = {}{}",
                          kw,
                          global->name,
                          global->type.to_string(),
-                         format_value(constants(), *global->init_value));
+                         format_value(constants(), *global->init_value),
+                         flags);
         } else {
-            fmt::println(out_, "{} {}: {}", kw, global->name, global->type.to_string());
+            fmt::println(out_, "{} {}: {}{}", kw, global->name, global->type.to_string(), flags);
         }
     }
 
