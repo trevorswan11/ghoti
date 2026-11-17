@@ -25,6 +25,7 @@
 #include "compiler/uir/dumper.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
+#include "helpers/uir_diff.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests::helpers {
@@ -101,24 +102,28 @@ auto check_lowers_through_astgen(sema_test_context& ctx) -> void {
         !ctx.manager.any_errored()};
     if (!accepted) { return; }
 
-    mod::module_manager fresh{*ctx.loader};
-    for (const auto& [name, path] : ctx.libraries) {
-        REQUIRE(fresh.add_library_module(name, path));
-    }
-    const auto&             sema_ctx{ctx.analyzer.get_ctx()};
-    const sema::cfg_context cfg{.target_opts = sema_ctx.target_opts,
-                                .facts =
-                                    codegen::target_facts::resolve(sema_ctx.target_opts.triple_str),
-                                .build_mode     = sema_ctx.build_mode,
-                                .runtime_safety = sema_ctx.runtime_safety,
-                                .testing        = sema_ctx.testing,
-                                .modules        = fresh};
-    const auto&             root{*UNWRAP(fresh.try_get_file_module(ctx.root_path))};
-    for (const auto& item : uir::lower_reachable(root, {.cfg = cfg, .modules = fresh})) {
-        if (item.result.diagnostics.empty()) { continue; }
-        FAIL_CHECK(fmt::format("the old pipeline accepted {} but AstGen reported:\n{}",
-                               item.source->path.generic_string(),
-                               item.result.diagnostics));
+    const auto& sema_ctx{ctx.analyzer.get_ctx()};
+    const auto  diff{diff_pipelines(*ctx.loader,
+                                    ctx.root_path,
+                                    ctx.libraries,
+                                    {.target_opts    = sema_ctx.target_opts,
+                                     .runtime_safety = sema_ctx.runtime_safety,
+                                     .testing        = sema_ctx.testing,
+                                     .build_mode     = sema_ctx.build_mode})};
+    report_uir_diff(diff);
+    switch (diff.status) {
+    case uir_diff_status::ASTGEN_FAILED:
+        FAIL_CHECK(fmt::format("the old pipeline accepted the program but AstGen reported:\n{}",
+                               diff.detail));
+        break;
+    case uir_diff_status::REJECTED:
+        FAIL_CHECK(
+            fmt::format("UIR Sema rejected a program the old pipeline accepted:\n{}", diff.detail));
+        break;
+    case uir_diff_status::GIR_DIFF:
+        FAIL_CHECK(fmt::format("UIR Sema's GIR differs from the old pipeline's\n{}", diff.detail));
+        break;
+    default: break;
     }
 }
 
