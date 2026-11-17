@@ -41,6 +41,25 @@ TEST_CASE("A loop capture may reuse a name its function declares further on") {
         "const f = fn(n: usize): usize { for (0..n) |i| { _ = i; } let mut i = n; return i; };");
 }
 
+TEST_CASE("An errdefer copied onto a later exit doesn't shadow what that exit declares") {
+    // The copy at `return x` sees only what was visible at the `errdefer`, not the `|e|` capture
+    check_lowers(R"(
+        const f = fn(x: auto): @TypeOf(x) {
+            errdefer |e| { _ = e; }
+            if (x) |v| { _ = v; } else |e| { _ = e; return x; }
+            return x;
+        };
+    )");
+}
+
+TEST_CASE("An errdefer capture still may not shadow an earlier name") {
+    check_lowering(
+        "const f = fn(x: auto): @TypeOf(x) { let e = 1; _ = e; errdefer |e| {} return x; };",
+        {{"Attempt to shadow identifier 'e'; previous declaration here: 1:41",
+          error::SHADOWING_DECLARATION,
+          std::pair{0UZ, 64UZ}}});
+}
+
 TEST_CASE("An inner local may not take a name its enclosing block already declares") {
     check_lowering("const f = fn(): i32 { let x = 2; { let x = 1; _ = x; } return x; };",
                    {{"Attempt to shadow identifier 'x'; previous declaration here: 1:27",
