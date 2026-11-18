@@ -9,11 +9,8 @@
 
 namespace ghoti::uir::sema {
 
-auto analyzer::require_runtime(const source&) -> result<void> {
-    if (is_comptime()) {
-        needed_runtime_ = true;
-        return stdx::err{stop::POISON};
-    }
+auto analyzer::require_runtime(const source& src) -> result<void> {
+    if (is_comptime()) { return comp_.needs_runtime(u_, src); }
     return {};
 }
 

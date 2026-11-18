@@ -2,6 +2,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -30,15 +31,23 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto callee{TRY(resolve_value(callee_ref, src))};
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a value"); }
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a call at compile time"); }
 
-    const auto& target{*fn->fn};
+    auto& target{*fn->fn};
     if (args.size() != target.params.size()) {
         return comp_.report(
             u_,
             callee_src.value_or(src),
             gs::error::ARITY_MISMATCH,
             fmt::format("Expected {} arguments, found {}", target.params.size(), args.size()));
+    }
+    // A call returning `type` always runs at compile time (§5.5)
+    if (is_comptime()) { return call_at_comptime(target, args, src); }
+    if (target.comptime_only) {
+        auto value{[&] {
+            const auto scope{comptime_scope()};
+            return call_at_comptime(target, args, src);
+        }()};
+        return at_comptime_boundary(std::move(value));
     }
 
     std::vector<gir::value> values;
@@ -61,6 +70,22 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     }
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
+}
+
+auto analyzer::call_at_comptime(instance& target, gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    std::vector<ip::index> values;
+    values.reserve(args.size());
+    for (usize i{0}; i < args.size(); ++i) {
+        const auto arg{TRY(resolve_value(args[i], src))};
+        const auto coerced{TRY(coerce_to(
+            arg,
+            *target.params[i],
+            src,
+            {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
+        values.emplace_back(TRY(require_comptime(coerced, src)));
+    }
+    return comp_.call_comptime(u_, src, target, std::move(values));
 }
 
 } // namespace ghoti::uir::sema

@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -25,6 +26,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "support/big_int.hh"
@@ -39,6 +41,7 @@ namespace gs = ::ghoti::sema;
 enum class stop : u8 {
     POISON,      // A reported error
     UNSUPPORTED, // A construct this phase doesn't handle
+    RUNTIME,     // A comptime evaluation needed a runtime value, which its boundary reports
 };
 
 template <typename T> using result = stdx::result<T, stop>;
@@ -75,8 +78,50 @@ struct global_ref {
     gsl::not_null<gs::type*>          type;
 };
 
-// A comptime value, a runtime value, a function, a place, a pending untyped merge, or a global
-using operand = stdx::variant<ip::index, gir::value, function_ref, place, merge_ref, global_ref>;
+// A comptime allocation's slot: a `comptime let mut`, or a `let mut` in a comptime body
+struct comptime_place {
+    u32 alloc;
+};
+
+// A comptime value, a runtime value, a function, a place, a pending untyped merge, a global, or a
+// comptime allocation
+using operand = stdx::
+    variant<ip::index, gir::value, function_ref, place, merge_ref, global_ref, comptime_place>;
+
+// Mutable compile-time state, which only stores change (§7)
+struct comptime_alloc {
+    // None until an untyped allocation's first store gives it one
+    stdx::option<gs::type&> type;
+    stdx::option<ip::index> value;
+    // The analysis that owns it, which alone may store to it
+    u32 frame;
+    // The runtime branches around its declaration, which a store may not add to (Q6)
+    u32  runtime_depth;
+    bool keeps_comptime_type;
+};
+
+// One compile-time call in progress, for the recursion limit and the notes of its errors
+struct comptime_frame {
+    gsl::not_null<const unit*> caller;
+    source                     call_src;
+    std::string_view           callee;
+    // Allocations from here on belong to the call, so storing below it makes the call impure
+    u32  alloc_base;
+    bool impure{false};
+};
+
+// A memoized compile-time call: the function and its interned arguments (Q7)
+struct memo_key {
+    const instance*        fn;
+    std::vector<ip::index> args;
+
+    [[nodiscard]] auto operator==(const memo_key&) const noexcept -> bool = default;
+};
+
+struct memo_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const memo_key& key) const noexcept -> u64;
+};
 
 enum class decl_status : u8 {
     UNRESOLVED,
@@ -102,6 +147,14 @@ struct instance {
     gsl::not_null<gs::type*>              return_type;
     gir::linkage                          linkage{gir::linkage::INTERNAL};
     bool                                  queued{false};
+    // Returns `type`, so every call runs at compile time and there is no runtime body
+    bool comptime_only{false};
+};
+
+// The quotas every compile-time loop and call is bounded by (§9 rule 5)
+struct eval_limits {
+    usize recursion;
+    usize unroll;
 };
 
 class compilation {
@@ -127,8 +180,13 @@ class compilation {
     [[nodiscard]] auto declare_function(const unit& u, decl_id decl, inst_id func)
         -> result<operand>;
 
-    // Reports a diagnostic at `src` and returns the poison stop
-    [[nodiscard]] auto report(const unit& u, const source& src, gs::error code, std::string message)
+    // Reports a diagnostic at `src`, with the compile-time calls in progress as notes, and returns
+    // the poison stop. An identical diagnostic already reported isn't repeated
+    [[nodiscard]] auto report(const unit&                          u,
+                              const source&                        src,
+                              gs::error                            code,
+                              std::string                          message,
+                              const stdx::option<diagnostic_note>& note = stdx::none)
         -> stdx::err<stop>;
     // Records the first construct this phase doesn't analyze and returns the unsupported stop
     [[nodiscard]] auto unsupported(const unit& u, const source& src, std::string what)
@@ -144,23 +202,73 @@ class compilation {
     [[nodiscard]] auto own_symbol(const unit& u, decl_id decl, std::string symbol)
         -> const std::string&;
 
+    // Runs `fn` at compile time on interned arguments, memoized when the call is pure (Q7)
+    [[nodiscard]] auto
+    call_comptime(const unit& caller, const source& src, instance& fn, std::vector<ip::index> args)
+        -> result<operand>;
+    [[nodiscard]] auto limits() noexcept -> eval_limits& { return limits_; }
+
+    // Comptime memory (§7)
+    [[nodiscard]] auto new_alloc(const comptime_alloc& alloc) -> comptime_place;
+    [[nodiscard]] auto alloc_at(comptime_place p) -> comptime_alloc& { return allocs_[p.alloc]; }
+    [[nodiscard]] auto alloc_count() const noexcept -> u32 {
+        return static_cast<u32>(allocs_.size());
+    }
+    // Drops the allocations from `base` on, once the analysis that made them ends
+    auto release_allocs(u32 base) -> void { allocs_.resize(base); }
+    // A store makes impure every call in progress that didn't make the allocation
+    auto               note_store(comptime_place p) -> void;
+    [[nodiscard]] auto next_frame() noexcept -> u32 { return next_frame_++; }
+
+    // Records where a comptime evaluation needed a runtime value and returns the deferred stop
+    [[nodiscard]] auto needs_runtime(const unit& u, const source& src) -> stdx::err<stop>;
+    // Notes that the runtime need came through the immutable `let` named `name`
+    auto note_runtime_let(const unit& u, std::string_view name, const source& init) -> void;
+    // Reports the deferred need at `at`, or else at the operand that wasn't known
+    [[nodiscard]] auto report_runtime_need(const unit&                 u,
+                                           const stdx::option<source>& at,
+                                           gs::error                   code,
+                                           std::string                 message) -> stdx::err<stop>;
+
+  private:
+    struct runtime_site {
+        gsl::not_null<const unit*>    u;
+        source                        src;
+        stdx::option<diagnostic_note> through_let{};
+    };
+
+    // A finished call's value, or none for one whose failure was already reported
+    using memo_entry = stdx::option<operand>;
+
   private:
     auto               analyze_roots() -> void;
     auto               drain_queue() -> void;
     [[nodiscard]] auto analyze_body(instance& fn) -> result<void>;
+    // A declaration whose whole value is `@compileError(...)`, which fires where it is used
+    [[nodiscard]] auto is_deferred_error(const unit& u, const decl& d) const -> bool;
+    [[nodiscard]] auto deferred_error_message(const unit& u, const decl& d) const -> std::string;
+    [[nodiscard]] auto root_values() -> ankerl::unordered_dense::map<std::string, ip::index>;
+    // Notes naming the compile-time calls in progress, innermost first
+    auto add_call_notes(gs::diagnostic& d) const -> void;
 
   private:
-    gs::context&                          ctx_;
-    const program&                        prog_;
-    options                               opts_;
-    std::vector<unit>                     units_;
-    std::vector<std::vector<decl_state>>  decls_;
-    std::vector<stdx::box<instance>>      instances_;
-    std::vector<gsl::not_null<instance*>> queue_;
-    gir::module_t                         gir_;
-    gs::diagnostics                       diagnostics_;
-    stdx::option<sema::unsupported>       stopped_at_;
-    u32                                   ptr_bits_;
+    gs::context&                                                      ctx_;
+    const program&                                                    prog_;
+    options                                                           opts_;
+    std::vector<unit>                                                 units_;
+    std::vector<std::vector<decl_state>>                              decls_;
+    std::vector<stdx::box<instance>>                                  instances_;
+    std::vector<gsl::not_null<instance*>>                             queue_;
+    gir::module_t                                                     gir_;
+    gs::diagnostics                                                   diagnostics_;
+    stdx::option<sema::unsupported>                                   stopped_at_;
+    u32                                                               ptr_bits_;
+    std::vector<comptime_alloc>                                       allocs_;
+    std::vector<comptime_frame>                                       calls_;
+    ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash> memo_;
+    eval_limits                                                       limits_;
+    stdx::option<runtime_site>                                        runtime_site_;
+    u32                                                               next_frame_{0};
 };
 
 // The result of analyzing a body: the value it yields, or none when control left it
@@ -201,11 +309,15 @@ class analyzer {
              stdx::option<decl_id> declaring = stdx::none) noexcept;
     // A runtime analyzer for `fn`'s body
     analyzer(compilation& comp, const unit& u, instance& fn, gir::function& gir_fn) noexcept;
-    ~analyzer() = default;
+    // A compile-time call of `fn`
+    analyzer(compilation& comp, const unit& u, instance& fn) noexcept;
+    ~analyzer();
     MAKE_PINNED(analyzer);
 
     // A comptime body's yielded value
     [[nodiscard]] auto eval_comptime(gsl::span<const inst_id> body) -> result<operand>;
+    // Runs the function's body at compile time on arguments of its parameter types
+    [[nodiscard]] auto eval_call(gsl::span<const ip::index> args) -> result<operand>;
     // A type body's denoted type
     [[nodiscard]] auto eval_type(gsl::span<const inst_id> body, const source& src)
         -> result<gsl::not_null<gs::type*>>;
@@ -234,6 +346,18 @@ class analyzer {
         gir::segment_id          seg;
         std::vector<incoming>    arrivals;
         stdx::option<gir::value> materialized;
+    };
+
+    // A comptime `break`, `continue` or `return` unwinding to what consumes it
+    struct jump {
+        enum class kind : u8 {
+            BREAK,
+            REPEAT,
+            RETURN,
+        };
+        kind                  what;
+        stdx::option<inst_id> target;
+        stdx::option<operand> value;
     };
 
     // Where a value is converted to a known type, which names the mismatch when it can't be
@@ -272,6 +396,9 @@ class analyzer {
     [[nodiscard]] auto
     analyze_shift(inst_id inst, const binary_info& info, const operand& lhs, const operand& rhs)
         -> result<operand>;
+    [[nodiscard]] auto
+    fold_shift(const binary_info& info, const operand& lhs, const operand& rhs, const source& src)
+        -> result<operand>;
     // `lhs op rhs` when both are known and the operation doesn't fault, else none
     [[nodiscard]] auto fold_binary(const binary_info& info,
                                    gs::type&          peer,
@@ -281,6 +408,8 @@ class analyzer {
     [[nodiscard]] auto fold_float(const binary_info& info, gs::type& peer, f128 lhs, f128 rhs)
         -> stdx::option<operand>;
     [[nodiscard]] auto domain_of(const gs::type& t) const -> gir::semantics::int_domain;
+    // Whether `gir::semantics` folds `t`'s values, which it does up to 128 bits
+    [[nodiscard]] auto folds_exactly(const gs::type& t) const -> bool;
     // Whether the runtime instruction checks `op` on `t`, as the old emitter decides it
     [[nodiscard]] auto checks_overflow(gir::semantics::int_op op, const gs::type& t) const -> bool;
 
@@ -299,7 +428,10 @@ class analyzer {
     [[nodiscard]] auto concrete(const operand& op, const source& src) -> result<operand>;
 
     // Locals and memory (memory.cc)
-    [[nodiscard]] auto analyze_alloc_mut(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand>;
+    [[nodiscard]] auto store_comptime(comptime_place p, const operand& value, const source& src)
+        -> result<void>;
+    [[nodiscard]] auto load_comptime(comptime_place p) -> operand;
     [[nodiscard]] auto analyze_let_value(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_const_local(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_store(inst_id inst) -> result<operand>;
@@ -315,6 +447,25 @@ class analyzer {
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_unreachable(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_block_comptime(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_condbr_comptime(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_eval_branch(inst_id inst) -> result<operand>;
+    // A block at compile time, taking a `break` that targets it as its value
+    [[nodiscard]] auto run_block(inst_id inst, gsl::span<const inst_id> body) -> result<operand>;
+    [[nodiscard]] auto run_loop(inst_id inst) -> result<operand>;
+    // Analyzes what follows at compile time until the guard ends
+    [[nodiscard]] auto comptime_scope() {
+        ++comptime_depth_;
+        return gsl::finally([this] { --comptime_depth_; });
+    }
+    // Counts a runtime branch around what follows until the guard ends (Q6)
+    [[nodiscard]] auto runtime_branch() {
+        ++runtime_depth_;
+        return gsl::finally([this] { --runtime_depth_; });
+    }
+    // Reports a runtime need that reached a comptime boundary in a runtime function
+    [[nodiscard]] auto at_comptime_boundary(result<operand> value) -> result<operand>;
+    [[nodiscard]] auto known_bool(const operand& op, const source& src) -> result<bool>;
     [[nodiscard]] auto finish_merge(const std::vector<incoming>& arrivals,
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
@@ -325,6 +476,26 @@ class analyzer {
 
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto call_at_comptime(instance&            target,
+                                        gsl::span<const ref> args,
+                                        const source&        src) -> result<operand>;
+
+    // Builtins (builtins.cc)
+    [[nodiscard]] auto analyze_builtin(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto builtin_compile_error(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_limit(gsl::span<const ref> args, const source& src, bool recursion)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_layout(gsl::span<const ref> args, const source& src, bool size)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+
+    // Comptime knownness
+    // The operand's comptime value, or the runtime need when it has none
+    [[nodiscard]] auto require_comptime(const operand& op, const source& src) -> result<ip::index>;
+    // `r` evaluated at compile time, running its instructions again when they were runtime
+    [[nodiscard]] auto reevaluate(ref r, const source& src) -> result<operand>;
 
     // Declarations (decls.cc)
     [[nodiscard]] auto analyze_global(decl_id                 decl,
@@ -367,12 +538,18 @@ class analyzer {
     std::vector<pending_merge>                     merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
-    // Set when a comptime body stopped because it needed a runtime value
-    bool needed_runtime_{false};
+    // The runtime branches enclosing the instruction being analyzed (Q6)
+    u32                frame_;
+    u32                runtime_depth_{0};
+    u32                alloc_base_;
+    stdx::option<jump> jump_;
 };
 
 // Messages shared with the old pipeline's checks (messages.cc)
 namespace messages {
+
+constexpr std::string_view MUTABLE_TYPE_BINDING{
+    "a 'type' value cannot be stored in a 'let' or 'let mut' binding; use 'const' instead"};
 
 [[nodiscard]] auto
 store_mismatch(const gs::context& ctx, const gs::type& from, const gs::type& to, u32 ptr_bits)
@@ -396,6 +573,10 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 [[nodiscard]] auto condition_not_bool(const gs::context& ctx, const gs::type& found) -> std::string;
 
 } // namespace messages
+
+// `@compileError`'s message, read from its string literal argument
+[[nodiscard]] auto compile_error_message(const module_t& m, gsl::span<const ref> args)
+    -> std::string;
 
 // The spelling of an operator tag in diagnostics, `+` for `add`
 [[nodiscard]] auto operator_spelling(tag t) noexcept -> std::string_view;
