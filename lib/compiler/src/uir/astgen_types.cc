@@ -510,6 +510,7 @@ auto astgen::lower_function(ast::node_id                        id,
     if (fn.is_type_expr) { bits |= flags::TYPE_EXPR; }
     if (fn.has_explicit_conv) { bits |= flags::EXPLICIT_CONV; }
     if (is_testing_fn(fn, decl)) { bits |= flags::TESTING; }
+    if (!fn.body) { bits |= flags::BODYLESS; }
 
     auto record{writer()};
     record.body_field(params)

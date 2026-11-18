@@ -49,8 +49,15 @@ using enum field_kind;
 constexpr auto INT_FLAGS{std::to_array<std::string_view>({"signed", "size", "char", "big"})};
 constexpr auto PTR_FLAGS{std::to_array<std::string_view>(
     {"mut", "volatile", "poly", "sentinel", "place", "len_absent"})};
-constexpr auto FN_FLAGS{std::to_array<std::string_view>(
-    {"variadic", "extern", "dyn_fn", "impl_fn", "explicit_conv", "move", "type_expr", "testing"})};
+constexpr auto FN_FLAGS{std::to_array<std::string_view>({"variadic",
+                                                         "extern",
+                                                         "dyn_fn",
+                                                         "impl_fn",
+                                                         "explicit_conv",
+                                                         "move",
+                                                         "type_expr",
+                                                         "testing",
+                                                         "bodyless"})};
 constexpr auto AGG_FLAGS{std::to_array<std::string_view>({"extern", "packed"})};
 constexpr auto ENUM_FLAGS{std::to_array<std::string_view>({"non_exhaustive"})};
 constexpr auto PARAM_FLAGS{std::to_array<std::string_view>(

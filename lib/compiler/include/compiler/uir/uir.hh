@@ -240,6 +240,7 @@ enum : u32 {
     MOVE          = 1U << 5,
     TYPE_EXPR     = 1U << 6, // a bodyless signature used as a type
     TESTING       = 1U << 7, // `@[testing]`
+    BODYLESS      = 1U << 8, // a signature with no body, unlike an empty `{}`
 
     // struct_decl, union_decl
     AGG_EXTERN = 1U << 0,
