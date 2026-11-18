@@ -339,6 +339,57 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
     }
 }
 
+// A load nothing reads, and then a slot only ever stored to, as an expression statement's unused
+// result slot leaves behind
+auto drop_dead_slots(function_dump& fn) -> void {
+    for (bool changed{true}; changed;) {
+        changed = false;
+        ankerl::unordered_dense::map<std::string, usize> uses;
+        ankerl::unordered_dense::map<std::string, usize> stored_into;
+        for (const auto& seg : fn.segments) {
+            for (const auto& inst : seg.instructions) {
+                const auto [def, body]{split_definition(inst)};
+                DISCARD(rewrite_temps(body, [&](std::string_view t) -> std::string {
+                    ++uses[std::string{t}];
+                    return std::string{t};
+                }));
+                if (body.starts_with("store ")) {
+                    const auto args{split_operands(stdx::string::substr(body, 6))};
+                    if (args.size() == 2 && args[1].starts_with('%') && args[0] != args[1]) {
+                        ++stored_into[std::string{args[1]}];
+                    }
+                }
+            }
+        }
+        const auto is_dead{[&](std::string_view inst) {
+            const auto [def, body]{split_definition(inst)};
+            if (!def.empty() && body.starts_with("load ") && !uses.contains(std::string{def})) {
+                return true;
+            }
+            if (!def.empty() && body.starts_with("alloca ")) {
+                const auto found{uses.find(std::string{def})};
+                const auto stores{stored_into.find(std::string{def})};
+                return found == uses.end() ||
+                       (stores != stored_into.end() && stores->second == found->second);
+            }
+            if (body.starts_with("store ")) {
+                const auto args{split_operands(stdx::string::substr(body, 6))};
+                if (args.size() != 2 || !args[1].starts_with('%')) { return false; }
+                const auto found{uses.find(std::string{args[1]})};
+                const auto stores{stored_into.find(std::string{args[1]})};
+                return found != uses.end() && stores != stored_into.end() &&
+                       stores->second == found->second;
+            }
+            return false;
+        }};
+        for (auto& seg : fn.segments) {
+            const auto before{seg.instructions.size()};
+            std::erase_if(seg.instructions, is_dead);
+            changed = changed || seg.instructions.size() != before;
+        }
+    }
+}
+
 // A slot that is only stored to and loaded from, where every store writes the same constant,
 // reads as that constant
 auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
@@ -617,6 +668,7 @@ auto normalize_gir(std::string_view dump) -> std::string {
         // Merging segments exposes more to fold, so both passes run again on the merged form
         for (usize round{0}; round < 2; ++round) {
             fold_constants(fn);
+            drop_dead_slots(fn);
             canonicalize(fn);
         }
     }
