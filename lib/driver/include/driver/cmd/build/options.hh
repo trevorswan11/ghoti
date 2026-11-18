@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -21,6 +22,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/uir/astgen.hh"
 #include "driver/clap/error.hh"
 
 namespace CLI { class App; } // namespace CLI
@@ -118,7 +120,11 @@ class compilation {
     [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
 
   private:
-    [[nodiscard]] auto run_astgen(bool for_test_executable) -> stdx::result<void, clap::error>;
+    [[nodiscard]] auto run_astgen(bool for_test_executable)
+        -> stdx::result<std::vector<uir::lowered_module>, clap::error>;
+    [[nodiscard]] auto analyze_uir(gsl::span<const uir::lowered_module> lowered,
+                                   bool                                 for_test_executable)
+        -> stdx::result<analyzed_module, clap::error>;
     [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto ensure_output_directory() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto setup_module_manager() -> stdx::result<void, clap::error>;

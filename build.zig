@@ -240,6 +240,15 @@ const TestArtifacts = struct {
         const full_step = b.step("test-semantics", "Run the compile-time vs runtime differential suite over every type and boundary value");
         full_step.dependOn(&full.step);
 
+        // UIR Sema against the old pipeline over the examples, std and compiler_rt
+        const uir_diff = b.addRunArtifact(self.compiler_tests);
+        uir_diff.addArg("[.uir-diff]");
+        uir_diff.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        uir_diff.setEnvironmentVariable("GHOTI_REPO_ROOT", b.pathFromRoot("."));
+        uir_diff.has_side_effects = true;
+        const uir_diff_step = b.step("test-uir-diff", "Compare UIR Sema's GIR with the old pipeline's over the file corpus");
+        uir_diff_step.dependOn(&uir_diff.step);
+
         // Random-seed differential rounds for a time budget, never part of `test`
         const fuzz_minutes = b.option(u32, "fuzz-minutes", "Time budget for fuzz-semantics and fuzz-crash (default: 20)") orelse 20;
         const fuzz = b.addRunArtifact(self.compiler_tests);

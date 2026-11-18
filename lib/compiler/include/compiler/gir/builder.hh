@@ -40,6 +40,9 @@ class builder {
     constexpr auto set_location(stdx::option<source_location> loc) noexcept -> void {
         location_ = loc;
     }
+    // While set, instructions go in just before the active segment's terminator
+    constexpr auto               set_splice(bool splice) noexcept -> void { splice_ = splice; }
+    [[nodiscard]] constexpr auto is_splicing() const noexcept -> bool { return splice_; }
 
     auto emit_instruction(instruction inst) -> instruction&;
     // Tags the most recent `CALL` in the active segment with `@call`'s modifier
@@ -112,6 +115,7 @@ class builder {
     stdx::option<function&>       function_;
     stdx::option<segment&>        segment_;
     stdx::option<source_location> location_;
+    bool                          splice_{false};
 };
 
 } // namespace ghoti::gir

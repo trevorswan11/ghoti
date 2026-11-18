@@ -5,6 +5,7 @@
 
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -180,7 +181,9 @@ auto astgen::primitive_named(std::string_view name, token_type_t type, source sr
         if (const auto known{well_known_int(name)}) { return to_ref(*known); }
         const bool is_signed{name.front() == 'i'};
         u32        bits{0};
-        for (const char c : name.substr(1)) { bits = bits * 10 + static_cast<u32>(c - '0'); }
+        for (const char c : stdx::string::substr(name, 1)) {
+            bits = bits * 10 + static_cast<u32>(c - '0');
+        }
         return add_pl(tag::int_type, writer().u32_field(bits).u32_field(is_signed ? 1U : 0U), src);
     }
     if (const auto known{c_type(name)}) { return to_ref(*known); }
@@ -237,6 +240,9 @@ auto astgen::identifier(source src, source_location at, std::string_view name, u
 auto astgen::identifier_node(ast::node_id id, use u) -> place_result {
     const auto& ident{ast_.get_as<ast::identifier_expr>(id)};
     const auto  token{id.get_token_type()};
+    if (token == token_type_t::IDENT && lookup(ident.name).is<lookup_hit>()) {
+        return identifier(id, location_of(id), ident.name, u);
+    }
     if (const auto prim{primitive_named(ident.name, token, id)}) { return {*prim, false}; }
     if (const auto builtin{id.get_builtin()}) {
         return {add_un(tag::builtin_ref, {}, static_cast<u32>(*builtin), id), false};

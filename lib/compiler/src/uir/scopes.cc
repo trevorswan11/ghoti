@@ -46,7 +46,9 @@ auto astgen::visible(const binding& b) const noexcept -> bool {
 
 auto astgen::shadowed(std::string_view name) const -> stdx::option<source_location> {
     for (const auto& s : scopes_ | std::views::reverse | std::views::drop(1)) {
-        if (const auto found{s->index.find(name)}; found != s->index.end()) {
+        // A defer copy can't see what was declared after its defer, so that can't be shadowed
+        if (const auto found{s->index.find(name)};
+            found != s->index.end() && visible(s->bindings[found->second])) {
             return s->bindings[found->second].at;
         }
     }

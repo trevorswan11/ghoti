@@ -1,0 +1,272 @@
+#include <string>
+#include <utility>
+
+#include <fmt/format.h>
+#include <gsl/pointers>
+#include <gsl/span>
+#include <gsl/util>
+#include <stdx/assert.hh>
+#include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
+
+#include "compiler/gir/function.hh"
+#include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
+#include "internal.hh"
+
+namespace ghoti::uir::sema {
+
+namespace {
+
+// The type a well-known type operand denotes, none for one this phase doesn't handle
+[[nodiscard]] auto well_known_type(gs::context& ctx, well_known w) -> stdx::option<gs::type&> {
+    const auto builtin{[&](gs::type_kind kind) -> stdx::option<gs::type&> {
+        return ctx.get_builtin_resolved_type(kind);
+    }};
+    switch (w) {
+    case well_known::u8_type:             return ctx.get_int(8, false);
+    case well_known::i8_type:             return ctx.get_int(8, true);
+    case well_known::u16_type:            return ctx.get_int(16, false);
+    case well_known::i16_type:            return ctx.get_int(16, true);
+    case well_known::u32_type:            return ctx.get_int(32, false);
+    case well_known::i32_type:            return ctx.get_int(32, true);
+    case well_known::u64_type:            return ctx.get_int(64, false);
+    case well_known::i64_type:            return ctx.get_int(64, true);
+    case well_known::u128_type:           return ctx.get_int(128, false);
+    case well_known::i128_type:           return ctx.get_int(128, true);
+    case well_known::usize_type:          return builtin(gs::type_kind::USIZE);
+    case well_known::isize_type:          return builtin(gs::type_kind::ISIZE);
+    case well_known::f16_type:            return builtin(gs::type_kind::F16);
+    case well_known::f32_type:            return builtin(gs::type_kind::F32);
+    case well_known::f64_type:            return builtin(gs::type_kind::F64);
+    case well_known::f80_type:            return builtin(gs::type_kind::F80);
+    case well_known::f128_type:           return builtin(gs::type_kind::F128);
+    case well_known::bool_type:           return builtin(gs::type_kind::BOOL);
+    case well_known::void_type:           return builtin(gs::type_kind::VOID_);
+    case well_known::noreturn_type:       return builtin(gs::type_kind::NORETURN);
+    case well_known::comptime_int_type:   return builtin(gs::type_kind::COMPTIME_INT);
+    case well_known::comptime_float_type: return builtin(gs::type_kind::COMPTIME_FLOAT);
+    default:                              return stdx::none;
+    }
+}
+
+} // namespace
+
+analyzer::analyzer(compilation& comp, const unit& u, stdx::option<decl_id> declaring) noexcept
+    : comp_{comp}, u_{u}, declaring_{declaring} {}
+
+analyzer::analyzer(compilation& comp, const unit& u, instance& fn, gir::function& gir_fn) noexcept
+    : comp_{comp}, u_{u}, fn_{fn}, gir_fn_{gir_fn} {}
+
+auto analyzer::eval_comptime(gsl::span<const inst_id> body) -> result<operand> {
+    ++comptime_depth_;
+    const auto restore{gsl::finally([this] { --comptime_depth_; })};
+    const auto out{TRY(analyze_body(body))};
+    if (!out.yielded) {
+        return comp_.unsupported(u_, src_of(body.back()), "a comptime body that doesn't yield");
+    }
+    return *out.yielded;
+}
+
+auto analyzer::eval_type(gsl::span<const inst_id> body, const source& src)
+    -> result<gsl::not_null<gs::type*>> {
+    if (body.empty()) { return comp_.unsupported(u_, src, "an inferred type"); }
+    const auto value{TRY(eval_comptime(body))};
+    return denoted_type(value, src);
+}
+
+auto analyzer::analyze_function() -> result<void> {
+    PROFILE_FUNCTION();
+    ASSERT(fn_ && gir_fn_, "a function analysis has a function");
+    builder_.set_insert_point(*gir_fn_, gir_fn_->add_segment());
+
+    record_reader rec{record(fn_->func)};
+    const auto    params{rec.body_field()};
+    DISCARD(rec.body_field());
+    const auto body{rec.body_field()};
+    for (usize i{0}; const auto param : params) {
+        record_reader p{record(param)};
+        const auto    name{p.str_field()};
+        auto&         type{*fn_->params[i++]};
+        const auto&   slot{gir_fn_->add_param(std::string{name}, type)};
+        values_.insert_or_assign(param, gir::value{slot.id, type});
+    }
+
+    const auto out{analyze_body(body)};
+    if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
+    if (terminated()) { return {}; }
+
+    auto& ret{*fn_->return_type};
+    if (ret.get_kind() == gs::type_kind::VOID_) {
+        builder_.emit_return();
+    } else {
+        builder_.emit_return(constant(comp_.constants().intern(ip::undefined_value{}, ret), ret));
+    }
+    return {};
+}
+
+auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
+    for (const auto inst : body) {
+        if (mod().tag_of(inst) == tag::yield) {
+            const auto& d{mod().data_of(inst)};
+            return flow{.yielded = TRY(resolve(d.un.operand, src_of(inst)))};
+        }
+        auto value{analyze_inst(inst)};
+        if (!value) {
+            // A failed instruction poisons only what uses it, so later root causes still report
+            if (value.error() == stop::UNSUPPORTED || is_comptime()) {
+                return stdx::err{value.error()};
+            }
+            continue;
+        }
+        values_.insert_or_assign(inst, std::move(*value));
+        if (!is_comptime() && terminated()) { return flow{}; }
+    }
+    return flow{};
+}
+
+auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
+    const auto t{mod().tag_of(inst)};
+    set_location(src_of(inst));
+    switch (t) {
+    case tag::int_value:   return analyze_int_value(inst);
+    case tag::int_lit:     return analyze_int_lit(inst);
+    case tag::float_lit:   return analyze_float_lit(inst);
+    case tag::int_type:    return analyze_int_type(inst);
+    case tag::func:        return analyze_func(inst);
+
+    case tag::add:
+    case tag::sub:
+    case tag::mul:
+    case tag::div:
+    case tag::mod:
+    case tag::add_wrap:
+    case tag::sub_wrap:
+    case tag::mul_wrap:
+    case tag::add_sat:
+    case tag::sub_sat:
+    case tag::mul_sat:
+    case tag::shl_sat:
+    case tag::shl_wrap:
+    case tag::shl:
+    case tag::shr:
+    case tag::bit_and:
+    case tag::bit_or:
+    case tag::bit_xor:
+    case tag::cmp_eq:
+    case tag::cmp_ne:
+    case tag::cmp_lt:
+    case tag::cmp_le:
+    case tag::cmp_gt:
+    case tag::cmp_ge:      return analyze_binary(inst, t);
+    case tag::bool_and:    return analyze_bool_op(inst, true);
+    case tag::bool_or:     return analyze_bool_op(inst, false);
+    case tag::neg:
+    case tag::neg_wrap:
+    case tag::pos:
+    case tag::bool_not:
+    case tag::bit_not:     return analyze_unary(inst, t);
+
+    case tag::decl_val:    return analyze_decl_val(inst, false);
+    case tag::decl_ref:    return analyze_decl_val(inst, true);
+    case tag::alloc_mut:   return analyze_alloc_mut(inst);
+    case tag::let_value:   return analyze_let_value(inst);
+    case tag::const_local: return analyze_const_local(inst);
+    case tag::store:       return analyze_store(inst);
+    case tag::load:        return analyze_load(inst);
+    case tag::discard:     return analyze_discard(inst);
+
+    case tag::block:       return analyze_block(inst);
+    case tag::loop:        return analyze_loop(inst);
+    case tag::condbr:      return analyze_condbr(inst);
+    case tag::break_to:    return analyze_break(inst);
+    case tag::repeat:      return analyze_repeat(inst);
+    case tag::ret:         return analyze_ret(inst);
+    case tag::call:        return analyze_call(inst);
+
+    default:               break;
+    }
+    return comp_.unsupported(u_, src_of(inst), fmt::format("the `{}` instruction", tag_name(t)));
+}
+
+auto analyzer::resolve(ref r, const source& src) -> result<operand> {
+    if (const auto w{as_well_known(r)}) { return well_known_operand(*w, src); }
+    const auto inst{*as_inst(r)};
+    const auto found{values_.find(inst)};
+    if (found == values_.end()) {
+        // A failed instruction left no value, and its failure was already reported
+        if (std::to_underlying(inst) < mod().instruction_count() && !is_comptime()) {
+            return stdx::err{stop::POISON};
+        }
+        return comp_.unsupported(u_, src, "a value from another body");
+    }
+    return found->second;
+}
+
+auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
+    const auto op{TRY(resolve(r, src))};
+    if (op.is<place>() || op.is<global_ref>()) {
+        return comp_.unsupported(u_, src, "a place used as a value");
+    }
+    return op;
+}
+
+auto analyzer::resolve_type(ref r, const source& src) -> result<gsl::not_null<gs::type*>> {
+    const auto op{TRY(resolve(r, src))};
+    return denoted_type(op, src);
+}
+
+auto analyzer::well_known_operand(well_known w, const source& src) -> result<operand> {
+    auto& ctx{comp_.ctx()};
+    auto& pool{comp_.constants()};
+    if (const auto type{well_known_type(ctx, w)}) { return interned_type(*type); }
+    switch (w) {
+    case well_known::bool_true:  return pool.intern(true, builtin(gs::type_kind::BOOL));
+    case well_known::bool_false: return pool.intern(false, builtin(gs::type_kind::BOOL));
+    case well_known::void_value:
+        return pool.intern(ip::void_value{}, builtin(gs::type_kind::VOID_));
+    case well_known::undefined:
+        return pool.intern(ip::undefined_value{}, builtin(gs::type_kind::UNDEFINED));
+    default: break;
+    }
+    return comp_.unsupported(u_, src, fmt::format("`{}`", well_known_name(w)));
+}
+
+auto analyzer::comptime_value(const operand& op) const -> stdx::option<ip::index> {
+    if (const auto index{op.as_opt<ip::index>()}) { return *index; }
+    return stdx::none;
+}
+
+auto analyzer::type_of(const operand& op) -> gs::type& {
+    auto& pool{comp_.constants()};
+    return op.visit(
+        [&](ip::index i) -> gs::type& {
+            if (pool.is_type(i)) { return builtin(gs::type_kind::TYPE); }
+            return pool.value_at(i).type.value_or(builtin(gs::type_kind::VOID_));
+        },
+        [](const gir::value& v) -> gs::type& { return *v.type; },
+        [](const function_ref& f) -> gs::type& { return *f.fn->type; },
+        [](const place& p) -> gs::type& { return *p.pointee; },
+        [&](merge_ref m) -> gs::type& { return type_of(merges_[m.index].arrivals.front().value); },
+        [](const global_ref& g) -> gs::type& { return *g.type; });
+}
+
+auto analyzer::denoted_type(const operand& op, const source& src)
+    -> result<gsl::not_null<gs::type*>> {
+    const auto index{comptime_value(op)};
+    if (!index || !comp_.constants().is_type(*index)) {
+        return comp_.unsupported(u_, src, "a type position holding a value");
+    }
+    return &comp_.constants().type_at(*index);
+}
+
+auto analyzer::interned_type(gs::type& t) -> ip::index { return t.get_ip_index(); }
+
+} // namespace ghoti::uir::sema

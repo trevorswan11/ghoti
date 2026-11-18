@@ -14,6 +14,7 @@
 #include "compiler/sema/error.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/session.hh"
+#include "support/diagnostic.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {

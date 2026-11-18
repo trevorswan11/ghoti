@@ -2,7 +2,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/option.hh>

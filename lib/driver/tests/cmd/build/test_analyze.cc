@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <fmt/ostream.h>
 
 #include "driver/clap/error.hh"
@@ -101,6 +102,55 @@ TEST_CASE("analyze command execution") {
         cmd::analyze_cmd as_test{{.input_path = src_file}, true, errors};
         CHECK(UNWRAP_ERR(as_test.execute()) == clap::error::COMPILATION_FAILED);
         CHECK_FALSE(errors.view().empty());
+    }
+}
+
+TEST_CASE("analyze --sema=uir runs UIR's Sema") {
+    SECTION("A program in its subset writes UIR Sema's GIR") {
+        tempfile src_file{"test_analyze_uir.gh"};
+        tempfile gir_file{"test_analyze_uir.gir"};
+        write_source(src_file,
+                     "pub const add = fn(a: i64, b: i64): i64 {\n    return a + 2 * 3;\n};\n");
+
+        cmd::analyze_cmd cmd{{
+            .input_path    = src_file,
+            .emit_gir_path = gir_file,
+            .sema_uir      = true,
+        }};
+        REQUIRE(cmd.execute());
+        // UIR Sema folds the untyped `2 * 3` before it meets `a`
+        CHECK(slurp(gir_file.path).contains("add i64 param.0, 6"));
+    }
+
+    SECTION("A semantic error is printed like the old pipeline's") {
+        tempfile src_file{"test_analyze_uir_bad.gh"};
+        write_source(src_file, "pub const f = fn(a: i32): bool {\n    return a;\n};\n");
+
+        std::ostringstream errors;
+        cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, false, errors};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+        CHECK(errors.view().contains("RETURN_TYPE_MISMATCH"));
+    }
+
+    SECTION("A construct UIR Sema doesn't analyze yet is named, with where it is") {
+        tempfile src_file{"test_analyze_uir_struct.gh"};
+        write_source(src_file, "const P = struct { x: i32 };\n");
+
+        std::ostringstream errors;
+        cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, false, errors};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+        CHECK(errors.view().contains("--sema=uir doesn't analyze"));
+        CHECK(errors.view().contains(fmt::format("{}:1:", path_utils::display(src_file.path))));
+    }
+
+    SECTION("A test build needs the entry code, which UIR Sema can't analyze yet") {
+        tempfile src_file{"test_analyze_uir_test.gh"};
+        write_source(src_file, "test \"t\" {}\n");
+
+        std::ostringstream errors;
+        cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, true, errors};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+        CHECK(errors.view().contains("can't build an executable or tests yet"));
     }
 }
 
