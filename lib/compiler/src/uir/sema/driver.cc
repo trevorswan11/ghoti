@@ -5,11 +5,18 @@
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/uir/sema/sema.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::uir::sema {
 
@@ -20,7 +27,8 @@ compilation::compilation(gs::context& ctx, const program& prog, const options& o
     ctx_.inject_prelude();
     units_.reserve(prog.modules.size());
     for (u32 i{0}; const auto& lowered : prog.modules) {
-        units_.push_back({.source = lowered.source, .uir = &lowered.result.uir, .index = i++});
+        units_.emplace_back<unit>(
+            {.source = lowered.source, .uir = &lowered.result.uir, .index = i++});
         decls_.emplace_back(lowered.result.uir.decls().size());
     }
 }

@@ -7,8 +7,10 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "compiler/module/file_loader.hh"
 #include "compiler/module/stdlib.hh"
@@ -28,7 +30,7 @@ namespace {
         if (!std::filesystem::exists(root)) { continue; }
         for (const auto& entry : std::filesystem::recursive_directory_iterator{root}) {
             if (entry.is_regular_file() && entry.path().extension() == ".gh") {
-                files.push_back(entry.path());
+                files.emplace_back(entry.path());
             }
         }
     }
@@ -38,7 +40,6 @@ namespace {
 
 } // namespace
 
-// Opt-in: `zig build test-uir-diff`. Compares both pipelines over the file corpus (§11.1)
 TEST_CASE("UIR Sema's GIR matches the old pipeline's over the file corpus", "[.uir-diff]") {
     const auto repo{get_env("GHOTI_REPO_ROOT")};
     REQUIRE(repo);
@@ -47,7 +48,7 @@ TEST_CASE("UIR Sema's GIR matches the old pipeline's over the file corpus", "[.u
     const std::array libraries{std::pair{std::string{"std"}, *stdlib}};
 
     mod::file_loader             loader;
-    std::map<std::string, usize> counts;
+    std::map<std::string, usize> counts; // ordered for deterministic printing
     std::vector<std::string>     failures;
     for (const auto& file : corpus_files(std::filesystem::path{*repo})) {
         const auto diff{helpers::diff_pipelines(loader, file, libraries, {})};
@@ -55,10 +56,10 @@ TEST_CASE("UIR Sema's GIR matches the old pipeline's over the file corpus", "[.u
         counts[std::string{helpers::uir_diff_status_name(diff.status)}] += 1;
         if (diff.status == helpers::uir_diff_status::GIR_DIFF ||
             diff.status == helpers::uir_diff_status::REJECTED) {
-            failures.push_back(fmt::format("{}: {}\n{}",
-                                           file.generic_string(),
-                                           helpers::uir_diff_status_name(diff.status),
-                                           diff.detail));
+            failures.emplace_back(fmt::format("{}: {}\n{}",
+                                              file.generic_string(),
+                                              helpers::uir_diff_status_name(diff.status),
+                                              diff.detail));
         }
     }
     for (const auto& [status, n] : counts) { fmt::println("{:>16}: {}", status, n); }

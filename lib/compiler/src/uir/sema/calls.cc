@@ -1,10 +1,15 @@
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {
@@ -45,7 +50,7 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
             *target.params[i],
             src,
             {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
-        values.push_back(TRY(as_runtime(coerced, src)));
+        values.emplace_back(TRY(as_runtime(coerced, src)));
     }
     TRY(require_runtime(src));
 

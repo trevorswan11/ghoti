@@ -120,10 +120,8 @@ class compilation {
     [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
 
   private:
-    // Lowers the program through AstGen, writing `--emit-uir` when asked
     [[nodiscard]] auto run_astgen(bool for_test_executable)
         -> stdx::result<std::vector<uir::lowered_module>, clap::error>;
-    // Runs UIR Sema over what AstGen lowered, the `--sema=uir` pipeline
     [[nodiscard]] auto analyze_uir(gsl::span<const uir::lowered_module> lowered,
                                    bool                                 for_test_executable)
         -> stdx::result<analyzed_module, clap::error>;

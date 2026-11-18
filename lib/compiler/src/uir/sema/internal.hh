@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -26,15 +27,18 @@
 #include "compiler/sema/type.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
+#include "support/big_int.hh"
+#include "support/diagnostic.hh"
+#include "support/float128.hh"
 
 namespace ghoti::uir::sema {
 
 namespace gs = ::ghoti::sema;
 
-// Why an analysis step stopped: a reported error, or a construct this phase doesn't handle
+// Why an analysis step stopped
 enum class stop : u8 {
-    POISON,
-    UNSUPPORTED,
+    POISON,      // A reported error
+    UNSUPPORTED, // A construct this phase doesn't handle
 };
 
 template <typename T> using result = stdx::result<T, stop>;
@@ -113,11 +117,11 @@ class compilation {
     [[nodiscard]] auto gir() noexcept -> gir::module_t& { return gir_; }
     [[nodiscard]] auto ptr_bits() const noexcept -> u32 { return ptr_bits_; }
 
-    // The declaration's value, analyzing it on first use. A use during its own analysis is a
-    // cycle, reported at `use`
+    // The declaration's value, analyzing it on first use.
+    // A use during its own analysis is a cycle reported at `use`
     [[nodiscard]] auto analyze_decl(const unit& u, decl_id decl, const source& use)
         -> result<operand>;
-    // Puts the function's body on the work queue, once
+    // Puts the function's body on the work queue
     auto request_body(instance& fn) -> void;
     // Declares the function `decl`'s `func` value creates, leaving its body for the queue
     [[nodiscard]] auto declare_function(const unit& u, decl_id decl, inst_id func)
@@ -249,7 +253,6 @@ class analyzer {
     [[nodiscard]] auto analyze_inst(inst_id inst) -> result<operand>;
     [[nodiscard]] auto resolve(ref r, const source& src) -> result<operand>;
     [[nodiscard]] auto resolve_value(ref r, const source& src) -> result<operand>;
-    // The type a type operand denotes
     [[nodiscard]] auto resolve_type(ref r, const source& src) -> result<gsl::not_null<gs::type*>>;
     [[nodiscard]] auto well_known_operand(well_known w, const source& src) -> result<operand>;
 
@@ -282,8 +285,6 @@ class analyzer {
     [[nodiscard]] auto checks_overflow(gir::semantics::int_op op, const gs::type& t) const -> bool;
 
     // Coercion (coerce.cc)
-    // `op` as a `target`, none when no implicit conversion exists. A constant that doesn't fit is
-    // reported here
     [[nodiscard]] auto coerce(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
     // `coerce`, reporting a missing conversion in the words of `site`
@@ -314,13 +315,11 @@ class analyzer {
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_unreachable(inst_id inst) -> result<operand>;
-    // The value every arrival reaches `merge` with, leaving the builder there
     [[nodiscard]] auto finish_merge(const std::vector<incoming>& arrivals,
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
     [[nodiscard]] auto target_of(ref r) -> target&;
     auto               arrive(target& t, const operand& value, const source& src) -> void;
-    // `op` as a branch condition, which must be a `bool`
     [[nodiscard]] auto condition(const operand& op, const source& src) -> result<gir::value>;
     [[nodiscard]] auto void_value() -> operand;
 
@@ -337,7 +336,6 @@ class analyzer {
     [[nodiscard]] auto is_comptime() const noexcept -> bool {
         return !gir_fn_ || comptime_depth_ > 0;
     }
-    // Fails in a comptime body, where `what` can't be emitted
     [[nodiscard]] auto require_runtime(const source& src) -> result<void>;
     [[nodiscard]] auto constant(ip::index value, gs::type& type) -> gir::value;
     [[nodiscard]] auto builder() -> gir::builder& { return builder_; }

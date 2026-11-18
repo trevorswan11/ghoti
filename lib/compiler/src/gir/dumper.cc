@@ -2,6 +2,7 @@
 
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <fmt/format.h>
@@ -76,8 +77,8 @@ auto linkage_name(gir::linkage l) noexcept -> std::string_view {
     case linkage::PUBLIC:   return "public";
     case linkage::EXPORT:   return "export";
     case linkage::EXTERN:   return "extern";
+    default:                return "internal";
     }
-    return "internal";
 }
 
 auto format_instruction(const ip::pool& constants, const instruction& inst, bool show_flags)

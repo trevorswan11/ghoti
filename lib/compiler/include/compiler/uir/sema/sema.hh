@@ -12,10 +12,10 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/uir/astgen.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::uir::sema {
 
-// What UIR Sema analyzes: the root module and every module AstGen lowered for it
 struct program {
     gsl::not_null<const mod::module_t*> root;
     gsl::span<const lowered_module>     modules;

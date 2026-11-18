@@ -1,14 +1,24 @@
-#include <array>
+#include <utility>
 #include <vector>
 
+#include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
+#include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/pool.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/float128.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -125,7 +135,7 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
     for (const auto& op : ops) {
         auto& t{type_of(op)};
         if (t.is_poison()) { return stdx::err{stop::POISON}; }
-        peers.push_back({.type = &t});
+        peers.emplace_back<gs::peer_operand>({.type = &t});
     }
     auto&      ctx{comp_.ctx()};
     const auto peer{gs::peer_type(ctx, peers)};

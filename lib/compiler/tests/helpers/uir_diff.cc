@@ -1,24 +1,35 @@
 #include "helpers/uir_diff.hh"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/dumper.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/module/memory_loader.hh"
 #include "compiler/module/module.hh"
+#include "compiler/module/source_loader.hh"
 #include "compiler/sema/analyzer.hh"
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
+#include "compiler/uir/uir.hh"
 #include "helpers/gir_normalize.hh"
 #include "support/env.hh"
 
@@ -26,7 +37,7 @@ namespace ghoti::tests::helpers {
 
 namespace {
 
-// Whether an immutable `let` is initialized by a call, which the old emitter folds (§14.1)
+// Whether an immutable `let` is initialized by a call, which the old emitter folds
 [[nodiscard]] auto has_folded_let(gsl::span<const uir::lowered_module> modules) -> bool {
     for (const auto& item : modules) {
         const auto& m{item.result.uir};
@@ -43,8 +54,7 @@ namespace {
     return false;
 }
 
-// Whether UIR calls a function with only constant arguments that the old dump never calls,
-// which is the old emitter folding the call at compile time
+// Whether UIR calls a function with only constant arguments that the old dump never calls
 [[nodiscard]] auto has_folded_call(std::string_view uir_text, std::string_view legacy_text)
     -> bool {
     for (usize at{uir_text.find("call @")}; at != std::string_view::npos;
@@ -52,12 +62,13 @@ namespace {
         const auto open{uir_text.find('(', at)};
         const auto close{uir_text.find(')', open)};
         if (open == std::string_view::npos || close == std::string_view::npos) { break; }
-        const auto args{uir_text.substr(open + 1, close - open - 1)};
+        const auto args{stdx::string::substr(uir_text, open + 1, close - open - 1)};
         if (args.find('%') != std::string_view::npos ||
             args.find("param.") != std::string_view::npos) {
             continue;
         }
-        if (legacy_text.find(uir_text.substr(at, open - at + 1)) == std::string_view::npos) {
+        if (legacy_text.find(stdx::string::substr(uir_text, at, open - at + 1)) ==
+            std::string_view::npos) {
             return true;
         }
     }

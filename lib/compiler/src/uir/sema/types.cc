@@ -1,9 +1,19 @@
-#include <stdx/option.hh>
+#include <cstdint>
+#include <utility>
 
+#include <gsl/span>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
+
+#include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -39,7 +49,6 @@ auto analyzer::analyze_int_value(inst_id inst) -> result<operand> {
     return intern_int(comp_.constants(), value, builtin(gs::type_kind::COMPTIME_INT));
 }
 
-// A suffixed literal one past its type's maximum, negated right away: `-128i8`
 auto analyzer::negated_to_fit(inst_id inst, const big_int& value, const gs::type& type) const
     -> bool {
     const inst_id next{std::to_underlying(inst) + 1};

@@ -15,9 +15,11 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/string.hh>
+#include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/linker.hh"
@@ -28,6 +30,8 @@
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
 #include "compiler/sema/cfg_evaluator.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/dumper.hh"
 #include "compiler/uir/sema/sema.hh"

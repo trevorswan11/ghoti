@@ -92,9 +92,9 @@ auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
 [[nodiscard]] auto is_fmt_marker(std::string_view comment, std::string_view state) -> bool {
     constexpr std::string_view prefix{"ghoti fmt:"};
     if (!comment.starts_with("//")) { return false; }
-    comment = stdx::string::trim(comment.substr(2));
+    comment = stdx::string::trim(stdx::string::substr(comment, 2));
     if (!comment.starts_with(prefix)) { return false; }
-    return stdx::string::trim_left(comment.substr(prefix.size())) == state;
+    return stdx::string::trim_left(stdx::string::substr(comment, prefix.size())) == state;
 }
 
 // The first `@cfg` group position after item `i`, where an off region over the items must stop

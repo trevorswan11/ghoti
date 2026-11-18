@@ -5,7 +5,7 @@
 
 namespace ghoti::tests::helpers {
 
-// A GIR dump in a form two pipelines can be compared in (§11.1 of the UIR plan):
+// A GIR dump in a form two pipelines can be compared in:
 //   - integer and bool instructions whose operands are all constants are folded, and a
 //     `cond_goto` on a constant becomes a `goto`
 //   - a segment that only jumps on is threaded through, and segments are numbered in CFG order

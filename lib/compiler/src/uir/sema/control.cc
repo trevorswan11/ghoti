@@ -7,9 +7,16 @@
 #include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {
@@ -38,7 +45,8 @@ auto analyzer::target_of(ref r) -> target& {
 
 auto analyzer::arrive(target& t, const operand& value, const source& src) -> void {
     if (!t.exit) { t.exit = new_segment(); }
-    t.arrivals.push_back({.seg = builder_.get_segment()->get_id(), .value = value, .src = src});
+    t.arrivals.emplace_back<incoming>(
+        {.seg = builder_.get_segment()->get_id(), .value = value, .src = src});
     emit_goto(*t.exit);
 }
 
@@ -56,7 +64,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     bool all_void{true};
     bool all_untyped_constants{true};
     for (const auto& arrival : arrivals) {
-        values.push_back(arrival.value);
+        values.emplace_back(arrival.value);
         auto& type{type_of(arrival.value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
         all_void              = all_void && type.get_kind() == gs::type_kind::VOID_;
@@ -72,7 +80,8 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
         return arrivals.front().value;
     }
     if (all_untyped_constants) {
-        merges_.push_back({.seg = merge, .arrivals = arrivals, .materialized = stdx::none});
+        merges_.emplace_back<pending_merge>(
+            {.seg = merge, .arrivals = arrivals, .materialized = stdx::none});
         return merge_ref{static_cast<u32>(merges_.size() - 1)};
     }
 
@@ -110,7 +119,8 @@ auto analyzer::analyze_block(inst_id inst) -> result<operand> {
         return *out.yielded;
     }
 
-    targets_.push_back({.inst = inst, .exit = stdx::none, .repeat = stdx::none, .arrivals = {}});
+    targets_.emplace_back<target>(
+        {.inst = inst, .exit = stdx::none, .repeat = stdx::none, .arrivals = {}});
     const auto out{analyze_body(body)};
     auto       t{std::move(targets_.back())};
     targets_.pop_back();
@@ -141,7 +151,7 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
         return *out.yielded;
     }
 
-    // Both arms are analyzed even when the condition is known: only `comptime` prunes (Q4)
+    // Both arms are analyzed even when the condition is known when not comptime
     const auto c{TRY(condition(cond, cond_src.value_or(src)))};
     const auto then_seg{new_segment()};
     const auto else_seg{new_segment()};
@@ -159,7 +169,7 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
         const auto out{TRY(analyze_body(body))};
         if (out.yielded && !terminated()) {
             if (taken) {
-                arrivals.push_back(
+                arrivals.emplace_back<incoming>(
                     {.seg = builder_.get_segment()->get_id(), .value = *out.yielded, .src = src});
             }
             emit_goto(merge);
@@ -192,7 +202,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
                                           : stdx::option<gir::segment_id>{new_segment()}};
     const auto exit{new_segment()};
     const auto repeat{cont_seg.value_or(cond_seg.value_or(body_seg))};
-    targets_.push_back({.inst = inst, .exit = exit, .repeat = repeat, .arrivals = {}});
+    targets_.emplace_back<target>({.inst = inst, .exit = exit, .repeat = repeat, .arrivals = {}});
     const auto pop{gsl::finally([this] { targets_.pop_back(); })};
 
     // The segment the condition's false edge leaves from, for the loop's normal exit
@@ -234,7 +244,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
         normal.emplace(*normal_exit, void_value(), src);
     }
     auto arrivals{targets_.back().arrivals};
-    if (normal) { arrivals.push_back(std::move(*normal)); }
+    if (normal) { arrivals.emplace_back<incoming>(std::move(*normal)); }
     return finish_merge(arrivals, exit, src);
 }
 

@@ -297,7 +297,7 @@ class snippet_renderer {
     }
 
     [[nodiscard]] auto lines_to_show(const section& sec) const -> std::vector<usize> {
-        std::set<usize> lines;
+        std::set<usize> lines; // ordered for deterministic reporting in `shown`
         for (const auto& a : sec.annotations) {
             if (!a.is_multiline()) { lines.insert(a.span.start.line); }
         }
@@ -317,8 +317,8 @@ class snippet_renderer {
         std::vector<usize> shown{lines.begin(), lines.end()};
         std::vector<usize> filled;
         for (usize i{0}; i < shown.size(); ++i) {
-            if (i > 0 && shown[i] == shown[i - 1] + 2) { filled.push_back(shown[i] - 1); }
-            filled.push_back(shown[i]);
+            if (i > 0 && shown[i] == shown[i - 1] + 2) { filled.emplace_back(shown[i] - 1); }
+            filled.emplace_back(shown[i]);
         }
         const auto line_count{sec.source.file->line_count()};
         std::erase_if(filled, [line_count](usize l) { return l >= line_count; });
@@ -396,11 +396,13 @@ class snippet_renderer {
         os_ << '\n';
 
         std::vector<annotation_row> rows;
-        if (margin_ && line == margin_->span.end.line) { rows.push_back(end_marker(text, window)); }
+        if (margin_ && line == margin_->span.end.line) {
+            rows.emplace_back(end_marker(text, window));
+        }
         auto single{single_line_rows(sec, line, text, window)};
         rows.insert(rows.end(), single.begin(), single.end());
         if (margin_ && line == margin_->span.start.line && !slash_start_) {
-            rows.push_back(start_marker(text, window));
+            rows.emplace_back(start_marker(text, window));
         }
         for (const auto& row : rows) { write_row(row); }
     }
@@ -442,7 +444,7 @@ class snippet_renderer {
             if (a.is_multiline() || a.span.start.line != line) { continue; }
             const auto start{window.map(text.display_column(a.span.start.column))};
             const auto end{std::max(window.map(text.display_column(a.span.end.column)), start + 1)};
-            on_line.push_back({start, end, &a});
+            on_line.emplace_back<placed>({start, end, &a});
         }
         if (on_line.empty()) { return {}; }
         std::ranges::stable_sort(on_line, {}, &placed::start);
@@ -472,7 +474,7 @@ class snippet_renderer {
             underline.put_label(rightmost_end + 1, last.source->label, last.source->mark_kind());
         }
         for (usize i{0}; i + 1 < on_line.size(); ++i) {
-            if (!on_line[i].source->label.empty()) { hanging.push_back(on_line[i]); }
+            if (!on_line[i].source->label.empty()) { hanging.emplace_back(on_line[i]); }
         }
 
         std::vector<annotation_row> rows{underline};
@@ -480,7 +482,7 @@ class snippet_renderer {
 
         annotation_row connectors{new_row()};
         for (const auto& h : hanging) { connectors.put(h.start, '|', h.source->mark_kind()); }
-        rows.push_back(connectors);
+        rows.emplace_back(connectors);
         for (auto i{hanging.size()}; i-- > 0;) {
             annotation_row labeled{new_row()};
             for (usize j{0}; j < i; ++j) {
@@ -488,7 +490,7 @@ class snippet_renderer {
             }
             labeled.put_label(
                 hanging[i].start, hanging[i].source->label, hanging[i].source->mark_kind());
-            rows.push_back(labeled);
+            rows.emplace_back(labeled);
         }
         return rows;
     }
@@ -519,7 +521,7 @@ class section_builder {
                     const source_resolver&                resolve)
         : resolve_{resolve} {
         if (primary && diag.span) {
-            sections_.push_back({*primary, {{*diag.span, diag.primary_label, true}}});
+            sections_.emplace_back<section>({*primary, {{*diag.span, diag.primary_label, true}}});
         }
         for (const auto& label : diag.labels) { add_label(label, primary); }
     }
@@ -535,19 +537,19 @@ class section_builder {
         const annotation added{label.at.span, label.text, false};
         for (auto& sec : sections_) {
             if (sec.source.path == label.at.path) {
-                sec.annotations.push_back(added);
+                sec.annotations.emplace_back(added);
                 return;
             }
         }
         if (primary && primary->path == label.at.path) {
-            sections_.push_back({*primary, {added}});
+            sections_.emplace_back<section>({*primary, {added}});
             return;
         }
         if (auto source{try_resolve(resolve_, label.at.path)}) {
-            sections_.push_back({std::move(*source), {added}});
+            sections_.emplace_back<section>({std::move(*source), {added}});
             return;
         }
-        unresolved_.push_back(&label);
+        unresolved_.emplace_back(&label);
     }
 
   private:
@@ -590,12 +592,12 @@ auto render_diagnostic(std::ostream&                         os,
     std::vector<std::pair<const diagnostic_note*, render_source>> located_notes;
     std::vector<std::string>                                      plain_notes;
     for (const auto* label : builder.unresolved()) {
-        plain_notes.push_back(fmt::format(
+        plain_notes.emplace_back(fmt::format(
             "{} ({}:{})", label->text, label->at.path.generic_string(), label->at.span.start));
     }
     for (const auto& note : diag.notes) {
         if (!note.at) {
-            plain_notes.push_back(note.text);
+            plain_notes.emplace_back(note.text);
             continue;
         }
         auto source{primary && primary->path == note.at->path
@@ -604,7 +606,7 @@ auto render_diagnostic(std::ostream&                         os,
         if (source) {
             located_notes.emplace_back(&note, std::move(*source));
         } else {
-            plain_notes.push_back(fmt::format(
+            plain_notes.emplace_back(fmt::format(
                 "{} ({}:{})", note.text, note.at->path.generic_string(), note.at->span.start));
         }
     }

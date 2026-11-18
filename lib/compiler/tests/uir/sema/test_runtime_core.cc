@@ -1,7 +1,7 @@
-#include <algorithm>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -20,7 +20,7 @@ namespace {
     const auto& out{*run->out};
     REQUIRE_FALSE(out.stopped_at);
     std::vector<sema::error> codes;
-    for (const auto& d : out.diagnostics) { codes.push_back(d.get_error()); }
+    for (const auto& d : out.diagnostics) { codes.emplace_back(d.get_error()); }
     return codes;
 }
 
@@ -39,7 +39,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("A plain `if` with a known condition analyzes both arms (Q4)") {
+TEST_CASE("A plain `if` with a known condition analyzes both arms") {
     SECTION("A type error in the arm that never runs is still reported") {
         const auto codes{reported_codes(
             "const f = fn(): i32 { if (true) { return 1; } else { return true; } };")};

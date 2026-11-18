@@ -42,7 +42,6 @@ TEST_CASE("A loop capture may reuse a name its function declares further on") {
 }
 
 TEST_CASE("An errdefer copied onto a later exit doesn't shadow what that exit declares") {
-    // The copy at `return x` sees only what was visible at the `errdefer`, not the `|e|` capture
     check_lowers(R"(
         const f = fn(x: auto): @TypeOf(x) {
             errdefer |e| { _ = e; }

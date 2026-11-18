@@ -1,8 +1,17 @@
+#include <string>
+#include <string_view>
+#include <utility>
+
 #include <gsl/util>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/pool.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {

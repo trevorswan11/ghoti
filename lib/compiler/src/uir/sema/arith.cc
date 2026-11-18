@@ -1,15 +1,20 @@
 #include <array>
 #include <compare>
-#include <string_view>
 
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/float128.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 

@@ -1,4 +1,10 @@
+#include <stdx/result.hh>
+
+#include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {

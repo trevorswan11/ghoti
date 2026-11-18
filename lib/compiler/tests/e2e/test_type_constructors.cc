@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/string.hh>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -1068,8 +1069,8 @@ TEST_CASE("a rejecting ctor in a generic signature still reports a bad instantia
 }
 
 TEST_CASE("a rejecting ctor from another module works in a generic signature") {
-    const std::string lib{"pub " +
-                          std::string{REJECTING_CTOR.substr(REJECTING_CTOR.find("const"))}};
+    const std::string lib{
+        "pub " + std::string{stdx::string::substr(REJECTING_CTOR, REJECTING_CTOR.find("const"))}};
     const std::vector imports{helpers::mock_file{"lib.gh", lib, "lib"}};
 
     SECTION("qualified, as a parameter type") {

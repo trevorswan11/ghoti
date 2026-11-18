@@ -2,8 +2,11 @@
 #include <string_view>
 
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
+#include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
 

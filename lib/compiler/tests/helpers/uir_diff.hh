@@ -53,8 +53,7 @@ struct uir_diff {
 
 using library_list = gsl::span<const std::pair<std::string, std::filesystem::path>>;
 
-// Analyzes `root` with both pipelines from fresh module managers and compares their normalized
-// GIR (§11.1), with neither attaching the program entry code
+// Analyzes `root` with both pipelines from fresh module managers and compares their normalized GIR
 [[nodiscard]] auto diff_pipelines(mod::source_loader&          loader,
                                   const std::filesystem::path& root,
                                   library_list                 libraries,

@@ -2,13 +2,23 @@
 #include <utility>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
+#include <gsl/span>
 #include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
+#include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/uir.hh"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {
@@ -92,7 +102,7 @@ auto analyzer::analyze_function() -> result<void> {
     const auto out{analyze_body(body)};
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
-    // A body that falls off its end returns, with `undefined` when it should have produced a value
+
     auto& ret{*fn_->return_type};
     if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();

@@ -240,7 +240,7 @@ const TestArtifacts = struct {
         const full_step = b.step("test-semantics", "Run the compile-time vs runtime differential suite over every type and boundary value");
         full_step.dependOn(&full.step);
 
-        // UIR Sema against the old pipeline over the examples, std and compiler_rt (UIR plan §11.1)
+        // UIR Sema against the old pipeline over the examples, std and compiler_rt
         const uir_diff = b.addRunArtifact(self.compiler_tests);
         uir_diff.addArg("[.uir-diff]");
         uir_diff.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));

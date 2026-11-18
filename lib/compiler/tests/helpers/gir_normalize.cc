@@ -4,12 +4,14 @@
 #include <charconv>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -38,7 +40,7 @@ struct module_dump {
     std::vector<std::string_view> lines;
     while (!text.empty()) {
         const auto end{text.find('\n')};
-        lines.push_back(text.substr(0, end));
+        lines.emplace_back(stdx::string::substr(text, 0, end));
         if (end == std::string_view::npos) { break; }
         text.remove_prefix(end + 1);
     }
@@ -57,13 +59,16 @@ struct module_dump {
     for (const auto line : split_lines(dump)) {
         if (line.empty()) { continue; }
         if (line.starts_with("fn ") || line.starts_with("test \"")) {
-            out.functions.push_back({.header = std::string{line}, .segments = {}});
+            out.functions.emplace_back<function_dump>(
+                {.header = std::string{line}, .segments = {}});
         } else if (line.starts_with("  seg ") && line.ends_with(':') && !out.functions.empty()) {
-            const auto id{parse_u32(line.substr(6, line.size() - 7)).value_or(0)};
-            out.functions.back().segments.push_back({.id = id, .instructions = {}});
+            const auto id{parse_u32(stdx::string::substr(line, 6, line.size() - 7)).value_or(0)};
+            out.functions.back().segments.emplace_back<segment_dump>(
+                {.id = id, .instructions = {}});
         } else if (line.starts_with("    ") && !out.functions.empty() &&
                    !out.functions.back().segments.empty()) {
-            out.functions.back().segments.back().instructions.emplace_back(line.substr(4));
+            out.functions.back().segments.back().instructions.emplace_back(
+                stdx::string::substr(line, 4));
         } else {
             out.items.emplace_back(line);
         }
@@ -80,7 +85,7 @@ template <typename F>
         if (text[i] == '%' && i + 1 < text.size() && text[i + 1] >= '0' && text[i + 1] <= '9') {
             usize end{i + 1};
             while (end < text.size() && text[end] >= '0' && text[end] <= '9') { ++end; }
-            out += f(text.substr(i, end - i));
+            out += f(stdx::string::substr(text, i, end - i));
             i = end;
         } else {
             out += text[i++];
@@ -95,7 +100,7 @@ template <typename F>
     if (!inst.starts_with('%')) { return {{}, inst}; }
     const auto eq{inst.find(" = ")};
     if (eq == std::string_view::npos) { return {{}, inst}; }
-    return {inst.substr(0, eq), inst.substr(eq + 3)};
+    return {stdx::string::substr(inst, 0, eq), stdx::string::substr(inst, eq + 3)};
 }
 
 struct int_shape {
@@ -107,7 +112,7 @@ struct int_shape {
     if (type == "usize") { return int_shape{64, false}; }
     if (type == "isize") { return int_shape{64, true}; }
     if (type.size() < 2 || (type[0] != 'i' && type[0] != 'u')) { return stdx::none; }
-    const auto bits{parse_u32(type.substr(1))};
+    const auto bits{parse_u32(stdx::string::substr(type, 1))};
     if (!bits || *bits == 0 || *bits > 64) { return stdx::none; }
     return int_shape{static_cast<u16>(*bits), type[0] == 'i'};
 }
@@ -167,7 +172,7 @@ struct fold_input {
     std::vector<std::string_view> out;
     while (!text.empty()) {
         const auto comma{text.find(", ")};
-        out.push_back(text.substr(0, comma));
+        out.emplace_back(stdx::string::substr(text, 0, comma));
         if (comma == std::string_view::npos) { break; }
         text.remove_prefix(comma + 2);
     }
@@ -177,16 +182,16 @@ struct fold_input {
 [[nodiscard]] auto parse_fold_input(std::string_view body) -> stdx::option<fold_input> {
     const auto space{body.find(' ')};
     if (space == std::string_view::npos) { return stdx::none; }
-    auto       name{body.substr(0, space)};
-    auto       rest{body.substr(space + 1)};
+    auto       name{stdx::string::substr(body, 0, space)};
+    auto       rest{stdx::string::substr(body, space + 1)};
     fold_input in{};
-    in.kind       = name.substr(0, name.find('.'));
+    in.kind       = stdx::string::substr(name, 0, name.find('.'));
     in.saturating = name.find(".sat") != std::string_view::npos;
     in.checked    = name.find(".checked") != std::string_view::npos;
     const auto type_end{rest.find(' ')};
     if (type_end == std::string_view::npos) { return stdx::none; }
-    in.type     = rest.substr(0, type_end);
-    in.operands = split_operands(rest.substr(type_end + 1));
+    in.type     = stdx::string::substr(rest, 0, type_end);
+    in.operands = split_operands(stdx::string::substr(rest, type_end + 1));
     return in;
 }
 
@@ -295,7 +300,7 @@ auto drop_unreachable(function_dump& fn) -> void {
         if (!by_id.contains(id) || !reached.insert(id).second) { continue; }
         const auto& insts{fn.segments[by_id[id]].instructions};
         if (!insts.empty()) {
-            for (const auto s : successors(insts.back())) { stack.push_back(s); }
+            for (const auto s : successors(insts.back())) { stack.emplace_back(s); }
         }
     }
     std::erase_if(fn.segments, [&](const segment_dump& seg) { return !reached.contains(seg.id); });
@@ -309,7 +314,7 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
         for (usize i{0}; i < seg.instructions.size(); ++i) {
             const std::string_view inst{seg.instructions[i]};
             if (inst.starts_with("store ")) {
-                const auto args{split_operands(inst.substr(6))};
+                const auto args{split_operands(stdx::string::substr(inst, 6))};
                 if (args.size() == 2 && args[1].starts_with('%')) {
                     const std::string slot{args[1]};
                     if (const auto found{pending.find(slot)}; found != pending.end()) {
@@ -328,14 +333,14 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
         }
         std::vector<std::string> kept;
         for (usize i{0}; i < seg.instructions.size(); ++i) {
-            if (!dead[i]) { kept.push_back(std::move(seg.instructions[i])); }
+            if (!dead[i]) { kept.emplace_back(std::move(seg.instructions[i])); }
         }
         seg.instructions = std::move(kept);
     }
 }
 
 // A slot that is only stored to and loaded from, where every store writes the same constant,
-// reads as that constant: its loads join `known` and the slot's instructions are dropped
+// reads as that constant
 auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
     struct slot_use {
         stdx::option<std::string> value;
@@ -358,7 +363,7 @@ auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
             if (body.starts_with("alloca ")) { continue; }
             if (!def.empty() && body.starts_with("load %")) { continue; }
             if (body.starts_with("store ")) {
-                const auto args{split_operands(body.substr(6))};
+                const auto args{split_operands(stdx::string::substr(body, 6))};
                 if (args.size() == 2 && slots.contains(std::string{args[1]})) {
                     auto& use{slots[std::string{args[1]}]};
                     if (!is_constant_token(args[0]) || (use.value && *use.value != args[0])) {
@@ -398,20 +403,20 @@ auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
                 continue;
             }
             if (body.starts_with("load %")) {
-                if (const auto use{slot_of(body.substr(5))}) {
+                if (const auto use{slot_of(stdx::string::substr(body, 5))}) {
                     known.insert_or_assign(std::string{def}, *use->value);
                     changed = true;
                     continue;
                 }
             }
             if (body.starts_with("store ")) {
-                const auto args{split_operands(body.substr(6))};
+                const auto args{split_operands(stdx::string::substr(body, 6))};
                 if (args.size() == 2 && slot_of(args[1])) {
                     changed = true;
                     continue;
                 }
             }
-            kept.push_back(std::move(inst));
+            kept.emplace_back(std::move(inst));
         }
         seg.instructions = std::move(kept);
     }
@@ -443,14 +448,16 @@ auto fold_constants(function_dump& fn) -> void {
                 if (substituted.starts_with("cond_goto true seg ") ||
                     substituted.starts_with("cond_goto false seg ")) {
                     const bool taken{substituted.starts_with("cond_goto true")};
-                    const auto targets{substituted.substr(substituted.find(" seg ") + 1)};
+                    const auto targets{
+                        stdx::string::substr(substituted, substituted.find(" seg ") + 1)};
                     const auto comma{targets.find(", ")};
-                    substituted = fmt::format(
-                        "goto {}", taken ? targets.substr(0, comma) : targets.substr(comma + 2));
-                    changed = true;
+                    substituted = fmt::format("goto {}",
+                                              taken ? stdx::string::substr(targets, 0, comma)
+                                                    : stdx::string::substr(targets, comma + 2));
+                    changed     = true;
                 }
-                kept.push_back(def.empty() ? substituted
-                                           : fmt::format("{} = {}", def, substituted));
+                kept.emplace_back(def.empty() ? substituted
+                                              : fmt::format("{} = {}", def, substituted));
             }
             seg.instructions = std::move(kept);
         }
@@ -460,19 +467,21 @@ auto fold_constants(function_dump& fn) -> void {
 
 [[nodiscard]] auto parse_seg_ref(std::string_view text) -> stdx::option<u32> {
     if (!text.starts_with("seg ")) { return stdx::none; }
-    return parse_u32(text.substr(4));
+    return parse_u32(stdx::string::substr(text, 4));
 }
 
 // The segments a terminator jumps to, in operand order
 [[nodiscard]] auto successors(std::string_view terminator) -> std::vector<u32> {
     std::vector<u32> out;
     if (terminator.starts_with("goto ")) {
-        if (const auto s{parse_seg_ref(terminator.substr(5))}) { out.push_back(*s); }
+        if (const auto s{parse_seg_ref(stdx::string::substr(terminator, 5))}) {
+            out.emplace_back(*s);
+        }
     } else if (terminator.starts_with("cond_goto ")) {
         const auto first{terminator.find(" seg ")};
         if (first != std::string_view::npos) {
-            for (const auto part : split_operands(terminator.substr(first + 1))) {
-                if (const auto s{parse_seg_ref(part)}) { out.push_back(*s); }
+            for (const auto part : split_operands(stdx::string::substr(terminator, first + 1))) {
+                if (const auto s{parse_seg_ref(part)}) { out.emplace_back(*s); }
             }
         }
     }
@@ -483,10 +492,10 @@ auto fold_constants(function_dump& fn) -> void {
 template <typename F> [[nodiscard]] auto rewrite_segs(std::string_view text, F&& f) -> std::string {
     std::string out;
     for (usize i{0}; i < text.size();) {
-        if (text.substr(i).starts_with("seg ")) {
+        if (stdx::string::substr(text, i).starts_with("seg ")) {
             usize end{i + 4};
             while (end < text.size() && text[end] >= '0' && text[end] <= '9') { ++end; }
-            if (const auto id{parse_u32(text.substr(i + 4, end - i - 4))}) {
+            if (const auto id{parse_u32(stdx::string::substr(text, i + 4, end - i - 4))}) {
                 out += fmt::format("seg {}", f(*id));
                 i = end;
                 continue;
@@ -509,7 +518,7 @@ auto canonicalize(function_dump& fn) -> void {
             if (found == by_id.end()) { break; }
             const auto& insts{fn.segments[found->second].instructions};
             if (insts.size() != 1 || !insts[0].starts_with("goto ")) { break; }
-            const auto next{parse_seg_ref(std::string_view{insts[0]}.substr(5))};
+            const auto next{parse_seg_ref(stdx::string::substr(insts[0], 5))};
             if (!next || *next == id) { break; }
             id = *next;
         }
@@ -526,10 +535,10 @@ auto canonicalize(function_dump& fn) -> void {
         if (bodies.contains(id) || !by_id.contains(id)) { continue; }
         auto& insts{bodies[id]};
         for (const auto& inst : fn.segments[by_id[id]].instructions) {
-            insts.push_back(rewrite_segs(inst, forward));
+            insts.emplace_back(rewrite_segs(inst, forward));
         }
         if (insts.empty()) { continue; }
-        for (const auto s : successors(insts.back())) { stack.push_back(s); }
+        for (const auto s : successors(insts.back())) { stack.emplace_back(s); }
     }
 
     // A segment only one jump reaches joins the segment that jumps to it
@@ -542,7 +551,7 @@ auto canonicalize(function_dump& fn) -> void {
     for (auto& [id, insts] : bodies) {
         if (merged.contains(id)) { continue; }
         while (!insts.empty() && insts.back().starts_with("goto ")) {
-            const auto next{*parse_seg_ref(std::string_view{insts.back()}.substr(5))};
+            const auto next{*parse_seg_ref(stdx::string::substr(insts.back(), 5))};
             if (next == entry || next == id || preds[next] != 1 || merged.contains(next)) { break; }
             insts.pop_back();
             const auto taken{std::move(bodies[next])};
@@ -558,12 +567,12 @@ auto canonicalize(function_dump& fn) -> void {
         stack.pop_back();
         if (renumbered.contains(id) || merged.contains(id) || !bodies.contains(id)) { continue; }
         renumbered.insert_or_assign(id, static_cast<u32>(order.size()));
-        order.push_back(id);
+        order.emplace_back(id);
         const auto& insts{bodies[id]};
         if (insts.empty()) { continue; }
         auto next{successors(insts.back())};
         std::ranges::reverse(next);
-        for (const auto s : next) { stack.push_back(s); }
+        for (const auto s : next) { stack.emplace_back(s); }
     }
 
     std::vector<std::string>  allocas;
@@ -573,12 +582,12 @@ auto canonicalize(function_dump& fn) -> void {
         for (const auto& inst : bodies[id]) {
             auto rewritten{rewrite_segs(inst, [&](u32 s) { return renumbered[s]; })};
             if (split_definition(rewritten).second.starts_with("alloca ")) {
-                allocas.push_back(std::move(rewritten));
+                allocas.emplace_back(std::move(rewritten));
             } else {
-                seg.instructions.push_back(std::move(rewritten));
+                seg.instructions.emplace_back(std::move(rewritten));
             }
         }
-        segments.push_back(std::move(seg));
+        segments.emplace_back(std::move(seg));
     }
     segments.front().instructions.insert(
         segments.front().instructions.begin(), allocas.begin(), allocas.end());
