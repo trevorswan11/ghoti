@@ -74,7 +74,9 @@ pub const @"f80" = match comptime (@targetArch()) {
     _ => u80,
 };
 
-@cfg (os == .windows and abi == .msvc and !testing) {
+pub const is_windows_msvc = @cfgValue(os == .windows and abi == .msvc);
+
+@cfg (is_windows_msvc and !testing) {
     /// MSVC's linker looks for this symbol in any object that uses floating point
     export let mut _fltused: c_int = 1;
 }
