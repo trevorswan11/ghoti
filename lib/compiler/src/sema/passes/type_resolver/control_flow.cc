@@ -528,8 +528,15 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
             if (drv.pack) {
                 resolving_.set_sema_type(cap.payload, *drv.pack->element_types[drv.pack_first + k]);
             } else {
-                resolving_.set_sema_type(cap.payload, *drv.elem_type);
                 if (drv.name) { frame.insert_or_assign(*drv.name, drv.elem_values[k]); }
+                // A capture over types is an alias of this iteration's type
+                const auto held{drv.elem_values[k].as_opt<stdx::option<type&>>()};
+                if (drv.name && held && *held) {
+                    resolving_.set_sema_type(cap.payload, **held);
+                    resolve_symbol_info(cap.payload, symbol_kind::TYPE);
+                    continue;
+                }
+                resolving_.set_sema_type(cap.payload, *drv.elem_type);
             }
             if (drv.name) { resolve_symbol_info(cap.payload, symbol_kind::VALUE); }
         }

@@ -1072,3 +1072,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Takes the analysis options `build-*` does (`-m`, `--target`, `--mode`, `--deprecated`, `--error-limit`), but no output, linking, or LLVM flags
 - Fixed `GHOTI_STDLIB`, `GHOTI_START`, and `GHOTI_COMPILER_RT` being ignored when their value is quoted, as cmd.exe's `set VAR="..."` leaves it, which silently fell back to the `lib` next to the executable (#420)
     - Relative values are resolved against the working directory
+
+## Language
+- **Breaking:** binary operator precedence follows C's more closely (#421)
+    - Shifts bind looser than `+` and `-`, so `u >> bits - 1` is `u >> (bits - 1)`; they used to share `*`'s precedence
+    - `&`, `^`, and `|` bind looser than shifts, each a level of its own in that order, so `a & b + c` is `a & (b + c)` and `a | b ^ c` is `a | (b ^ c)`
+    - Unlike C, all three still bind tighter than comparisons, so `u & m == 0` is `(u & m) == 0`
+- Fixed: an `unroll for` capture over types named the `type` type itself where a type was expected, so `@as(T, 0.0)` and `const x: T = 0.0` were rejected inside the loop (#419)
