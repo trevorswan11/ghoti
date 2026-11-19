@@ -230,6 +230,7 @@ enum : u32 {
     SENTINEL   = 1U << 3,
     PLACE      = 1U << 4, // the operand is a place, not a value
     LEN_ABSENT = 1U << 5, // `[]T{...}` sized by its items
+    ASSIGNED   = 1U << 6, // field_ptr: the place an assignment writes, which may switch a union
 
     // fn_type, func
     VARIADIC      = 1U << 0,
@@ -272,6 +273,9 @@ enum : u32 {
 
     // field public, struct field
     PUBLIC = 1U << 0,
+
+    // deref's aux: the pointee as a place to store through, not a value read from it
+    DEREF_PLACE = 1U << 0,
 };
 
 } // namespace flags

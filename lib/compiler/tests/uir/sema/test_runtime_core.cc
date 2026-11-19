@@ -85,7 +85,7 @@ TEST_CASE("Operands without a common type are reported") {
 }
 
 TEST_CASE("A construct this phase doesn't analyze stops the analysis") {
-    const auto run{helpers::run_uir_sema("const P = struct { x: i32 };")};
+    const auto run{helpers::run_uir_sema("const n = @typeName(i32);")};
     REQUIRE(run->out->stopped_at);
     CHECK_FALSE(run->out->succeeded());
 }

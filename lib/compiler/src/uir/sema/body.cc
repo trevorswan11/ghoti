@@ -54,6 +54,8 @@ namespace {
     case well_known::noreturn_type:       return builtin(gs::type_kind::NORETURN);
     case well_known::comptime_int_type:   return builtin(gs::type_kind::COMPTIME_INT);
     case well_known::comptime_float_type: return builtin(gs::type_kind::COMPTIME_FLOAT);
+    case well_known::opaque_type:         return builtin(gs::type_kind::OPAQUE);
+    case well_known::nullptr_type:        return builtin(gs::type_kind::NULLPTR);
     default:                              return stdx::none;
     }
 }
@@ -101,9 +103,23 @@ auto analyzer::analyze_function() -> result<void> {
     for (usize i{0}; const auto param : params) {
         record_reader p{record(param)};
         const auto    name{p.str_field()};
-        auto&         type{*fn_->params[i++]};
-        const auto&   slot{gir_fn_->add_param(std::string{name}, type)};
-        values_.insert_or_assign(param, gir::value{slot.id, type});
+        DISCARD(p.body_field());
+        DISCARD(p.body_field());
+        const auto  param_flags{p.u32_field()};
+        auto&       type{*fn_->params[i++]};
+        const bool  discarded{(param_flags & flags::PARAM_DISCARDED) != 0 || name == "_"};
+        const auto& slot{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
+        const gir::value value{slot.id, type};
+        // A slice parameter is passed in a slot of its own, and a written one is spilled to one
+        if (type.get_kind() == gs::type_kind::SLICE) {
+            values_.insert_or_assign(param, slot_value{.address = value, .type = &type});
+        } else if ((param_flags & flags::PARAM_WRITTEN) != 0) {
+            const auto spilled{spill(value, type, true)};
+            values_.insert_or_assign(
+                param, slot_value{.address = spilled.address, .type = &type, .is_mutable = true});
+        } else {
+            values_.insert_or_assign(param, value);
+        }
     }
 
     // `@setEval*Limit` in the body scopes over the rest of it
@@ -208,6 +224,32 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::repeat:          return analyze_repeat(inst);
     case tag::ret:             return analyze_ret(inst);
     case tag::call:            return analyze_call(inst);
+    case tag::field_call:      return analyze_field_call(inst);
+
+    case tag::ptr_type:
+    case tag::ref_type:
+    case tag::slice_type:      return analyze_elem_type(inst, t);
+    case tag::array_type:      return analyze_array_type(inst);
+    case tag::struct_decl:     return analyze_nominal_decl(inst, gs::type_kind::STRUCT);
+    case tag::union_decl:      return analyze_nominal_decl(inst, gs::type_kind::UNION);
+    case tag::enum_decl:       return analyze_nominal_decl(inst, gs::type_kind::ENUM);
+
+    case tag::implicit_access: return enum_literal{inst};
+    case tag::init_struct:     return analyze_init_struct(inst);
+    case tag::init_array:      return analyze_init_array(inst);
+    case tag::array_lit:       return analyze_array_lit(inst);
+    case tag::field_val:       return analyze_field_val(inst);
+    case tag::field_ptr:       return analyze_field_ptr(inst);
+    case tag::elem_val:        return analyze_elem_val(inst);
+    case tag::elem_ptr:        return analyze_elem_ptr(inst);
+    case tag::ref_of:          return analyze_ref_of(inst, false);
+    case tag::address_of:      return analyze_ref_of(inst, true);
+    case tag::deref:           return analyze_deref(inst);
+    case tag::match:           return analyze_match(inst);
+    case tag::slice:           return analyze_slice(inst);
+    case tag::range:           return analyze_range(inst);
+    case tag::for_iter:        return analyze_for(inst);
+    case tag::bind:            return analyze_bind(inst);
 
     default:                   break;
     }
@@ -218,9 +260,14 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
     if (const auto w{as_well_known(r)}) { return well_known_operand(*w, src); }
     const auto inst{*as_inst(r)};
     const auto found{values_.find(inst)};
+    // A string literal is a constant `[N:0]u8`
     if (found == values_.end() && std::to_underlying(inst) < mod().instruction_count() &&
         mod().tag_of(inst) == tag::str) {
-        return comp_.unsupported(u_, src, "a string literal used as a value");
+        const auto text{mod().string(mod().data_of(inst).str)};
+        auto&      ctx{comp_.ctx()};
+        auto&      type{
+            ctx.get_array(gs::types::mut::CONSTANT, true, text.size(), ctx.get_int(8, false))};
+        return comp_.constants().intern(std::string{text}, type);
     }
     if (found == values_.end()) {
         // A failed instruction left no value, and its failure was already reported
@@ -230,9 +277,12 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
         return comp_.unsupported(u_, src, "a value from another body");
     }
     // A comptime read of a runtime value runs what computed it again, at compile time
-    if (is_comptime() && (found->second.is<gir::value>() || found->second.is<merge_ref>())) {
+    if (is_comptime() && (found->second.is<gir::value>() || found->second.is<merge_ref>() ||
+                          found->second.is<slot_value>())) {
         return reevaluate(r, src);
     }
+    // An aggregate global is its value at compile time
+    if (const auto g{found->second.as_opt<global_const>()}; g && is_comptime()) { return g->value; }
     return found->second;
 }
 
@@ -260,6 +310,8 @@ auto analyzer::well_known_operand(well_known w, const source& src) -> result<ope
         return pool.intern(ip::void_value{}, builtin(gs::type_kind::VOID_));
     case well_known::undefined:
         return pool.intern(ip::undefined_value{}, builtin(gs::type_kind::UNDEFINED));
+    case well_known::nullptr_value:
+        return pool.intern(ip::nullptr_value{}, builtin(gs::type_kind::NULLPTR));
     default: break;
     }
     return comp_.unsupported(u_, src, fmt::format("`{}`", well_known_name(w)));
@@ -284,7 +336,11 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const global_ref& g) -> gs::type& { return *g.type; },
         [&](comptime_place p) -> gs::type& {
             return comp_.alloc_at(p).type.value_or(builtin(gs::type_kind::UNDEFINED));
-        });
+        },
+        [](const slot_value& s) -> gs::type& { return *s.type; },
+        [&](anon_init) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
+        [&](enum_literal) -> gs::type& { return builtin(gs::type_kind::ENUM_LITERAL); },
+        [](const global_const& g) -> gs::type& { return *g.type; });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

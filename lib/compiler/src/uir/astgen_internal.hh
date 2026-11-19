@@ -267,7 +267,7 @@ class astgen {
     [[nodiscard]] auto expr(ast::expr_handle h) -> ref;
     // None when the operand is absent
     [[nodiscard]] auto optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref>;
-    [[nodiscard]] auto place(ast::expr_handle h, use u) -> place_result;
+    [[nodiscard]] auto place(ast::expr_handle h, use u, bool assigned = false) -> place_result;
     [[nodiscard]] auto identifier(source src, source_location at, std::string_view name, use u)
         -> place_result;
     [[nodiscard]] auto identifier_node(ast::node_id id, use u) -> place_result;

@@ -33,11 +33,45 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a value"); }
 
-    auto& target{*fn->fn};
+    return call_function(*fn->fn, args, src, callee_src.value_or(src), false);
+}
+
+auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    const auto  object_ref{*rec.ref_field()};
+    const auto  name{rec.str_field()};
+    DISCARD(rec.u32_field());
+    const auto modifier{rec.ref_field()};
+    const auto args{rec.refs_field()};
+    const auto pack_mask{rec.words_field()};
+    if (modifier) { return comp_.unsupported(u_, src, "a call modifier"); }
+    for (const auto word : pack_mask) {
+        if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion"); }
+    }
+
+    // Only a type's own function is called through it here. A method call on a value needs its
+    // `self` parameter
+    const auto object{TRY(resolve_value(object_ref, src))};
+    const auto index{comptime_value(object)};
+    if (!index || !comp_.constants().is_type(*index)) {
+        return comp_.unsupported(u_, src, "a method call");
+    }
+    const auto member{TRY(member_of(comp_.constants().type_at(*index), name, src))};
+    const auto fn{member.as_opt<function_ref>()};
+    if (!fn) { return comp_.unsupported(u_, src, "a call through a member value"); }
+    return call_function(*fn->fn, args, src, src, true);
+}
+
+auto analyzer::call_function(instance&            target,
+                             gsl::span<const ref> args,
+                             const source&        src,
+                             const source&        callee_src,
+                             bool                 through_member) -> result<operand> {
     if (args.size() != target.params.size()) {
         return comp_.report(
             u_,
-            callee_src.value_or(src),
+            callee_src,
             gs::error::ARITY_MISMATCH,
             fmt::format("Expected {} arguments, found {}", target.params.size(), args.size()));
     }
@@ -64,11 +98,18 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     }
     TRY(require_runtime(src));
 
-    auto&      ret{*target.return_type};
-    const auto result{builder_.emit_call(target.symbol, std::move(values), ret)};
+    auto& ret{*target.return_type};
     if (ret.get_kind() == gs::type_kind::NORETURN) {
         return comp_.unsupported(u_, src, "a call to a `noreturn` function");
     }
+    // The old emitter calls a type's member function through its name as a constant
+    const auto result{
+        through_member
+            ? builder_.emit_indirect_call(
+                  constant(comp_.constants().intern(target.symbol, *target.type), *target.type),
+                  std::move(values),
+                  ret)
+            : builder_.emit_call(target.symbol, std::move(values), ret)};
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
 }

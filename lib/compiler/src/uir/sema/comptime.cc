@@ -58,6 +58,7 @@ auto compilation::call_comptime(const unit&            caller,
         .caller     = &caller,
         .call_src   = src,
         .callee     = fn.symbol,
+        .key        = &key,
         .alloc_base = alloc_count(),
     });
     const auto saved{limits_};
@@ -85,6 +86,44 @@ auto compilation::note_store(comptime_place p) -> void {
     for (auto& frame : calls_) {
         if (p.alloc < frame.alloc_base) { frame.impure = true; }
     }
+}
+
+auto compilation::speculate() const -> speculation {
+    return speculation{
+        .diagnostics  = diagnostics_.size(),
+        .stopped      = stopped_at_.has_value(),
+        .runtime_site = runtime_site_.has_value(),
+    };
+}
+
+auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
+    DISCARD(diagnostics_.split_off(s.diagnostics));
+    if (!s.stopped && !keep_unsupported) { stopped_at_.reset(); }
+    if (!s.runtime_site) { runtime_site_.reset(); }
+}
+
+auto compilation::bool_parent(const unit& u, inst_id inst) -> stdx::option<inst_id> {
+    if (bool_parents_.size() <= u.index) { bool_parents_.resize(u.index + 1); }
+    auto& parents{bool_parents_[u.index]};
+    if (!parents) {
+        auto&       built{parents.emplace()};
+        const auto& m{*u.uir};
+        for (u32 i{0}; i < m.instruction_count(); ++i) {
+            const inst_id at{i};
+            const auto    t{m.tag_of(at)};
+            if (t != tag::bool_and && t != tag::bool_or) { continue; }
+            record_reader rec{m, m.data_of(at).pl.extra};
+            const auto    lhs{as_inst(*rec.ref_field())};
+            if (!lhs) { continue; }
+            const auto lhs_tag{m.tag_of(*lhs)};
+            if (lhs_tag == tag::bool_and || lhs_tag == tag::bool_or) {
+                built.insert_or_assign(*lhs, at);
+            }
+        }
+    }
+    const auto found{parents->find(inst)};
+    if (found == parents->end()) { return stdx::none; }
+    return found->second;
 }
 
 auto compilation::needs_runtime(const unit& u, const source& src) -> stdx::err<stop> {
@@ -210,6 +249,42 @@ namespace {
         for (const auto arg : rec.refs_field()) { refs.emplace_back(arg); }
         return refs;
     }
+    case tag::elem_val: return std::vector{d.bin.lhs, d.bin.rhs};
+    // The right side's body runs again at compile time with the rest of the instruction
+    case tag::bool_and:
+    case tag::bool_or:  {
+        record_reader rec{m, d.pl.extra};
+        return std::vector{*rec.ref_field()};
+    }
+    case tag::field_val: {
+        record_reader rec{m, d.pl.extra};
+        return std::vector{*rec.ref_field()};
+    }
+    case tag::init_struct: {
+        record_reader    rec{m, d.pl.extra};
+        std::vector<ref> refs;
+        DISCARD(rec.ref_field());
+        const auto count{rec.count()};
+        for (u32 i{0}; i < count; ++i) {
+            DISCARD(rec.str_field());
+            refs.emplace_back(*rec.ref_field());
+        }
+        return refs;
+    }
+    case tag::init_array: {
+        record_reader rec{m, d.pl.extra};
+        DISCARD(rec.ref_field());
+        const auto values{rec.refs_field()};
+        return std::vector<ref>{values.begin(), values.end()};
+    }
+    case tag::array_lit: {
+        record_reader rec{m, d.pl.extra};
+        DISCARD(rec.ref_field());
+        DISCARD(rec.ref_field());
+        DISCARD(rec.u32_field());
+        const auto items{rec.refs_field()};
+        return std::vector<ref>{items.begin(), items.end()};
+    }
     default: return stdx::none;
     }
 }
@@ -221,7 +296,12 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     if (!inst) { return resolve(r, src); }
     const auto found{values_.find(*inst)};
     if (found == values_.end()) { return resolve(r, src); }
-    if (!found->second.is<gir::value>() && !found->second.is<merge_ref>()) { return found->second; }
+    // An aggregate global is its value at compile time
+    if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
+    if (!found->second.is<gir::value>() && !found->second.is<merge_ref>() &&
+        !found->second.is<slot_value>()) {
+        return found->second;
+    }
 
     const auto& inst_src{src_of(*inst)};
     const auto  operands{reevaluable_operands(mod(), *inst)};

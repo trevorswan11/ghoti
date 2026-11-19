@@ -186,6 +186,12 @@ class dumper {
                            " {}",
                            syntax::builtin_name(static_cast<syntax::builtin_t>(d.un.aux)));
             return;
+        case tag::deref:
+            fmt::format_to(std::back_inserter(out_),
+                           " {}{}",
+                           ref_text(filled(d.un.operand)),
+                           (d.un.aux & flags::DEREF_PLACE) != 0 ? ", place" : "");
+            return;
         default:
             fmt::format_to(std::back_inserter(out_), " {}", ref_text(filled(d.un.operand)));
             return;

@@ -30,6 +30,19 @@ auto analyzer::void_value() -> operand {
 auto analyzer::condition(const operand& op, const source& src) -> result<gir::value> {
     auto& type{type_of(op)};
     if (type.is_poison()) { return stdx::err{stop::POISON}; }
+    // A pointer holds when it isn't null
+    if (type.get_kind() == gs::type_kind::POINTER) {
+        auto&      bool_type{builtin(gs::type_kind::BOOL)};
+        auto&      null_type{builtin(gs::type_kind::NULLPTR)};
+        const auto ptr{TRY(as_runtime(op, src))};
+        return gir::value{
+            builder_.emit_binary(
+                gir::instruction_kind::NE,
+                ptr,
+                constant(comp_.constants().intern(ip::nullptr_value{}, null_type), null_type),
+                bool_type),
+            bool_type};
+    }
     if (type.get_kind() != gs::type_kind::BOOL) {
         return comp_.report(
             u_, src, gs::error::TYPE_MISMATCH, messages::condition_not_bool(comp_.ctx(), type));
@@ -65,8 +78,17 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     values.reserve(arrivals.size());
     bool all_void{true};
     bool all_untyped_constants{true};
+    bool all_untyped_literals{true};
     for (const auto& arrival : arrivals) {
         values.emplace_back(arrival.value);
+        // An untyped literal has no type of its own to check here
+        const bool literal{is_untyped_literal(arrival.value)};
+        all_untyped_literals = all_untyped_literals && literal;
+        if (literal) {
+            all_void              = false;
+            all_untyped_constants = false;
+            continue;
+        }
         auto& type{type_of(arrival.value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
         all_void              = all_void && type.get_kind() == gs::type_kind::VOID_;
@@ -74,6 +96,10 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
                                 gs::is_comptime_numeric(type.get_kind());
     }
     if (all_void) { return void_value(); }
+    if (!all_untyped_literals &&
+        std::ranges::any_of(values, [&](const operand& v) { return is_untyped_literal(v); })) {
+        return comp_.unsupported(u_, src, "a merge of untyped literals and typed values");
+    }
     // Every path carrying the same constant makes the merge that constant
     if (const auto first{comptime_value(arrivals.front().value)};
         first && std::ranges::all_of(arrivals, [&](const incoming& a) {
@@ -81,7 +107,8 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
         })) {
         return arrivals.front().value;
     }
-    if (all_untyped_constants) {
+    // The arms take a type where the merge is used
+    if (all_untyped_constants || all_untyped_literals) {
         merges_.emplace_back<pending_merge>(
             {.seg = merge, .arrivals = arrivals, .materialized = stdx::none});
         return merge_ref{static_cast<u32>(merges_.size() - 1)};
@@ -143,15 +170,23 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
     }
 
     // Both arms are analyzed even when the condition is known when not comptime
-    const auto c{TRY(condition(cond, cond_src.value_or(src)))};
+    auto       c{TRY(condition(cond, cond_src.value_or(src)))};
     const auto then_seg{new_segment()};
     const auto else_seg{new_segment()};
     const auto merge{new_segment()};
-    builder_.emit_cond_goto(c, then_seg, else_seg);
 
-    // With a known condition only the taken arm reaches the merge
-    const auto            known{comptime_value(cond).transform(
-        [&](ip::index i) { return *comp_.constants().value_at(i).data.as_opt<bool>(); })};
+    // With a known `bool` condition only the taken arm reaches the merge
+    stdx::option<bool> known;
+    if (const auto index{comptime_value(cond)}) {
+        if (const auto b{comp_.constants().value_at(*index).data.as_opt<bool>()}) { known = *b; }
+    }
+    // A statement `if` whose condition folds through immutable bindings takes one arm, as the old
+    // emitter does
+    if (!known && yields_nothing(then_body) && yields_nothing(else_body)) {
+        known = TRY(folded_condition(cond_ref, cond_src.value_or(src)));
+        if (known) { c = constant(comp_.constants().intern(*known, type_of(cond)), type_of(cond)); }
+    }
+    builder_.emit_cond_goto(c, then_seg, else_seg);
     std::vector<incoming> arrivals;
     const auto            branch{runtime_branch()};
     for (const auto& [seg, body, taken] :
@@ -281,6 +316,29 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
         builder_.emit_return(TRY(as_runtime(returned, src)));
     }
     return void_value();
+}
+
+auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {
+    if (body.empty() || mod().tag_of(body.back()) != tag::yield) { return false; }
+    return as_well_known(mod().data_of(body.back()).un.operand) == well_known::void_value;
+}
+
+auto analyzer::folded_condition(ref cond, const source& src) -> result<stdx::option<bool>> {
+    // A failure only means the condition stays at runtime, so nothing it records is kept. One
+    // this phase can't analyze may be a fold the old pipeline makes, so that stop stays
+    const auto before{comp_.speculate()};
+    const auto folded{[&] {
+        const auto scope{comptime_scope()};
+        return reevaluate(cond, src);
+    }()};
+    const bool unsupported{!folded && folded.error() == stop::UNSUPPORTED};
+    comp_.abandon(before, unsupported);
+    if (unsupported) { return stdx::err{stop::UNSUPPORTED}; }
+    if (!folded) { return stdx::option<bool>{}; }
+    const auto index{comptime_value(*folded)};
+    if (!index) { return stdx::option<bool>{}; }
+    return comp_.constants().value_at(*index).data.as_opt<bool>().transform(
+        [](bool b) { return b; });
 }
 
 auto analyzer::known_bool(const operand& op, const source& src) -> result<bool> {
