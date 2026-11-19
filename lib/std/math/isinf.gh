@@ -1,0 +1,60 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/math/isinf.zig
+//! TODO(tcs) #419: Commented out expectations below fail with @as trying to convert the literal to the `type` type
+import std;
+
+const math = std.math;
+
+/// Returns whether x is an infinity, ignoring sign.
+@[inline(.always)] pub const is_inf = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    comptime @assert(@typeInfo(T) == .float);
+
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+    const remove_sign = ~@as(TBits, 0) >> 1;
+    return @bitCast(TBits, x) & remove_sign == @bitCast(TBits, math.inf(T));
+};
+
+test "is_inf" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // @expect(!is_inf(@as(T, 0.0)));
+        // @expect(!is_inf(@as(T, -0.0)));
+        @expect(is_inf(math.inf(T)));
+        @expect(is_inf(-math.inf(T)));
+        @expect(!is_inf(math.nan(T)));
+        @expect(!is_inf(-math.nan(T)));
+    }
+}
+
+/// Returns whether x is an infinity with a positive sign.
+@[inline(.always)] pub const is_positive_inf = fn(x: auto): bool {
+    return x == math.inf(@TypeOf(x));
+};
+
+test "is_positive_inf" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // @expect(!is_positive_inf(@as(T, 0.0)));
+        // @expect(!is_positive_inf(@as(T, -0.0)));
+        @expect(is_positive_inf(math.inf(T)));
+        @expect(!is_positive_inf(-math.inf(T)));
+        @expect(!is_positive_inf(math.nan(T)));
+        @expect(!is_positive_inf(-math.nan(T)));
+    }
+}
+
+/// Returns whether x is an infinity with a negative sign.
+@[inline(.always)] pub const is_negative_inf = fn(x: auto): bool {
+    return x == -math.inf(@TypeOf(x));
+};
+
+test "is_negative_inf" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // @expect(!is_negative_inf(@as(T, 0.0)));
+        // @expect(!is_negative_inf(@as(T, -0.0)));
+        @expect(!is_negative_inf(math.inf(T)));
+        @expect(is_negative_inf(-math.inf(T)));
+        @expect(!is_negative_inf(math.nan(T)));
+        @expect(!is_negative_inf(-math.nan(T)));
+    }
+}

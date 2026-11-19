@@ -1,0 +1,49 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/math/iszero.zig
+//! TODO(tcs) #419: Commented out expectations below fail with @as trying to convert the literal to the `type` type
+import std;
+
+const math = std.math;
+
+/// Returns whether x is positive zero.
+@[inline(.always)] pub const is_positive_zero = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    comptime @assert(@typeInfo(T) == .float);
+
+    const bit_count = @typeInfo(T).float.bits;
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = bit_count });
+    return @bitCast(TBits, x) == @as(TBits, 0);
+};
+
+test "is_positive_zero" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // @expect(is_positive_zero(@as(T, 0.0)));
+        // @expect(!is_positive_zero(@as(T, -0.0)));
+        @expect(!is_positive_zero(math.float_min(T)));
+        @expect(!is_positive_zero(math.float_max(T)));
+        @expect(!is_positive_zero(math.inf(T)));
+        @expect(!is_positive_zero(-math.inf(T)));
+    }
+}
+
+/// Returns whether x is negative zero.
+@[inline(.always)] pub const is_negative_zero = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    comptime @assert(@typeInfo(T) == .float);
+
+    const bit_count = @typeInfo(T).float.bits;
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = bit_count });
+    return @bitCast(TBits, x) == @as(TBits, 1) << (bit_count - 1);
+};
+
+test "is_negative_zero" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        // @expect(is_negative_zero(@as(T, -0.0)));
+        // @expect(!is_negative_zero(@as(T, 0.0)));
+        @expect(!is_negative_zero(math.float_min(T)));
+        @expect(!is_negative_zero(math.float_max(T)));
+        @expect(!is_negative_zero(math.inf(T)));
+        @expect(!is_negative_zero(-math.inf(T)));
+    }
+}

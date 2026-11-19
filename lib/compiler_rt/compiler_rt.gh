@@ -10,6 +10,7 @@ import "mulf3.gh" as _;
 import "extendf.gh" as _;
 import "wide_int.gh" as _;
 import "truncf.gh" as _;
+import "floor_ceil.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -73,7 +74,9 @@ pub const @"f80" = match comptime (@targetArch()) {
     _ => u80,
 };
 
-@cfg (os == .windows and abi == .msvc and !testing) {
+pub const is_windows_msvc = @cfgValue(os == .windows and abi == .msvc);
+
+@cfg (is_windows_msvc and !testing) {
     /// MSVC's linker looks for this symbol in any object that uses floating point
     export let mut _fltused: c_int = 1;
 }
@@ -164,4 +167,5 @@ test {
     import "extendf.gh";
     import "truncf.gh";
     import "wide_int.gh";
+    import "floor_ceil.gh";
 }

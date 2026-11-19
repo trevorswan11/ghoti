@@ -45,6 +45,25 @@ test {
     import "sqrt.gh";
 }
 
+import "isinf.gh" as isinf;
+
+pub const is_inf = isinf.is_inf;
+pub const is_positive_inf = isinf.is_positive_inf;
+pub const is_negative_inf = isinf.is_negative_inf;
+
+test {
+    import "isinf.gh";
+}
+
+import "iszero.gh" as iszero;
+
+pub const is_positive_zero = iszero.is_positive_zero;
+pub const is_negative_zero = iszero.is_negative_zero;
+
+test {
+    import "iszero.gh";
+}
+
 /// Asserts that `int` is strictly positive
 pub const is_power_of_two = fn(int: auto): bool {
     @assert(int > 0);
