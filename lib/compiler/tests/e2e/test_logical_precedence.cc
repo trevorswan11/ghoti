@@ -48,4 +48,31 @@ TEST_CASE("`and` binds tighter than `or`") {
     }
 }
 
+TEST_CASE("shifts and bitwise operators follow C's precedence") {
+    // Regression for #421: shifts used to share the precedence of `*`
+    const auto* program{R"(
+        const check = fn(u: u32, bits: u32): i32 {
+            // u >> (bits - 1)
+            if (u >> bits - 1 != 1) { return 1; }
+            // (1 << 3) - 1 needs its parentheses, 1 << 3 - 1 is 1 << 2
+            if ((1 << 3) - 1 != 7 or 1 << 3 - 1 != 4) { return 2; }
+            // u & (bits + 1), not (u & bits) + 1
+            if (u & bits + 1 != 0) { return 3; }
+            // 1 | (6 & 3) and 1 | (2 ^ 3)
+            if (1 | 6 & 3 != 3 or 1 | 2 ^ 3 != 1) { return 4; }
+            // (u >> 31) & 1 binds the shift first
+            if (u >> 31 & 1 != 1) { return 5; }
+            // comparisons stay looser than `&`
+            if (!(u & 1 == 0)) { return 6; }
+            return 0;
+        };
+        const FOLDED = check(0x8000_0000, 32);
+        pub const main = fn(): i32 {
+            if (FOLDED != 0) { return 10 + FOLDED; }
+            return check(0x8000_0000, 32);
+        };
+    )"};
+    CHECK(helpers::compile_and_run(program) == 0);
+}
+
 } // namespace ghoti::tests
