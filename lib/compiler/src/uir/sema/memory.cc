@@ -35,7 +35,7 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
     stdx::option<gs::type&> type;
     if (type_ref) { type.emplace(*TRY(resolve_type(*type_ref, src))); }
 
-    // Mutable state at compile time lives in a comptime allocation (§7)
+    // Mutable state at compile time lives in a comptime allocation
     if (is_comptime_alloc || is_comptime()) {
         return comp_.new_alloc({
             .type                = type,

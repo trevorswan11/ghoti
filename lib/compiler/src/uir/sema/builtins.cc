@@ -1,5 +1,5 @@
 #include <string>
-#include <utility>
+#include <string_view>
 
 #include <fmt/format.h>
 #include <gsl/span>
@@ -17,6 +17,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 

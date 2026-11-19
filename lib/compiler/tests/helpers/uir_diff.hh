@@ -38,8 +38,6 @@ enum class uir_diff_status : u8 {
     REJECTED,
     // An immutable `let` initialized by a call, which the old emitter folds and UIR doesn't
     FOLD_PLACEMENT,
-    // A difference the UIR plan decides, such as Q6 rejecting a comptime store under a runtime
-    // condition that the old pipeline accepted
     SEMANTICS_CHANGE,
     GIR_DIFF,
     ASTGEN_FAILED,

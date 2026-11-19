@@ -26,7 +26,6 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "support/big_int.hh"
@@ -88,14 +87,14 @@ struct comptime_place {
 using operand = stdx::
     variant<ip::index, gir::value, function_ref, place, merge_ref, global_ref, comptime_place>;
 
-// Mutable compile-time state, which only stores change (§7)
+// Mutable compile-time state, which only stores change
 struct comptime_alloc {
     // None until an untyped allocation's first store gives it one
     stdx::option<gs::type&> type;
     stdx::option<ip::index> value;
     // The analysis that owns it, which alone may store to it
     u32 frame;
-    // The runtime branches around its declaration, which a store may not add to (Q6)
+    // The runtime branches around its declaration, which a store may not add to
     u32  runtime_depth;
     bool keeps_comptime_type;
 };
@@ -110,10 +109,10 @@ struct comptime_frame {
     bool impure{false};
 };
 
-// A memoized compile-time call: the function and its interned arguments (Q7)
+// A memoized compile-time call
 struct memo_key {
-    const instance*        fn;
-    std::vector<ip::index> args;
+    gsl::not_null<const instance*> fn;
+    std::vector<ip::index>         args;
 
     [[nodiscard]] auto operator==(const memo_key&) const noexcept -> bool = default;
 };
@@ -151,7 +150,7 @@ struct instance {
     bool comptime_only{false};
 };
 
-// The quotas every compile-time loop and call is bounded by (§9 rule 5)
+// The quotas every compile-time loop and call is bounded by
 struct eval_limits {
     usize recursion;
     usize unroll;
@@ -202,13 +201,13 @@ class compilation {
     [[nodiscard]] auto own_symbol(const unit& u, decl_id decl, std::string symbol)
         -> const std::string&;
 
-    // Runs `fn` at compile time on interned arguments, memoized when the call is pure (Q7)
+    // Runs `fn` at compile time on interned arguments, memoized when the call is pure
     [[nodiscard]] auto
     call_comptime(const unit& caller, const source& src, instance& fn, std::vector<ip::index> args)
         -> result<operand>;
     [[nodiscard]] auto limits() noexcept -> eval_limits& { return limits_; }
 
-    // Comptime memory (§7)
+    // Comptime memory
     [[nodiscard]] auto new_alloc(const comptime_alloc& alloc) -> comptime_place;
     [[nodiscard]] auto alloc_at(comptime_place p) -> comptime_alloc& { return allocs_[p.alloc]; }
     [[nodiscard]] auto alloc_count() const noexcept -> u32 {
@@ -458,7 +457,7 @@ class analyzer {
         ++comptime_depth_;
         return gsl::finally([this] { --comptime_depth_; });
     }
-    // Counts a runtime branch around what follows until the guard ends (Q6)
+    // Counts a runtime branch around what follows until the guard ends
     [[nodiscard]] auto runtime_branch() {
         ++runtime_depth_;
         return gsl::finally([this] { --runtime_depth_; });
@@ -538,7 +537,7 @@ class analyzer {
     std::vector<pending_merge>                     merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
-    // The runtime branches enclosing the instruction being analyzed (Q6)
+    // The runtime branches enclosing the instruction being analyzed
     u32                frame_;
     u32                runtime_depth_{0};
     u32                alloc_base_;

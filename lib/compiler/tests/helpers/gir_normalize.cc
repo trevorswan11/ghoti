@@ -342,7 +342,8 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
 // A load nothing reads, and then a slot only ever stored to, as an expression statement's unused
 // result slot leaves behind
 auto drop_dead_slots(function_dump& fn) -> void {
-    for (bool changed{true}; changed;) {
+    bool changed{true};
+    while (changed) {
         changed = false;
         ankerl::unordered_dense::map<std::string, usize> uses;
         ankerl::unordered_dense::map<std::string, usize> stored_into;

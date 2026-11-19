@@ -2,6 +2,7 @@
 #include <string>
 #include <utility>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -12,6 +13,7 @@
 
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/builtins.hh"
@@ -48,10 +50,12 @@ auto compilation::run() -> outcome {
     analyze_roots();
     if (!stopped_at_) { drain_queue(); }
 
-    outcome out{.gir         = stdx::none,
-                .diagnostics = gs::diagnostics{},
-                .stopped_at  = std::move(stopped_at_),
-                .root_values = root_values()};
+    outcome out{
+        .gir         = stdx::none,
+        .diagnostics = gs::diagnostics{},
+        .stopped_at  = std::move(stopped_at_),
+        .root_values = root_values(),
+    };
     if (out.stopped_at) { return out; }
     if (!diagnostics_.empty()) {
         out.diagnostics = std::move(diagnostics_);

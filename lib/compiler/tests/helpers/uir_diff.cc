@@ -27,10 +27,12 @@
 #include "compiler/module/source_loader.hh"
 #include "compiler/sema/analyzer.hh"
 #include "compiler/sema/cfg_evaluator.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "helpers/gir_normalize.hh"
+#include "support/diagnostic.hh"
 #include "support/env.hh"
 
 namespace ghoti::tests::helpers {
@@ -83,7 +85,7 @@ namespace {
     return out.str();
 }
 
-// Every error is one the plan decided UIR reports where the old pipeline didn't (Q6)
+// Every error is one the plan decided UIR reports where the old pipeline didn't
 [[nodiscard]] auto only_decided_rejections(const sema::diagnostics& diags) -> bool {
     return std::ranges::all_of(diags, [](const sema::diagnostic& d) {
         return d.get_error() == sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE &&
@@ -133,14 +135,14 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
 
 auto uir_diff_status_name(uir_diff_status status) noexcept -> std::string_view {
     switch (status) {
-    case uir_diff_status::MATCH:           return "match";
-    case uir_diff_status::UNSUPPORTED:     return "unsupported";
-    case uir_diff_status::REJECTED:        return "rejected";
+    case uir_diff_status::MATCH:            return "match";
+    case uir_diff_status::UNSUPPORTED:      return "unsupported";
+    case uir_diff_status::REJECTED:         return "rejected";
     case uir_diff_status::FOLD_PLACEMENT:   return "fold-placement";
     case uir_diff_status::SEMANTICS_CHANGE: return "semantics-change";
-    case uir_diff_status::GIR_DIFF:        return "gir-diff";
-    case uir_diff_status::ASTGEN_FAILED:   return "astgen-failed";
-    case uir_diff_status::LEGACY_REJECTED: return "legacy-rejected";
+    case uir_diff_status::GIR_DIFF:         return "gir-diff";
+    case uir_diff_status::ASTGEN_FAILED:    return "astgen-failed";
+    case uir_diff_status::LEGACY_REJECTED:  return "legacy-rejected";
     }
     return "unknown";
 }

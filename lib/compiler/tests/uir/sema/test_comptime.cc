@@ -1,6 +1,3 @@
-// `gir/test_const_eval.cc`, ported to UIR Sema, plus the comptime rules UIR alone has.
-// A case whose constructs arrive in a later phase checks that UIR Sema stops on it for now
-
 #include <initializer_list>
 #include <sstream>
 #include <string>
@@ -8,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -17,10 +15,13 @@
 #include <stdx/types.hh>
 
 #include "compiler/gir/dumper.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/uir/sema/sema.hh"
 #include "helpers/uir_diff.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
@@ -473,8 +474,6 @@ TEST_CASE("`unroll for` iterating over `[]u8` parameter", "[uir]") {
 }
 
 TEST_CASE("`loop` infinite loop expression in `const_eval`", "[uir]") {
-    // Called at compile time the loop runs, but its runtime body stores to the comptime `i` inside
-    // a runtime loop, which Q6 rejects
     const auto run{rejected(R"(
         const find_val = fn(): i32 {
             comptime let mut i = 0;
@@ -535,9 +534,7 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir
     check_later_phase("comptime let mut ref_log: i32 = 0;", "comptime declaration");
 }
 
-// Rules UIR Sema has that `const_eval` didn't, or had differently
-
-TEST_CASE("Q6: a comptime store under a runtime condition is rejected", "[uir]") {
+TEST_CASE("A comptime store under a runtime condition is rejected", "[uir]") {
     const auto run{rejected(R"(
         const f = fn(flag: bool): usize {
             comptime let mut n: usize = 0;
@@ -562,8 +559,7 @@ TEST_CASE("A comptime store of a runtime value is rejected", "[uir]") {
     CHECK(run.codes() == std::vector{error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE});
 }
 
-TEST_CASE("Q7: a pure comptime call is memoized", "[uir]") {
-    // Unmemoized, this would make over 300 million calls
+TEST_CASE("A pure comptime call is memoized", "[uir]") {
     const auto run{accepted(R"(
         const fib = fn(n: u64): u64 {
             if (n < 2) { return n; }
@@ -659,7 +655,7 @@ TEST_CASE("A labeled comptime block yields its break value", "[uir]") {
     CHECK(run.gir().contains("ret i32 42"));
 }
 
-TEST_CASE("An immutable `let` is comptime-known on demand (§14.1)", "[uir]") {
+TEST_CASE("An immutable `let` is comptime-known on demand", "[uir]") {
     SECTION("A comptime read runs its initializer at compile time") {
         const auto run{accepted(R"(
             const sq = fn(x: i32): i32 { return x * x; };

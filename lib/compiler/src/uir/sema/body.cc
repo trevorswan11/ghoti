@@ -124,7 +124,6 @@ auto analyzer::analyze_function() -> result<void> {
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
     for (const auto inst : body) {
-        // A string literal is only read in place by the builtins that take one, until slices
         if (mod().tag_of(inst) == tag::str) { continue; }
         if (mod().tag_of(inst) == tag::yield) {
             const auto& d{mod().data_of(inst)};
@@ -149,11 +148,11 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     const auto t{mod().tag_of(inst)};
     set_location(src_of(inst));
     switch (t) {
-    case tag::int_value:   return analyze_int_value(inst);
-    case tag::int_lit:     return analyze_int_lit(inst);
-    case tag::float_lit:   return analyze_float_lit(inst);
-    case tag::int_type:    return analyze_int_type(inst);
-    case tag::func:        return analyze_func(inst);
+    case tag::int_value:       return analyze_int_value(inst);
+    case tag::int_lit:         return analyze_int_lit(inst);
+    case tag::float_lit:       return analyze_float_lit(inst);
+    case tag::int_type:        return analyze_int_type(inst);
+    case tag::func:            return analyze_func(inst);
 
     case tag::add:
     case tag::sub:
@@ -178,24 +177,24 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::cmp_lt:
     case tag::cmp_le:
     case tag::cmp_gt:
-    case tag::cmp_ge:      return analyze_binary(inst, t);
-    case tag::bool_and:    return analyze_bool_op(inst, true);
-    case tag::bool_or:     return analyze_bool_op(inst, false);
+    case tag::cmp_ge:          return analyze_binary(inst, t);
+    case tag::bool_and:        return analyze_bool_op(inst, true);
+    case tag::bool_or:         return analyze_bool_op(inst, false);
     case tag::neg:
     case tag::neg_wrap:
     case tag::pos:
     case tag::bool_not:
-    case tag::bit_not:     return analyze_unary(inst, t);
+    case tag::bit_not:         return analyze_unary(inst, t);
 
-    case tag::decl_val:    return analyze_decl_val(inst, false);
-    case tag::decl_ref:    return analyze_decl_val(inst, true);
+    case tag::decl_val:        return analyze_decl_val(inst, false);
+    case tag::decl_ref:        return analyze_decl_val(inst, true);
     case tag::alloc_mut:       return analyze_alloc_mut(inst, false);
     case tag::alloc_comptime:  return analyze_alloc_mut(inst, true);
-    case tag::let_value:   return analyze_let_value(inst);
-    case tag::const_local: return analyze_const_local(inst);
-    case tag::store:       return analyze_store(inst);
-    case tag::load:        return analyze_load(inst);
-    case tag::discard:     return analyze_discard(inst);
+    case tag::let_value:       return analyze_let_value(inst);
+    case tag::const_local:     return analyze_const_local(inst);
+    case tag::store:           return analyze_store(inst);
+    case tag::load:            return analyze_load(inst);
+    case tag::discard:         return analyze_discard(inst);
 
     case tag::block:           return analyze_block(inst);
     case tag::block_comptime:  return analyze_block_comptime(inst);
@@ -203,14 +202,14 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::eval_branch:     return analyze_eval_branch(inst);
     case tag::unreachable:     return analyze_unreachable(inst);
     case tag::builtin:         return analyze_builtin(inst);
-    case tag::loop:        return analyze_loop(inst);
-    case tag::condbr:      return analyze_condbr(inst);
-    case tag::break_to:    return analyze_break(inst);
-    case tag::repeat:      return analyze_repeat(inst);
-    case tag::ret:         return analyze_ret(inst);
-    case tag::call:        return analyze_call(inst);
+    case tag::loop:            return analyze_loop(inst);
+    case tag::condbr:          return analyze_condbr(inst);
+    case tag::break_to:        return analyze_break(inst);
+    case tag::repeat:          return analyze_repeat(inst);
+    case tag::ret:             return analyze_ret(inst);
+    case tag::call:            return analyze_call(inst);
 
-    default:               break;
+    default:                   break;
     }
     return comp_.unsupported(u_, src_of(inst), fmt::format("the `{}` instruction", tag_name(t)));
 }

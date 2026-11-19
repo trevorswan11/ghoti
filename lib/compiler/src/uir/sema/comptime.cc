@@ -1,5 +1,4 @@
 #include <bit>
-#include <cstdint>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -33,7 +32,7 @@ constexpr usize MAX_CALL_NOTES{8};
 } // namespace
 
 auto memo_key_hash::operator()(const memo_key& key) const noexcept -> u64 {
-    stdx::hasher h{static_cast<u64>(std::bit_cast<std::uintptr_t>(key.fn))};
+    stdx::hasher h{static_cast<u64>(std::bit_cast<uptr>(key.fn))};
     for (const auto arg : key.args) { h.combine(std::to_underlying(arg)); }
     return h.finalize();
 }
@@ -55,8 +54,12 @@ auto compilation::call_comptime(const unit&            caller,
                       "Compile-time function recursion limit exceeded");
     }
 
-    calls_.emplace_back<comptime_frame>(
-        {.caller = &caller, .call_src = src, .callee = fn.symbol, .alloc_base = alloc_count()});
+    calls_.emplace_back<comptime_frame>({
+        .caller     = &caller,
+        .call_src   = src,
+        .callee     = fn.symbol,
+        .alloc_base = alloc_count(),
+    });
     const auto saved{limits_};
     auto       value{[&] {
         analyzer a{*this, *fn.owner, fn};

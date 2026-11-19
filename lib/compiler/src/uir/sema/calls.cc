@@ -8,6 +8,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
@@ -40,7 +41,7 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
             gs::error::ARITY_MISMATCH,
             fmt::format("Expected {} arguments, found {}", target.params.size(), args.size()));
     }
-    // A call returning `type` always runs at compile time (§5.5)
+    // A call returning `type` always runs at compile time
     if (is_comptime()) { return call_at_comptime(target, args, src); }
     if (target.comptime_only) {
         auto value{[&] {

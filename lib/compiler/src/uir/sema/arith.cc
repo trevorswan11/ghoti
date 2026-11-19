@@ -24,7 +24,6 @@ using gir::instruction_kind;
 
 namespace {
 
-// A comptime_int grows as needed, so only a runaway result such as `1 << (1 << 40)` is refused
 constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
 
 [[nodiscard]] constexpr auto binary_info_of(tag t) noexcept -> binary_info {
@@ -436,7 +435,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
             const auto value{int_of(v)};
             if (!value) { break; }
             if (type.get_kind() == gs::type_kind::COMPTIME_INT) {
-                // An untyped `~x` is `-x - 1`, its two's-complement complement at any width
+                // An untyped `~x` is its two's-complement complement at any width (`-x - 1`)
                 const big_int one{i128{1}};
                 return operand{intern_int(pool, negate ? -*value : -*value - one, type)};
             }
