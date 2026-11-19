@@ -15,26 +15,26 @@ const math = std.math;
 const symbol = compiler_rt.symbol;
 
 comptime {
-    symbol(&__floorh, "__floorh");
-    symbol(&floorf, "floorf");
-    symbol(&floor, "floor");
-    symbol(&__floorx, "__floorx");
-    symbol(&floorq, "floorf128");
-    symbol(&floorl, "floorl");
+    symbol(__floorh, "__floorh");
+    symbol(floorf, "floorf");
+    symbol(floor, "floor");
+    symbol(__floorx, "__floorx");
+    symbol(floorq, "floorf128");
+    symbol(floorl, "floorl");
 
     @cfg (compiler_rt.is_windows_msvc) {
-        symbol(&floorf64x, "floorf64x");
+        symbol(floorf64x, "floorf64x");
     }
 
-    symbol(&__ceilh, "__ceilh");
-    symbol(&ceilf, "ceilf");
-    symbol(&ceil, "ceil");
-    symbol(&__ceilx, "__ceilx");
-    symbol(&ceilq, "ceilf128");
-    symbol(&ceill, "ceill");
+    symbol(__ceilh, "__ceilh");
+    symbol(ceilf, "ceilf");
+    symbol(ceil, "ceil");
+    symbol(__ceilx, "__ceilx");
+    symbol(ceilq, "ceilf128");
+    symbol(ceill, "ceill");
 
     @cfg (compiler_rt.is_windows_msvc) {
-        symbol(&ceilf64x, "ceilf64x");
+        symbol(ceilf64x, "ceilf64x");
     }
 }
 
@@ -122,6 +122,7 @@ test "floor_f80" {
     @expect(math.is_positive_inf(floor_f80(math.inf(f80))));
     @expect(math.is_negative_inf(floor_f80(-math.inf(f80))));
     @expect(math.is_nan(floor_f80(math.nan(f80))));
+    @expect(math.is_nan(floor_f80(@bitCast(@as(u80, 0x3251_1dac0c5cd99e87ca)))));
 }
 
 const floorq = fn(x: f128) callconv(.c): f128 {
@@ -237,6 +238,7 @@ test "ceil_f80" {
     @expect(math.is_positive_inf(ceil_f80(math.inf(f80))));
     @expect(math.is_negative_inf(ceil_f80(-math.inf(f80))));
     @expect(math.is_nan(ceil_f80(math.nan(f80))));
+    @expect(math.is_nan(ceil_f80(@bitCast(@as(u80, 0x3251_1dac0c5cd99e87ca)))));
 }
 
 const ceilq = fn(x: f128) callconv(.c): f128 {
@@ -268,7 +270,6 @@ const ceill = fn(x: c_longdouble) callconv(.c): c_longdouble {
     };
 };
 
-// TODO(tcs) #421: Remove parenthesis from shifts
 @[inline(.always)]
 const floor_ceil = fn(comptime T: type, comptime op: enum { floor, ceil }, x: T): T {
     const C = 1.0 / math.float_eps(T);
@@ -277,7 +278,7 @@ const floor_ceil = fn(comptime T: type, comptime op: enum { floor, ceil }, x: T)
     const exponent = math.float_exponent_bits(T);
 
     const mask = (1 << exponent) - 1;
-    const bias = (1 << (exponent - 1)) - 1;
+    const bias = (1 << exponent - 1) - 1;
 
     const bits = @bitSizeOf(T);
     const U = @Int(.{ .signedness = .unsigned, .bits = bits });
@@ -285,24 +286,28 @@ const floor_ceil = fn(comptime T: type, comptime op: enum { floor, ceil }, x: T)
     let mut u: U = @bitCast(x);
     match comptime (T) {
         f16, f32 => {
-            let e: SU = @intCast((u >> mantissa) & mask) - bias;
+            let e: SU = @intCast(u >> mantissa & mask) - bias;
             if (e >= mantissa) return x;
 
             if (e >= 0) {
                 let m = (@as(U, 1) << @intCast(mantissa - e)) - 1;
                 if (u & m == 0) return x;
-                if (u >> (bits - 1) == @intFromBool(op == .floor)) u += m;
+                if (u >> bits - 1 == @intFromBool(op == .floor)) u += m;
                 return @bitCast(u & ~m);
             } else return match comptime (op) {
-                .floor => if (u >> (bits - 1) == 0) 0.0 else if (u << 1 != 0) -1.0 else x,
-                .ceil => if (u >> (bits - 1) != 0) -0.0 else if (u << 1 != 0) 1.0 else x,
+                .floor => if (u >> bits - 1 == 0) 0.0 else if (u << 1 != 0) -1.0 else x,
+                .ceil => if (u >> bits - 1 != 0) -0.0 else if (u << 1 != 0) 1.0 else x,
             };
         },
         f64, f80, f128 => {
-            let e = (u >> mantissa) & mask;
+            let e = u >> mantissa & mask;
+            // An f80 whose integer bit disagrees with a nonzero exponent is an invalid operand
+            if comptime (T == f80) {
+                if (e != 0 and u >> mantissa - 1 & 1 == 0) return math.nan(T);
+            }
             if (e >= bias + fractional or x == 0) return x;
 
-            let positive = u >> (bits - 1) == 0;
+            let positive = u >> bits - 1 == 0;
             let y: T = if (positive) x + C - C - x else x - C + C - x;
 
             if (e <= bias - 1) return match comptime (op) {
