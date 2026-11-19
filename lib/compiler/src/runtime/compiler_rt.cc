@@ -162,9 +162,8 @@ auto locate_compiler_rt(const codegen::compiler_rt_options& options)
         if (std::filesystem::is_regular_file(*options.root, ec)) { return *options.root; }
         return stdx::none;
     }
-    if (const auto env{get_env("GHOTI_COMPILER_RT")}) {
-        std::filesystem::path path{*env};
-        if (std::filesystem::is_regular_file(path, ec)) { return path; }
+    if (const auto path{get_env_path("GHOTI_COMPILER_RT")}) {
+        if (std::filesystem::is_regular_file(*path, ec)) { return path; }
         return stdx::none;
     }
     return mod::find_lib_path("compiler_rt/compiler_rt.gh");

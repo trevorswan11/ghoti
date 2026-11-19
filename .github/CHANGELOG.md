@@ -1070,3 +1070,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `ghoti analyze <file>` checks a program through semantic analysis without generating code, and writes the `--emit-gir` / `--emit-uir` dumps if asked
     - `--test` analyzes the file as the root of a test build, without running the tests
     - Takes the analysis options `build-*` does (`-m`, `--target`, `--mode`, `--deprecated`, `--error-limit`), but no output, linking, or LLVM flags
+- Fixed `GHOTI_STDLIB`, `GHOTI_START`, and `GHOTI_COMPILER_RT` being ignored when their value is quoted, as cmd.exe's `set VAR="..."` leaves it, which silently fell back to the `lib` next to the executable (#420)
+    - Relative values are resolved against the working directory
