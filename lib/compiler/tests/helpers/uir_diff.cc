@@ -88,8 +88,12 @@ namespace {
 // Every error is one the plan decided UIR reports where the old pipeline didn't
 [[nodiscard]] auto only_decided_rejections(const sema::diagnostics& diags) -> bool {
     return std::ranges::all_of(diags, [](const sema::diagnostic& d) {
-        return d.get_error() == sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE &&
-               d.get_message() == "`comptime let mut` assignment depends on a runtime condition";
+        const auto message{d.get_message().value_or(std::string{})};
+        return (d.get_error() == sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE &&
+                message == "`comptime let mut` assignment depends on a runtime condition") ||
+               (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
+                message == "Cannot take a mutable address of an element of a non-mutable array "
+                           "or slice");
     });
 }
 
@@ -112,7 +116,7 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
     return modules;
 }
 
-// The old pipeline's normalized GIR, or none when it rejects the program
+// The old pipeline's GIR dump, or none when it rejects the program
 [[nodiscard]] auto legacy_gir(mod::source_loader&          loader,
                               const std::filesystem::path& root,
                               library_list                 libraries,
@@ -128,7 +132,7 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
         modules->any_errored() || has_errors(analyzer.get_ctx().diags)) {
         return stdx::none;
     }
-    return normalize_gir(dump_with_flags(*gir_mod));
+    return dump_with_flags(*gir_mod);
 }
 
 } // namespace
@@ -187,13 +191,15 @@ auto diff_pipelines(mod::source_loader&          loader,
         return {.status = status, .detail = fmt::format("{}", out.diagnostics)};
     }
 
+    // Normalizing is the costly part, so it waits until both pipelines produced GIR
+    const auto legacy_text{normalize_gir(*legacy)};
     const auto uir_text{normalize_gir(dump_with_flags(*out.gir))};
-    if (uir_text == *legacy) { return {.status = uir_diff_status::MATCH}; }
-    if (has_folded_let(lowered) || has_folded_call(uir_text, *legacy)) {
+    if (uir_text == legacy_text) { return {.status = uir_diff_status::MATCH}; }
+    if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
         return {.status = uir_diff_status::FOLD_PLACEMENT};
     }
     return {.status = uir_diff_status::GIR_DIFF,
-            .detail = fmt::format("--- old\n{}--- uir\n{}", *legacy, uir_text)};
+            .detail = fmt::format("--- old\n{}--- uir\n{}", legacy_text, uir_text)};
 }
 
 auto run_uir_sema(std::string_view source, const pipeline_settings& settings)

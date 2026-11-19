@@ -1,6 +1,7 @@
 #include "helpers/gir_normalize.hh"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <string>
 #include <string_view>
@@ -91,6 +92,16 @@ template <typename F>
             out += text[i++];
         }
     }
+    return out;
+}
+
+// The temporaries `text` mentions, in the order it mentions them
+[[nodiscard]] auto mentioned_temps(std::string_view text) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    DISCARD(rewrite_temps(text, [&](std::string_view t) -> std::string {
+        out.emplace_back(t);
+        return std::string{t};
+    }));
     return out;
 }
 
@@ -239,6 +250,19 @@ struct fold_input {
         return std::string{*truth ? "true" : "false"};
     }
 
+    // An untyped operation the old emitter left at runtime computes exactly
+    if (in.type == "comptime_int" && ops.size() == 2) {
+        const auto     l{parse_int(ops[0])};
+        const auto     r{parse_int(ops[1])};
+        constexpr i128 LIMIT{i128{1} << 62};
+        if (!l || !r || *l > LIMIT || *l < -LIMIT || *r > LIMIT || *r < -LIMIT) {
+            return stdx::none;
+        }
+        if (in.kind == "add") { return format_int(*l + *r); }
+        if (in.kind == "sub") { return format_int(*l - *r); }
+        if (in.kind == "mul") { return format_int(*l * *r); }
+        return stdx::none;
+    }
     const auto shape{int_shape_of(in.type)};
     if (!shape) { return stdx::none; }
     if (ops.size() == 1) {
@@ -339,17 +363,39 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
     }
 }
 
-// A load nothing reads, and then a slot only ever stored to, as an expression statement's unused
-// result slot leaves behind
+// An instruction that only computes its result, which nothing needs once nothing reads it. A
+// checked operation can still trap, but the pipelines differ only in whether they compute it
+[[nodiscard]] auto is_pure(std::string_view body) -> bool {
+    constexpr std::array prefixes{
+        "load ",        "get_element_ptr ",
+        "global_addr ", "address_of ",
+        "not ",         "eq ",
+        "ne ",          "lt ",
+        "le ",          "gt ",
+        "ge ",          "and ",
+        "or ",          "xor ",
+        "widen_cast ",  "bit_cast ",
+        "add ",         "sub ",
+        "mul ",         "shl ",
+        "shr ",
+    };
+    return std::ranges::any_of(prefixes, [&](std::string_view p) { return body.starts_with(p); });
+}
+
+// A load, address or computation nothing reads, and then a slot only ever stored to, as an
+// expression statement's unused result slot leaves behind
 auto drop_dead_slots(function_dump& fn) -> void {
     bool changed{true};
     while (changed) {
         changed = false;
         ankerl::unordered_dense::map<std::string, usize> uses;
         ankerl::unordered_dense::map<std::string, usize> stored_into;
+        // Only a slot's own stores are dead with it, not stores through an address into memory
+        ankerl::unordered_dense::set<std::string> slots;
         for (const auto& seg : fn.segments) {
             for (const auto& inst : seg.instructions) {
                 const auto [def, body]{split_definition(inst)};
+                if (!def.empty() && body.starts_with("alloca ")) { slots.emplace(def); }
                 DISCARD(rewrite_temps(body, [&](std::string_view t) -> std::string {
                     ++uses[std::string{t}];
                     return std::string{t};
@@ -362,10 +408,61 @@ auto drop_dead_slots(function_dump& fn) -> void {
                 }
             }
         }
+        // Each slot and the field addresses computed from it, by the slot, and the slots nothing
+        // reads, whose address only ever names where a store writes
+        ankerl::unordered_dense::map<std::string, std::string> roots;
+        for (const auto& seg : fn.segments) {
+            for (const auto& inst : seg.instructions) {
+                const auto [def, body]{split_definition(inst)};
+                if (def.empty()) { continue; }
+                if (body.starts_with("alloca ")) {
+                    roots.insert_or_assign(std::string{def}, std::string{def});
+                } else if (body.starts_with("get_element_ptr ")) {
+                    const auto temps{mentioned_temps(body)};
+                    const auto base{temps.empty() ? roots.end() : roots.find(temps.front())};
+                    if (base != roots.end()) {
+                        roots.insert_or_assign(std::string{def}, base->second);
+                    }
+                }
+            }
+        }
+        ankerl::unordered_dense::set<std::string> read_roots;
+        for (const auto& seg : fn.segments) {
+            for (const auto& inst : seg.instructions) {
+                const auto body{split_definition(inst).second};
+                if (body.starts_with("alloca ")) { continue; }
+                auto temps{mentioned_temps(body)};
+                if (body.starts_with("get_element_ptr ") && !temps.empty()) {
+                    temps.erase(temps.begin());
+                } else if (body.starts_with("store ")) {
+                    const auto args{split_operands(stdx::string::substr(body, 6))};
+                    if (args.size() == 2) { std::erase(temps, std::string{args[1]}); }
+                }
+                for (const auto& temp : temps) {
+                    if (const auto found{roots.find(temp)}; found != roots.end()) {
+                        read_roots.emplace(found->second);
+                    }
+                }
+            }
+        }
+        ankerl::unordered_dense::set<std::string> dead_roots;
+        for (const auto& [temp, root] : roots) {
+            if (temp == root && !read_roots.contains(root)) { dead_roots.emplace(root); }
+        }
         const auto is_dead{[&](std::string_view inst) {
             const auto [def, body]{split_definition(inst)};
-            if (!def.empty() && body.starts_with("load ") && !uses.contains(std::string{def})) {
-                return true;
+            // A load, address or plain computation nothing reads computes nothing anyone sees
+            if (!def.empty() && is_pure(body) && !uses.contains(std::string{def})) { return true; }
+            // So does a temporary only ever written, with every write into it
+            if (!def.empty() && dead_roots.contains(std::string{def})) { return true; }
+            if (body.starts_with("get_element_ptr ")) {
+                const auto temps{mentioned_temps(body)};
+                if (!temps.empty() && dead_roots.contains(temps.front())) { return true; }
+            }
+            if (body.starts_with("store ")) {
+                const auto args{split_operands(stdx::string::substr(body, 6))};
+                const auto root{args.size() == 2 ? roots.find(std::string{args[1]}) : roots.end()};
+                if (root != roots.end() && dead_roots.contains(root->second)) { return true; }
             }
             if (!def.empty() && body.starts_with("alloca ")) {
                 const auto found{uses.find(std::string{def})};
@@ -375,7 +472,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
             }
             if (body.starts_with("store ")) {
                 const auto args{split_operands(stdx::string::substr(body, 6))};
-                if (args.size() != 2 || !args[1].starts_with('%')) { return false; }
+                if (args.size() != 2 || !slots.contains(std::string{args[1]})) { return false; }
                 const auto found{uses.find(std::string{args[1]})};
                 const auto stores{stored_into.find(std::string{args[1]})};
                 return found != uses.end() && stores != stored_into.end() &&
@@ -517,6 +614,238 @@ auto fold_constants(function_dump& fn) -> void {
     }
 }
 
+// An address computation, which reads no memory and so may sit anywhere before its first use
+[[nodiscard]] auto is_address_computation(std::string_view body) -> bool {
+    return body.starts_with("get_element_ptr ") || body.starts_with("global_addr ") ||
+           body.starts_with("address_of ");
+}
+
+[[nodiscard]] auto is_terminator_text(std::string_view body) -> bool {
+    return body.starts_with("ret") || body.starts_with("goto ") || body.starts_with("cond_goto ") ||
+           body.starts_with("unreachable");
+}
+
+// Whether an instruction may write memory or leave the segment, which nothing reading memory may
+// move past
+[[nodiscard]] auto may_write(std::string_view body) -> bool {
+    return body.starts_with("store ") || body.starts_with("call ") ||
+           body.starts_with("builtin_call ") || body.starts_with("inline_asm") ||
+           body.starts_with("ret") || body.starts_with("goto ") || body.starts_with("cond_goto ") ||
+           body.starts_with("unreachable");
+}
+
+// Slots only ever loaded from and stored to, whose address no other instruction sees
+[[nodiscard]] auto private_slots(const function_dump& fn)
+    -> ankerl::unordered_dense::set<std::string> {
+    ankerl::unordered_dense::set<std::string> slots;
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (!def.empty() && body.starts_with("alloca ")) { slots.emplace(def); }
+        }
+    }
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (body.starts_with("alloca ")) { continue; }
+            if (body.starts_with("load %")) { continue; }
+            if (body.starts_with("store ")) {
+                const auto args{split_operands(stdx::string::substr(body, 6))};
+                if (args.size() == 2) { slots.erase(std::string{args[0]}); }
+                continue;
+            }
+            for (const auto& temp : mentioned_temps(body)) { slots.erase(temp); }
+        }
+    }
+    return slots;
+}
+
+// Slots whose address only reaches field addresses, loads, and store destinations, mapping the
+// slot and each field address computed from it to the slot
+[[nodiscard]] auto private_aggregates(const function_dump& fn)
+    -> ankerl::unordered_dense::map<std::string, std::string> {
+    ankerl::unordered_dense::map<std::string, std::string> root;
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (!def.empty() && body.starts_with("alloca ")) {
+                root.insert_or_assign(std::string{def}, std::string{def});
+            }
+        }
+    }
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (def.empty() || !body.starts_with("get_element_ptr ")) { continue; }
+            const auto temps{mentioned_temps(body)};
+            const auto base{temps.empty() ? root.end() : root.find(temps.front())};
+            if (base != root.end()) { root.insert_or_assign(std::string{def}, base->second); }
+        }
+    }
+    ankerl::unordered_dense::set<std::string> escaped;
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto body{split_definition(inst).second};
+            if (body.starts_with("alloca ") || body.starts_with("load %")) { continue; }
+            auto temps{mentioned_temps(body)};
+            if (body.starts_with("get_element_ptr ") && !temps.empty()) {
+                temps.erase(temps.begin());
+            } else if (body.starts_with("store ")) {
+                const auto args{split_operands(stdx::string::substr(body, 6))};
+                if (args.size() == 2) { std::erase(temps, std::string{args[1]}); }
+            }
+            for (const auto& temp : temps) {
+                if (const auto found{root.find(temp)}; found != root.end()) {
+                    escaped.emplace(found->second);
+                }
+            }
+        }
+    }
+    std::erase_if(root, [&](const auto& entry) { return escaped.contains(entry.second); });
+    return root;
+}
+
+// Places each address computation, and each load with no write before its use, just before the
+// first instruction of its segment that uses it, ordered by how that instruction lists its
+// operands. A constant store to a private slot, and any store into a field of a private
+// aggregate, waits for the slot's next use. So where a pipeline happened to compute an address,
+// read a value, or fill in a temporary doesn't show
+auto sink_address_computations(function_dump& fn) -> void {
+    const auto slots{private_slots(fn)};
+    const auto aggregates{private_aggregates(fn)};
+    // The slot a store's destination belongs to, when the store may wait for its next use
+    const auto waiting_slot{[&](std::string_view body) -> stdx::option<std::string> {
+        if (!body.starts_with("store ")) { return stdx::none; }
+        const auto args{split_operands(stdx::string::substr(body, 6))};
+        if (args.size() != 2) { return stdx::none; }
+        const std::string dest{args[1]};
+        if (is_constant_token(args[0]) && slots.contains(dest)) { return dest; }
+        const auto found{aggregates.find(dest)};
+        if (found != aggregates.end() && found->second != dest) { return found->second; }
+        return stdx::none;
+    }};
+    const auto slot_of{[&](const std::string& temp) -> stdx::option<std::string> {
+        if (slots.contains(temp)) { return temp; }
+        const auto found{aggregates.find(temp)};
+        if (found != aggregates.end()) { return found->second; }
+        return stdx::none;
+    }};
+    for (auto& seg : fn.segments) {
+        auto&      insts{seg.instructions};
+        const auto n{insts.size()};
+        // What each instruction defines and reads, and where each temporary is next read
+        std::vector<std::string>                                      defs(n);
+        std::vector<std::vector<std::string>>                         reads(n);
+        std::vector<usize>                                            writes_before(n + 1, 0);
+        ankerl::unordered_dense::map<std::string, std::vector<usize>> read_at;
+        for (usize i{0}; i < n; ++i) {
+            const auto [def, body]{split_definition(insts[i])};
+            defs[i]  = std::string{def};
+            reads[i] = mentioned_temps(body);
+            for (const auto& temp : reads[i]) { read_at[temp].emplace_back(i); }
+            writes_before[i + 1] = writes_before[i] + (may_write(body) ? 1 : 0);
+        }
+        const auto next_read{[&](const std::string& temp, usize after) -> stdx::option<usize> {
+            const auto found{read_at.find(temp)};
+            if (found == read_at.end()) { return stdx::none; }
+            const auto at{std::ranges::upper_bound(found->second, after)};
+            if (at == found->second.end()) { return stdx::none; }
+            return *at;
+        }};
+
+        // Whether nothing strictly between a load at `from` and its use at `to` stores into the
+        // private slot the load reads. No other write reaches it, since its address never escapes
+        const auto only_other_writes{[&](usize from, usize to) {
+            const auto address{reads[from].empty() ? stdx::none : slot_of(reads[from].front())};
+            if (!address) { return false; }
+            for (usize k{from + 1}; k < to; ++k) {
+                const auto body{split_definition(insts[k]).second};
+                if (!body.starts_with("store ")) { continue; }
+                const auto args{split_operands(stdx::string::substr(body, 6))};
+                if (args.size() != 2) { return false; }
+                if (slot_of(std::string{args[1]}) == address) { return false; }
+            }
+            return true;
+        }};
+        ankerl::unordered_dense::map<std::string, usize> deferred;
+        // Each deferred constant store, by the slot it writes
+        ankerl::unordered_dense::map<std::string, std::vector<usize>> stores;
+        bool                                                          any_store{false};
+        for (usize i{0}; i < n; ++i) {
+            const auto body{split_definition(insts[i]).second};
+            if (body.starts_with("store ")) {
+                if (const auto slot{waiting_slot(body)}) {
+                    stores[*slot].emplace_back(i);
+                    any_store = true;
+                }
+                continue;
+            }
+            const bool is_load{body.starts_with("load ")};
+            if (defs[i].empty() || (!is_address_computation(body) && !is_load)) { continue; }
+            const auto use{next_read(defs[i], i)};
+            if (!use) { continue; }
+            // A read may not move past a write, though only a store into a private slot can change
+            // what a read of that slot sees
+            if (is_load && writes_before[*use] != writes_before[i + 1] &&
+                !only_other_writes(i, *use)) {
+                continue;
+            }
+            deferred.insert_or_assign(defs[i], i);
+        }
+        if (deferred.empty() && !any_store) { continue; }
+
+        std::vector<std::string> out;
+        out.reserve(n);
+        std::vector<bool> placed(n, false);
+        std::vector<bool> waiting(n, false);
+        for (const auto& [slot, at] : stores) {
+            for (const auto i : at) { waiting[i] = true; }
+        }
+        // Started before it is emitted, so a store waiting on a slot isn't placed twice
+        std::vector<bool> started(n, false);
+        const auto        emit{[&](usize at) {
+            placed[at] = true;
+            out.emplace_back(std::move(insts[at]));
+        }};
+        const auto        place{[&](this const auto& self, usize at) -> void {
+            started[at] = true;
+            for (const auto& temp : reads[at]) {
+                const auto found{deferred.find(temp)};
+                if (found != deferred.end() && !started[found->second]) { self(found->second); }
+            }
+            // A use of a slot lets the stores waiting on it go first, in their order. Computing an
+            // address only names the slot
+            const auto body{split_definition(insts[at]).second};
+            if (!waiting[at] && !is_address_computation(body)) {
+                for (const auto& temp : reads[at]) {
+                    const auto slot{slot_of(temp)};
+                    const auto found{slot ? stores.find(*slot) : stores.end()};
+                    if (found == stores.end()) { continue; }
+                    // Only the stores that came before this use
+                    for (const auto i : found->second) {
+                        if (!started[i] && i < at) { self(i); }
+                    }
+                }
+            }
+            if (is_terminator_text(body)) {
+                for (usize k{0}; k < n; ++k) {
+                    if (waiting[k] && !started[k]) { self(k); }
+                }
+            }
+            emit(at);
+        }};
+        for (usize i{0}; i < n; ++i) {
+            if (started[i] || waiting[i]) { continue; }
+            if (!defs[i].empty() && deferred.contains(defs[i])) { continue; }
+            place(i);
+        }
+        for (usize k{0}; k < n; ++k) {
+            if (waiting[k] && !started[k]) { place(k); }
+        }
+        insts = std::move(out);
+    }
+}
+
 [[nodiscard]] auto parse_seg_ref(std::string_view text) -> stdx::option<u32> {
     if (!text.starts_with("seg ")) { return stdx::none; }
     return parse_u32(stdx::string::substr(text, 4));
@@ -587,7 +916,15 @@ auto canonicalize(function_dump& fn) -> void {
         if (bodies.contains(id) || !by_id.contains(id)) { continue; }
         auto& insts{bodies[id]};
         for (const auto& inst : fn.segments[by_id[id]].instructions) {
-            insts.emplace_back(rewrite_segs(inst, forward));
+            auto threaded{rewrite_segs(inst, forward)};
+            // A branch whose arms reach one segment is a jump there
+            if (threaded.starts_with("cond_goto ")) {
+                const auto targets{successors(threaded)};
+                if (targets.size() == 2 && targets[0] == targets[1]) {
+                    threaded = fmt::format("goto seg {}", targets[0]);
+                }
+            }
+            insts.emplace_back(std::move(threaded));
         }
         if (insts.empty()) { continue; }
         for (const auto s : successors(insts.back())) { stack.emplace_back(s); }
@@ -641,20 +978,33 @@ auto canonicalize(function_dump& fn) -> void {
         }
         segments.emplace_back(std::move(seg));
     }
-    segments.front().instructions.insert(
-        segments.front().instructions.begin(), allocas.begin(), allocas.end());
 
-    // Temporaries take numbers in order of first appearance
+    // Slots come first, numbered by their first use so the order they were created in doesn't
+    // show, then every other temporary in order of first appearance
     ankerl::unordered_dense::map<std::string, std::string> temps;
-    for (auto& seg : segments) {
-        for (auto& inst : seg.instructions) {
-            inst = rewrite_temps(inst, [&](std::string_view t) -> std::string {
-                const auto [it, inserted]{
-                    temps.try_emplace(std::string{t}, fmt::format("%{}", temps.size()))};
-                return it->second;
-            });
+    const auto                                             number{[&](std::string_view t) {
+        const auto [it,
+                    inserted]{temps.try_emplace(std::string{t}, fmt::format("%{}", temps.size()))};
+        return it->second;
+    }};
+    ankerl::unordered_dense::set<std::string>              slot_names;
+    for (const auto& slot : allocas) { slot_names.emplace(split_definition(slot).first); }
+    for (const auto& seg : segments) {
+        for (const auto& inst : seg.instructions) {
+            for (const auto& temp : mentioned_temps(inst)) {
+                if (slot_names.contains(temp)) { DISCARD(number(temp)); }
+            }
         }
     }
+    for (auto& slot : allocas) { slot = rewrite_temps(slot, number); }
+    for (auto& seg : segments) {
+        for (auto& inst : seg.instructions) { inst = rewrite_temps(inst, number); }
+    }
+    std::ranges::sort(allocas, {}, [](const std::string& slot) {
+        return parse_u32(stdx::string::substr(slot, 1, slot.find(' ') - 1)).value_or(0);
+    });
+    segments.front().instructions.insert(
+        segments.front().instructions.begin(), allocas.begin(), allocas.end());
     fn.segments = std::move(segments);
 }
 
@@ -670,6 +1020,7 @@ auto normalize_gir(std::string_view dump) -> std::string {
         for (usize round{0}; round < 2; ++round) {
             fold_constants(fn);
             drop_dead_slots(fn);
+            sink_address_computations(fn);
             canonicalize(fn);
         }
     }
