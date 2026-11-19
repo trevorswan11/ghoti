@@ -38,6 +38,7 @@ enum class uir_diff_status : u8 {
     REJECTED,
     // An immutable `let` initialized by a call, which the old emitter folds and UIR doesn't
     FOLD_PLACEMENT,
+    SEMANTICS_CHANGE,
     GIR_DIFF,
     ASTGEN_FAILED,
     // The old pipeline rejected the program, so there is nothing to compare against
@@ -72,7 +73,8 @@ struct uir_sema_run {
 };
 
 // Lowers and analyzes `source` through UIR Sema alone
-[[nodiscard]] auto run_uir_sema(std::string_view source) -> stdx::box<uir_sema_run>;
+[[nodiscard]] auto run_uir_sema(std::string_view source, const pipeline_settings& settings = {})
+    -> stdx::box<uir_sema_run>;
 // The normalized GIR of a program UIR Sema must accept
 [[nodiscard]] auto uir_gir(std::string_view source) -> std::string;
 

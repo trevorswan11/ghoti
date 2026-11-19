@@ -3,11 +3,13 @@
 #include <filesystem>
 #include <string>
 
+#include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/option.hh>
 
 #include "compiler/gir/module.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -38,6 +40,8 @@ struct outcome {
     stdx::option<gir::module_t> gir;
     ghoti::sema::diagnostics    diagnostics;
     stdx::option<unsupported>   stopped_at;
+    // The comptime value of each root-module declaration that resolved to one, by name
+    ankerl::unordered_dense::map<std::string, ip::index> root_values{};
 
     [[nodiscard]] auto succeeded() const noexcept -> bool { return gir.has_value(); }
 };

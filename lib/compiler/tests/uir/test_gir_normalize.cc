@@ -75,4 +75,21 @@ TEST_CASE("Normalized GIR hoists allocas and renumbers temporaries") {
                      "    ret i32 %1\n\n");
 }
 
+TEST_CASE("Normalized GIR drops a result slot nothing reads") {
+    const auto with_slot{normalize_gir(R"(fn f(x: i32) -> i32
+  seg 0:
+    %0 = alloca i32
+    %1 = add i32 param.0, 1
+    store %1, %0
+    %2 = load %0
+    ret i32 %1
+)")};
+    const auto without{normalize_gir(R"(fn f(x: i32) -> i32
+  seg 0:
+    %0 = add i32 param.0, 1
+    ret i32 %0
+)")};
+    CHECK(with_slot == without);
+}
+
 } // namespace ghoti::tests

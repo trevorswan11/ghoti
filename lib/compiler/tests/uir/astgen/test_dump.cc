@@ -490,7 +490,7 @@ TEST_CASE("An unwrap capture splits into a payload and a residual body") {
 TEST_CASE("A bodyless function type is a func flagged type_expr") {
     check_uir("const n = @typeName(fn(x: i32): bool);", R"(decl#0 VALUE n CONSTANT
     value {
-        %3 = func conv=C, flags=type_expr
+        %3 = func conv=C, flags=type_expr|bodyless
             params {
                 %1 = param name="x", modifier=VALUE
                     type {

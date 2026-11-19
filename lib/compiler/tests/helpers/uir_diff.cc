@@ -27,10 +27,12 @@
 #include "compiler/module/source_loader.hh"
 #include "compiler/sema/analyzer.hh"
 #include "compiler/sema/cfg_evaluator.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "helpers/gir_normalize.hh"
+#include "support/diagnostic.hh"
 #include "support/env.hh"
 
 namespace ghoti::tests::helpers {
@@ -83,6 +85,21 @@ namespace {
     return out.str();
 }
 
+// Every error is one the plan decided UIR reports where the old pipeline didn't
+[[nodiscard]] auto only_decided_rejections(const sema::diagnostics& diags) -> bool {
+    return std::ranges::all_of(diags, [](const sema::diagnostic& d) {
+        return d.get_error() == sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE &&
+               d.get_message() == "`comptime let mut` assignment depends on a runtime condition";
+    });
+}
+
+// Some old checks report without marking their module errored
+[[nodiscard]] auto has_errors(const sema::diagnostics& diags) -> bool {
+    return std::ranges::any_of(diags, [](const sema::diagnostic& d) {
+        return d.snapshot().level == diagnostic_level::ERROR;
+    });
+}
+
 auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> void {
     analyzer.set_testing(settings.testing);
     analyzer.set_optimize_mode(settings.build_mode);
@@ -108,7 +125,7 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
     auto       gir_mod{analyzer.analyze(root)};
     const auto module{modules->try_get_file_module(root)};
     if (!gir_mod || !module || (*module)->is_errored() || (*module)->is_poisoned() ||
-        modules->any_errored()) {
+        modules->any_errored() || has_errors(analyzer.get_ctx().diags)) {
         return stdx::none;
     }
     return normalize_gir(dump_with_flags(*gir_mod));
@@ -118,13 +135,14 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
 
 auto uir_diff_status_name(uir_diff_status status) noexcept -> std::string_view {
     switch (status) {
-    case uir_diff_status::MATCH:           return "match";
-    case uir_diff_status::UNSUPPORTED:     return "unsupported";
-    case uir_diff_status::REJECTED:        return "rejected";
-    case uir_diff_status::FOLD_PLACEMENT:  return "fold-placement";
-    case uir_diff_status::GIR_DIFF:        return "gir-diff";
-    case uir_diff_status::ASTGEN_FAILED:   return "astgen-failed";
-    case uir_diff_status::LEGACY_REJECTED: return "legacy-rejected";
+    case uir_diff_status::MATCH:            return "match";
+    case uir_diff_status::UNSUPPORTED:      return "unsupported";
+    case uir_diff_status::REJECTED:         return "rejected";
+    case uir_diff_status::FOLD_PLACEMENT:   return "fold-placement";
+    case uir_diff_status::SEMANTICS_CHANGE: return "semantics-change";
+    case uir_diff_status::GIR_DIFF:         return "gir-diff";
+    case uir_diff_status::ASTGEN_FAILED:    return "astgen-failed";
+    case uir_diff_status::LEGACY_REJECTED:  return "legacy-rejected";
     }
     return "unknown";
 }
@@ -163,7 +181,10 @@ auto diff_pipelines(mod::source_loader&          loader,
         return {.status = uir_diff_status::UNSUPPORTED, .detail = out.stopped_at->what};
     }
     if (!out.succeeded()) {
-        return {.status = uir_diff_status::REJECTED, .detail = fmt::format("{}", out.diagnostics)};
+        const auto status{only_decided_rejections(out.diagnostics)
+                              ? uir_diff_status::SEMANTICS_CHANGE
+                              : uir_diff_status::REJECTED};
+        return {.status = status, .detail = fmt::format("{}", out.diagnostics)};
     }
 
     const auto uir_text{normalize_gir(dump_with_flags(*out.gir))};
@@ -175,7 +196,8 @@ auto diff_pipelines(mod::source_loader&          loader,
             .detail = fmt::format("--- old\n{}--- uir\n{}", *legacy, uir_text)};
 }
 
-auto run_uir_sema(std::string_view source) -> stdx::box<uir_sema_run> {
+auto run_uir_sema(std::string_view source, const pipeline_settings& settings)
+    -> stdx::box<uir_sema_run> {
     constexpr std::string_view ROOT{"test.gh"};
     auto                       run{stdx::make_box<uir_sema_run>()};
     run->loader = stdx::make_box<mod::memory_loader>();
@@ -185,9 +207,13 @@ auto run_uir_sema(std::string_view source) -> stdx::box<uir_sema_run> {
     const auto root{run->modules->try_get_file_module(ROOT)};
     REQUIRE(root);
     REQUIRE_FALSE((*root)->is_errored());
-    const auto&             ctx{run->analyzer->get_ctx()};
-    const sema::cfg_context cfg{.target_opts    = ctx.target_opts,
-                                .facts          = codegen::target_facts::resolve(stdx::none),
+    configure(*run->analyzer, settings);
+    auto& ctx{run->analyzer->get_ctx()};
+    ctx.target_opts    = settings.target_opts;
+    ctx.runtime_safety = settings.runtime_safety;
+    const sema::cfg_context cfg{.target_opts = ctx.target_opts,
+                                .facts =
+                                    codegen::target_facts::resolve(settings.target_opts.triple_str),
                                 .build_mode     = ctx.build_mode,
                                 .runtime_safety = ctx.runtime_safety,
                                 .testing        = false,

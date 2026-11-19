@@ -1,6 +1,7 @@
 #include <array>
 #include <compare>
 
+#include <fmt/format.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -22,6 +23,8 @@ namespace semantics = gir::semantics;
 using gir::instruction_kind;
 
 namespace {
+
+constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
 
 [[nodiscard]] constexpr auto binary_info_of(tag t) noexcept -> binary_info {
     using enum op_class;
@@ -101,6 +104,10 @@ namespace {
 }
 
 } // namespace
+
+auto analyzer::folds_exactly(const gs::type& t) const -> bool {
+    return t.get_kind() != gs::type_kind::INT || gs::int_width(t) <= 128;
+}
 
 auto analyzer::domain_of(const gs::type& t) const -> semantics::int_domain {
     const auto bits{t.get_kind() == gs::type_kind::INT ? gs::int_width(t)
@@ -210,24 +217,47 @@ auto analyzer::fold_binary(const binary_info& info,
             case instruction_kind::XOR: return *l ^ *r;
             case instruction_kind::DIV:
             case instruction_kind::MOD:
-                if (r->is_zero() || l->is_negative() || r->is_negative()) { return stdx::none; }
+                if (r->is_zero()) { return stdx::none; }
                 return info.kind == instruction_kind::DIV ? *l / *r : *l % *r;
             default: return stdx::none;
             }
         }()};
-        if (!value) { return comp_.unsupported(u_, src, "this comptime_int division"); }
+        if (!value) {
+            const auto fault{info.kind == instruction_kind::DIV
+                                 ? semantics::int_fault::DIVISION_BY_ZERO
+                                 : semantics::int_fault::MODULO_BY_ZERO};
+            return comp_.report(
+                u_,
+                src,
+                gs::error::COMPTIME_EVALUATION_FAILED,
+                semantics::describe(fault, {}, comp_.ctx().type_display_name(peer)));
+        }
         return operand{intern_int(pool, *value, peer)};
     }
 
-    // A typed fold that faults is left to the runtime instruction, which checks it
+    // A typed fold that faults is left to the runtime instruction, which checks it, unless
+    // there is no runtime to leave it to
     const auto op{semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
     if (!op) { return stdx::none; }
+    if (!folds_exactly(peer)) {
+        if (is_comptime()) {
+            return comp_.unsupported(u_, src, "compile-time arithmetic past 128 bits");
+        }
+        return stdx::none;
+    }
     const auto domain{domain_of(peer)};
     const auto bits{[&](const big_int& v) {
         return semantics::to_domain(
             v.is_negative() ? static_cast<u128>(*v.to_i128()) : *v.to_u128(), domain);
     }};
     const auto folded{semantics::fold_int(*op, domain, bits(*l), bits(*r))};
+    if (!folded && is_comptime()) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            semantics::describe(folded.error(), domain, comp_.ctx().type_display_name(peer)));
+    }
     if (!folded) { return stdx::none; }
     const auto value{domain.is_signed ? big_int{semantics::signed_value(*folded, domain)}
                                       : big_int{semantics::unsigned_value(*folded, domain)}};
@@ -278,6 +308,9 @@ auto analyzer::analyze_shift(inst_id            inst,
     const auto  kind{info.kind};
     const auto& src{src_of(inst)};
     auto&       shifted{type_of(lhs)};
+    if (comptime_value(lhs) && comptime_value(rhs) && folds_exactly(shifted)) {
+        return fold_shift(info, lhs, rhs, src);
+    }
     if (!gs::is_integer(shifted.get_kind()) || comptime_value(lhs)) {
         return comp_.unsupported(u_, src, "a shift of a constant or untyped value");
     }
@@ -314,6 +347,60 @@ auto analyzer::analyze_shift(inst_id            inst,
                       shifted};
 }
 
+auto analyzer::fold_shift(const binary_info& info,
+                          const operand&     lhs,
+                          const operand&     rhs,
+                          const source&      src) -> result<operand> {
+    auto&      pool{comp_.constants()};
+    auto&      shifted{type_of(lhs)};
+    const auto value{int_of(pool.value_at(*comptime_value(lhs)))};
+    const auto amount{int_of(pool.value_at(*comptime_value(rhs)))};
+    if (!value || !amount) { return comp_.unsupported(u_, src, "a shift of a non-integer"); }
+    const auto small_amount{amount->to_i128()};
+    const auto fault{[&](semantics::int_fault f, semantics::int_domain domain) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            semantics::describe(f, domain, comp_.ctx().type_display_name(shifted)));
+    }};
+
+    // An untyped value shifts exactly, growing as far as the comptime_int limit
+    if (shifted.get_kind() == gs::type_kind::COMPTIME_INT) {
+        if (info.wrapping || info.saturating) {
+            return comp_.unsupported(u_, src, "a wrapping or saturating shift of comptime_int");
+        }
+        if (!small_amount || *small_amount < 0) {
+            return fault(semantics::int_fault::NEGATIVE_SHIFT, {});
+        }
+        if (*small_amount >= static_cast<i128>(MAX_COMPTIME_INT_BITS)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_EVALUATION_FAILED,
+                                fmt::format("Compile-time integer result exceeds the {}-bit limit "
+                                            "of comptime_int",
+                                            MAX_COMPTIME_INT_BITS));
+        }
+        const auto bits{static_cast<u64>(*small_amount)};
+        return operand{
+            intern_int(pool,
+                       info.kind == instruction_kind::SHL ? value->shl(bits) : value->shr(bits),
+                       shifted)};
+    }
+
+    if (!gs::is_integer(shifted.get_kind()) || !small_amount) {
+        return comp_.unsupported(u_, src, "a shift of this constant");
+    }
+    const auto op{*semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
+    const auto domain{domain_of(shifted)};
+    const auto bits{semantics::to_domain(
+        value->is_negative() ? static_cast<u128>(*value->to_i128()) : *value->to_u128(), domain)};
+    const auto folded{semantics::fold_int_shift(op, domain, bits, *small_amount)};
+    if (!folded) { return fault(folded.error(), domain); }
+    const auto out{domain.is_signed ? big_int{semantics::signed_value(*folded, domain)}
+                                    : big_int{semantics::unsigned_value(*folded, domain)}};
+    return operand{intern_int(pool, out, shifted)};
+}
+
 auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
@@ -340,7 +427,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
     case tag::bit_not:  {
         const bool negate{t != tag::bit_not};
         if (!(negate ? gs::is_numeric(type.get_kind()) : is_int_like(type))) { break; }
-        if (const auto index{comptime_value(operand_value)}) {
+        if (const auto index{comptime_value(operand_value)}; index && folds_exactly(type)) {
             const auto& v{pool.value_at(*index)};
             if (const auto f{v.data.as_opt<f128>()}; f && negate) {
                 return operand{pool.intern(-*f, type)};
@@ -348,8 +435,9 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
             const auto value{int_of(v)};
             if (!value) { break; }
             if (type.get_kind() == gs::type_kind::COMPTIME_INT) {
-                if (!negate) { return comp_.unsupported(u_, src, "`~` on comptime_int"); }
-                return operand{intern_int(pool, -*value, type)};
+                // An untyped `~x` is its two's-complement complement at any width (`-x - 1`)
+                const big_int one{i128{1}};
+                return operand{intern_int(pool, negate ? -*value : -*value - one, type)};
             }
             // `-128i8`'s literal is past `i8`, so it negates exactly before it must fit
             if (negate && !gs::comptime_int_fits(*value, type, comp_.ptr_bits())) {
@@ -429,11 +517,15 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
         builder_.emit_cond_goto(cond, merge, rhs_seg);
     }
     switch_to(rhs_seg);
-    const auto out{TRY(analyze_body(rhs_body))};
-    if (!out.yielded || terminated()) {
+    const auto out{[&] {
+        const auto branch{runtime_branch()};
+        return analyze_body(rhs_body);
+    }()};
+    if (!out) { return stdx::err{out.error()}; }
+    if (!out->yielded || terminated()) {
         return comp_.unsupported(u_, src, "a right side that leaves");
     }
-    const auto rhs{TRY(coerce_to(*out.yielded, bool_type, src, {.what = use_site::kind::STORE}))};
+    const auto rhs{TRY(coerce_to(*out->yielded, bool_type, src, {.what = use_site::kind::STORE}))};
     builder_.emit_store(slot, TRY(as_runtime(rhs, src)));
     emit_goto(merge);
     switch_to(merge);

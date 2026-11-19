@@ -49,6 +49,7 @@ namespace {
     case well_known::f80_type:            return builtin(gs::type_kind::F80);
     case well_known::f128_type:           return builtin(gs::type_kind::F128);
     case well_known::bool_type:           return builtin(gs::type_kind::BOOL);
+    case well_known::type_type:           return builtin(gs::type_kind::TYPE);
     case well_known::void_type:           return builtin(gs::type_kind::VOID_);
     case well_known::noreturn_type:       return builtin(gs::type_kind::NORETURN);
     case well_known::comptime_int_type:   return builtin(gs::type_kind::COMPTIME_INT);
@@ -60,15 +61,21 @@ namespace {
 } // namespace
 
 analyzer::analyzer(compilation& comp, const unit& u, stdx::option<decl_id> declaring) noexcept
-    : comp_{comp}, u_{u}, declaring_{declaring} {}
+    : comp_{comp}, u_{u}, declaring_{declaring}, frame_{comp.next_frame()},
+      alloc_base_{comp.alloc_count()} {}
 
 analyzer::analyzer(compilation& comp, const unit& u, instance& fn, gir::function& gir_fn) noexcept
-    : comp_{comp}, u_{u}, fn_{fn}, gir_fn_{gir_fn} {}
+    : comp_{comp}, u_{u}, fn_{fn}, gir_fn_{gir_fn}, frame_{comp.next_frame()},
+      alloc_base_{comp.alloc_count()} {}
+
+analyzer::~analyzer() { comp_.release_allocs(alloc_base_); }
 
 auto analyzer::eval_comptime(gsl::span<const inst_id> body) -> result<operand> {
-    ++comptime_depth_;
-    const auto restore{gsl::finally([this] { --comptime_depth_; })};
+    const auto scope{comptime_scope()};
     const auto out{TRY(analyze_body(body))};
+    if (jump_) {
+        return comp_.unsupported(u_, src_of(body.back()), "a jump out of a comptime body");
+    }
     if (!out.yielded) {
         return comp_.unsupported(u_, src_of(body.back()), "a comptime body that doesn't yield");
     }
@@ -99,6 +106,9 @@ auto analyzer::analyze_function() -> result<void> {
         values_.insert_or_assign(param, gir::value{slot.id, type});
     }
 
+    // `@setEval*Limit` in the body scopes over the rest of it
+    const auto saved{comp_.limits()};
+    const auto restore{gsl::finally([&] { comp_.limits() = saved; })};
     const auto out{analyze_body(body)};
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
@@ -114,6 +124,7 @@ auto analyzer::analyze_function() -> result<void> {
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
     for (const auto inst : body) {
+        if (mod().tag_of(inst) == tag::str) { continue; }
         if (mod().tag_of(inst) == tag::yield) {
             const auto& d{mod().data_of(inst)};
             return flow{.yielded = TRY(resolve(d.un.operand, src_of(inst)))};
@@ -127,6 +138,7 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             continue;
         }
         values_.insert_or_assign(inst, std::move(*value));
+        if (jump_) { return flow{}; }
         if (!is_comptime() && terminated()) { return flow{}; }
     }
     return flow{};
@@ -136,11 +148,11 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     const auto t{mod().tag_of(inst)};
     set_location(src_of(inst));
     switch (t) {
-    case tag::int_value:   return analyze_int_value(inst);
-    case tag::int_lit:     return analyze_int_lit(inst);
-    case tag::float_lit:   return analyze_float_lit(inst);
-    case tag::int_type:    return analyze_int_type(inst);
-    case tag::func:        return analyze_func(inst);
+    case tag::int_value:       return analyze_int_value(inst);
+    case tag::int_lit:         return analyze_int_lit(inst);
+    case tag::float_lit:       return analyze_float_lit(inst);
+    case tag::int_type:        return analyze_int_type(inst);
+    case tag::func:            return analyze_func(inst);
 
     case tag::add:
     case tag::sub:
@@ -165,33 +177,39 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::cmp_lt:
     case tag::cmp_le:
     case tag::cmp_gt:
-    case tag::cmp_ge:      return analyze_binary(inst, t);
-    case tag::bool_and:    return analyze_bool_op(inst, true);
-    case tag::bool_or:     return analyze_bool_op(inst, false);
+    case tag::cmp_ge:          return analyze_binary(inst, t);
+    case tag::bool_and:        return analyze_bool_op(inst, true);
+    case tag::bool_or:         return analyze_bool_op(inst, false);
     case tag::neg:
     case tag::neg_wrap:
     case tag::pos:
     case tag::bool_not:
-    case tag::bit_not:     return analyze_unary(inst, t);
+    case tag::bit_not:         return analyze_unary(inst, t);
 
-    case tag::decl_val:    return analyze_decl_val(inst, false);
-    case tag::decl_ref:    return analyze_decl_val(inst, true);
-    case tag::alloc_mut:   return analyze_alloc_mut(inst);
-    case tag::let_value:   return analyze_let_value(inst);
-    case tag::const_local: return analyze_const_local(inst);
-    case tag::store:       return analyze_store(inst);
-    case tag::load:        return analyze_load(inst);
-    case tag::discard:     return analyze_discard(inst);
+    case tag::decl_val:        return analyze_decl_val(inst, false);
+    case tag::decl_ref:        return analyze_decl_val(inst, true);
+    case tag::alloc_mut:       return analyze_alloc_mut(inst, false);
+    case tag::alloc_comptime:  return analyze_alloc_mut(inst, true);
+    case tag::let_value:       return analyze_let_value(inst);
+    case tag::const_local:     return analyze_const_local(inst);
+    case tag::store:           return analyze_store(inst);
+    case tag::load:            return analyze_load(inst);
+    case tag::discard:         return analyze_discard(inst);
 
-    case tag::block:       return analyze_block(inst);
-    case tag::loop:        return analyze_loop(inst);
-    case tag::condbr:      return analyze_condbr(inst);
-    case tag::break_to:    return analyze_break(inst);
-    case tag::repeat:      return analyze_repeat(inst);
-    case tag::ret:         return analyze_ret(inst);
-    case tag::call:        return analyze_call(inst);
+    case tag::block:           return analyze_block(inst);
+    case tag::block_comptime:  return analyze_block_comptime(inst);
+    case tag::condbr_comptime: return analyze_condbr_comptime(inst);
+    case tag::eval_branch:     return analyze_eval_branch(inst);
+    case tag::unreachable:     return analyze_unreachable(inst);
+    case tag::builtin:         return analyze_builtin(inst);
+    case tag::loop:            return analyze_loop(inst);
+    case tag::condbr:          return analyze_condbr(inst);
+    case tag::break_to:        return analyze_break(inst);
+    case tag::repeat:          return analyze_repeat(inst);
+    case tag::ret:             return analyze_ret(inst);
+    case tag::call:            return analyze_call(inst);
 
-    default:               break;
+    default:                   break;
     }
     return comp_.unsupported(u_, src_of(inst), fmt::format("the `{}` instruction", tag_name(t)));
 }
@@ -200,6 +218,10 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
     if (const auto w{as_well_known(r)}) { return well_known_operand(*w, src); }
     const auto inst{*as_inst(r)};
     const auto found{values_.find(inst)};
+    if (found == values_.end() && std::to_underlying(inst) < mod().instruction_count() &&
+        mod().tag_of(inst) == tag::str) {
+        return comp_.unsupported(u_, src, "a string literal used as a value");
+    }
     if (found == values_.end()) {
         // A failed instruction left no value, and its failure was already reported
         if (std::to_underlying(inst) < mod().instruction_count() && !is_comptime()) {
@@ -207,12 +229,16 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
         }
         return comp_.unsupported(u_, src, "a value from another body");
     }
+    // A comptime read of a runtime value runs what computed it again, at compile time
+    if (is_comptime() && (found->second.is<gir::value>() || found->second.is<merge_ref>())) {
+        return reevaluate(r, src);
+    }
     return found->second;
 }
 
 auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
     const auto op{TRY(resolve(r, src))};
-    if (op.is<place>() || op.is<global_ref>()) {
+    if (op.is<place>() || op.is<global_ref>() || op.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a place used as a value");
     }
     return op;
@@ -255,7 +281,10 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const function_ref& f) -> gs::type& { return *f.fn->type; },
         [](const place& p) -> gs::type& { return *p.pointee; },
         [&](merge_ref m) -> gs::type& { return type_of(merges_[m.index].arrivals.front().value); },
-        [](const global_ref& g) -> gs::type& { return *g.type; });
+        [](const global_ref& g) -> gs::type& { return *g.type; },
+        [&](comptime_place p) -> gs::type& {
+            return comp_.alloc_at(p).type.value_or(builtin(gs::type_kind::UNDEFINED));
+        });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

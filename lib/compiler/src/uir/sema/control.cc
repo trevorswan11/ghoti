@@ -4,6 +4,8 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <gsl/span>
 #include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -111,13 +113,7 @@ auto analyzer::analyze_block(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     DISCARD(rec.str_field());
     const auto body{rec.body_field()};
-    if (is_comptime()) {
-        const auto out{TRY(analyze_body(body))};
-        if (!out.yielded) {
-            return comp_.unsupported(u_, src, "a block that leaves at compile time");
-        }
-        return *out.yielded;
-    }
+    if (is_comptime()) { return run_block(inst, body); }
 
     targets_.emplace_back<target>(
         {.inst = inst, .exit = stdx::none, .repeat = stdx::none, .arrivals = {}});
@@ -140,15 +136,10 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
     const auto  cond{TRY(resolve_value(cond_ref, src))};
 
     if (is_comptime()) {
-        const auto known{comptime_value(cond)};
-        if (!known) { TRY(require_runtime(src)); }
-        TRY(condition(cond, cond_src.value_or(src)));
-        const bool taken{*comp_.constants().value_at(*known).data.as_opt<bool>()};
+        const bool taken{TRY(known_bool(cond, cond_src.value_or(src)))};
         const auto out{TRY(analyze_body(taken ? then_body : else_body))};
-        if (!out.yielded) {
-            return comp_.unsupported(u_, src, "a branch that leaves at compile time");
-        }
-        return *out.yielded;
+        if (jump_) { return void_value(); }
+        return out.yielded.value_or(void_value());
     }
 
     // Both arms are analyzed even when the condition is known when not comptime
@@ -162,6 +153,7 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
     const auto            known{comptime_value(cond).transform(
         [&](ip::index i) { return *comp_.constants().value_at(i).data.as_opt<bool>(); })};
     std::vector<incoming> arrivals;
+    const auto            branch{runtime_branch()};
     for (const auto& [seg, body, taken] :
          {std::tuple{then_seg, then_body, known.value_or(true)},
           std::tuple{else_seg, else_body, !known.value_or(false)}}) {
@@ -190,7 +182,8 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     if ((loop_flags & (flags::UNROLL | flags::UNWRAPS)) != 0) {
         return comp_.unsupported(u_, src, "an unrolled or unwrapping loop");
     }
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a loop at compile time"); }
+    if (is_comptime()) { return run_loop(inst); }
+    const auto branch{runtime_branch()};
 
     const bool has_cond{(loop_flags & flags::HAS_COND) != 0};
     const bool do_while{(loop_flags & flags::DO_WHILE) != 0};
@@ -251,32 +244,178 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
 auto analyzer::analyze_break(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a break at compile time"); }
-    const auto value{TRY(resolve_value(d.bin.rhs, src))};
+    const auto  value{TRY(resolve_value(d.bin.rhs, src))};
+    if (is_comptime()) {
+        jump_.emplace(jump::kind::BREAK, *as_inst(d.bin.lhs), value);
+        return void_value();
+    }
     arrive(target_of(d.bin.lhs), value, src);
     return void_value();
 }
 
 auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
-    const auto& src{src_of(inst)};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a continue at compile time"); }
-    const auto& t{target_of(mod().data_of(inst).un.operand)};
+    const auto& operand_ref{mod().data_of(inst).un.operand};
+    if (is_comptime()) {
+        jump_.emplace(jump::kind::REPEAT, *as_inst(operand_ref), stdx::none);
+        return void_value();
+    }
+    const auto& t{target_of(operand_ref)};
     emit_goto(*t.repeat);
     return void_value();
 }
 
 auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a return at compile time"); }
+    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
     auto&      ret{*fn_->return_type};
     const auto returned{TRY(coerce_to(value, ret, src, {.what = use_site::kind::RETURN}))};
+    if (is_comptime()) {
+        DISCARD(TRY(require_comptime(returned, src)));
+        jump_.emplace(jump::kind::RETURN, stdx::none, returned);
+        return void_value();
+    }
     if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
         builder_.emit_return(TRY(as_runtime(returned, src)));
     }
     return void_value();
+}
+
+auto analyzer::known_bool(const operand& op, const source& src) -> result<bool> {
+    auto& type{type_of(op)};
+    if (type.is_poison()) { return stdx::err{stop::POISON}; }
+    if (type.get_kind() != gs::type_kind::BOOL) {
+        return comp_.report(
+            u_, src, gs::error::TYPE_MISMATCH, messages::condition_not_bool(comp_.ctx(), type));
+    }
+    const auto index{TRY(require_comptime(op, src))};
+    return *comp_.constants().value_at(index).data.as_opt<bool>();
+}
+
+auto analyzer::run_block(inst_id inst, gsl::span<const inst_id> body) -> result<operand> {
+    const auto out{TRY(analyze_body(body))};
+    if (!jump_) { return out.yielded.value_or(void_value()); }
+    if (jump_->what != jump::kind::BREAK || jump_->target != inst) { return void_value(); }
+    auto value{std::move(*jump_->value)};
+    jump_.reset();
+    return value;
+}
+
+auto analyzer::run_loop(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    DISCARD(rec.str_field());
+    const auto loop_flags{rec.u32_field()};
+    const auto cond_body{rec.body_field()};
+    const auto body{rec.body_field()};
+    const auto cont_body{rec.body_field()};
+    const auto else_body{rec.body_field()};
+    const bool has_cond{(loop_flags & flags::HAS_COND) != 0};
+    const bool do_while{(loop_flags & flags::DO_WHILE) != 0};
+
+    const auto owns{
+        [&](jump::kind k) { return jump_ && jump_->what == k && jump_->target == inst; }};
+    const auto holds{[&] -> result<bool> {
+        const auto out{TRY(analyze_body(cond_body))};
+        if (jump_ || !out.yielded) {
+            return comp_.unsupported(u_, src, "a loop condition that leaves");
+        }
+        return known_bool(*out.yielded, src);
+    }};
+
+    for (usize iterations{0};; ++iterations) {
+        if (has_cond && (!do_while || iterations > 0) && !TRY(holds())) { break; }
+        const auto limit{comp_.limits().unroll};
+        if (iterations == limit) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::UNROLLED_LOOP_LIMIT,
+                                fmt::format("A compile-time loop exceeded its unroll limit of {}; "
+                                            "raise it with `@setEvalUnrollLimit`",
+                                            limit));
+        }
+        for (const auto part : {body, cont_body}) {
+            DISCARD(TRY(analyze_body(part)));
+            if (owns(jump::kind::REPEAT)) {
+                jump_.reset();
+            } else if (owns(jump::kind::BREAK)) {
+                auto value{std::move(*jump_->value)};
+                jump_.reset();
+                return value;
+            } else if (jump_) {
+                return void_value();
+            }
+        }
+    }
+    return run_block(inst, else_body);
+}
+
+auto analyzer::analyze_block_comptime(inst_id inst) -> result<operand> {
+    auto rec{record(inst)};
+    DISCARD(rec.str_field());
+    const auto body{rec.body_field()};
+    if (is_comptime()) { return run_block(inst, body); }
+
+    auto value{[&] {
+        const auto scope{comptime_scope()};
+        return run_block(inst, body);
+    }()};
+    if (jump_) {
+        jump_.reset();
+        return comp_.unsupported(u_, src_of(inst), "a jump out of a comptime block");
+    }
+    return at_comptime_boundary(std::move(value));
+}
+
+auto analyzer::analyze_condbr_comptime(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    const auto  cond_ref{*rec.ref_field()};
+    const auto  then_body{rec.body_field()};
+    const auto  else_body{rec.body_field()};
+    const auto  cond_src{as_inst(cond_ref).transform([&](inst_id i) { return src_of(i); })};
+
+    auto cond{[&] {
+        const auto scope{comptime_scope()};
+        return reevaluate(cond_ref, cond_src.value_or(src));
+    }()};
+    if (!cond && cond.error() == stop::RUNTIME) {
+        return comp_.report_runtime_need(
+            u_,
+            cond_src.value_or(src),
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            "Comptime if condition could not be evaluated at compile time");
+    }
+    // Only the arm the condition picks is analyzed
+    if (!cond) { return stdx::err{cond.error()}; }
+    const bool taken{TRY(known_bool(*cond, cond_src.value_or(src)))};
+    const auto out{TRY(analyze_body(taken ? then_body : else_body))};
+    if (jump_ || (!is_comptime() && terminated())) { return void_value(); }
+    return out.yielded.value_or(void_value());
+}
+
+auto analyzer::analyze_eval_branch(inst_id inst) -> result<operand> {
+    auto       rec{record(inst)};
+    const auto comptime_arm{rec.body_field()};
+    const auto runtime_arm{rec.body_field()};
+    const auto out{TRY(analyze_body(is_comptime() ? comptime_arm : runtime_arm))};
+    if (jump_ || (!is_comptime() && terminated())) { return void_value(); }
+    return out.yielded.value_or(void_value());
+}
+
+auto analyzer::analyze_unreachable(inst_id inst) -> result<operand> {
+    const auto& src{src_of(inst)};
+    if (is_comptime()) {
+        return comp_.report(
+            u_, src, gs::error::UNREACHABLE_CODE_REACHED, "reached unreachable code");
+    }
+    if (comp_.ctx().runtime_safety) {
+        return comp_.unsupported(u_, src, "a runtime `unreachable` with safety checks");
+    }
+    builder_.emit_unreachable();
+    return comp_.constants().intern(ip::undefined_value{}, builtin(gs::type_kind::NORETURN));
 }
 
 } // namespace ghoti::uir::sema

@@ -1,4 +1,5 @@
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -28,6 +29,14 @@ namespace {
 constexpr auto HANDLED_FLAGS{decl_flags::PUBLIC | decl_flags::CONSTANT | decl_flags::LET |
                              decl_flags::MUT | decl_flags::COMPTIME};
 
+constexpr std::string_view GLOBAL_CONSTANT{
+    "global variable initializer must be a constant expression"};
+
+// A function whose every call runs at compile time, which has no runtime body
+[[nodiscard]] auto is_comptime_only(const gs::type& return_type) noexcept -> bool {
+    return return_type.get_kind() == gs::type_kind::TYPE;
+}
+
 } // namespace
 
 auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -> result<operand> {
@@ -41,6 +50,10 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
                       gs::error::CYCLIC_DEPENDENCY,
                       fmt::format("'{}' is used during its own resolution", u.uir->string(d.name)));
     case decl_status::UNRESOLVED: break;
+    }
+    if (is_deferred_error(u, d)) {
+        decls_[u.index][std::to_underlying(decl)].status = decl_status::FAILED;
+        return report(u, use, gs::error::COMPILE_ERROR_REACHED, deferred_error_message(u, d));
     }
 
     decls_[u.index][std::to_underlying(decl)].status = decl_status::IN_PROGRESS;
@@ -83,13 +96,15 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     record_reader rec{m, m.data_of(func).pl.extra};
     const auto    params{rec.body_field()};
     const auto    ret{rec.body_field()};
-    const auto    body{rec.body_field()};
-    const auto    conv{static_cast<ast::calling_convention>(rec.u32_field())};
-    const auto    fn_flags{rec.u32_field()};
-    const auto    attrs{rec.body_field()};
-    const auto    bound_count{rec.count()};
+    DISCARD(rec.body_field());
+    const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
+    const auto fn_flags{rec.u32_field()};
+    const auto attrs{rec.body_field()};
+    const auto bound_count{rec.count()};
 
-    if (body.empty()) { return unsupported(u, src, "a function without a body"); }
+    if ((fn_flags & flags::BODYLESS) != 0) {
+        return unsupported(u, src, "a function without a body");
+    }
     if ((fn_flags & ~flags::EXPLICIT_CONV) != 0) {
         return unsupported(u, src, "a variadic, extern, erased or `impl` function");
     }
@@ -118,8 +133,9 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
         }
         param_types.emplace_back(&type);
     }
-    auto& return_type{*TRY(sig.eval_type(ret, src))};
-    if (return_type.get_kind() != gs::type_kind::VOID_ &&
+    auto&      return_type{*TRY(sig.eval_type(ret, src))};
+    const bool comptime_only{is_comptime_only(return_type)};
+    if (return_type.get_kind() != gs::type_kind::VOID_ && !comptime_only &&
         (!gs::is_value_type(return_type.get_kind()) ||
          gs::is_comptime_numeric(return_type.get_kind()))) {
         return unsupported(u, src, "a return type that is comptime-only or generic");
@@ -130,14 +146,16 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
 
     auto& fn{*instances_.emplace_back(stdx::make_box<instance>(instance{
-        .owner       = &units_[u.index],
-        .decl        = decl,
-        .func        = func,
-        .symbol      = symbol_for(u, d),
-        .type        = &fn_type,
-        .params      = std::move(param_types),
-        .return_type = &return_type,
-        .linkage     = linkage_of(d),
+        .owner         = &units_[u.index],
+        .decl          = decl,
+        .func          = func,
+        .symbol        = symbol_for(u, d),
+        .type          = &fn_type,
+        .params        = std::move(param_types),
+        .return_type   = &return_type,
+        .linkage       = linkage_of(d),
+        .queued        = false,
+        .comptime_only = comptime_only,
     }))};
     request_body(fn);
     return function_ref{&fn};
@@ -162,11 +180,9 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     stdx::option<gs::type&> declared;
     if (d.type_body) { declared.emplace(*TRY(eval_type(mod().body(d.type_body), src))); }
     const auto value{eval_comptime(mod().body(d.value_body))};
-    if (!value && needed_runtime_) {
-        return comp_.report(u_,
-                            src,
-                            gs::error::COMPTIME_EVALUATION_FAILED,
-                            "global variable initializer must be a constant expression");
+    if (!value && value.error() == stop::RUNTIME) {
+        return comp_.report_runtime_need(
+            u_, src, gs::error::COMPTIME_EVALUATION_FAILED, std::string{GLOBAL_CONSTANT});
     }
     if (!value) { return stdx::err{value.error()}; }
     if (value->is<function_ref>()) {
@@ -187,12 +203,20 @@ auto analyzer::analyze_global(decl_id                 decl,
     if (!constant_index) { return comp_.unsupported(u_, src, "a global of this kind of value"); }
 
     auto& pool{comp_.constants()};
-    // A type alias is listed by name, with no storage of its own
+    // An untyped type alias is listed by name, with no storage of its own
     if (pool.is_type(*constant_index)) {
+        if (d.has(decl_flags::LET) || d.has(decl_flags::MUT)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::MUTABLE_TYPE_BINDING,
+                                std::string{messages::MUTABLE_TYPE_BINDING});
+        }
         if (declared && declared->get_kind() != gs::type_kind::TYPE) {
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
-        comp_.gir().add_type(comp_.symbol_for(u_, d), pool.type_at(*constant_index));
+        if (!declared) {
+            comp_.gir().add_type(comp_.symbol_for(u_, d), pool.type_at(*constant_index));
+        }
         return value;
     }
 
