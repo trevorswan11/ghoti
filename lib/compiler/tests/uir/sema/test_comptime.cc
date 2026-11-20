@@ -70,6 +70,11 @@ class comptime_run {
         return run_->analyzer->get_ctx().type_display_name(pool().type_at(index));
     }
 
+    // The type of a declaration's comptime value, by name
+    [[nodiscard]] auto value_type_name(std::string_view name) const -> std::string {
+        return run_->analyzer->get_ctx().type_display_name(*value(name).type);
+    }
+
     [[nodiscard]] auto has_value(std::string_view name) const -> bool {
         return out().root_values.contains(std::string{name});
     }
@@ -211,7 +216,7 @@ TEST_CASE("Compile-time builtins constant eval", "[uir]") {
         CHECK(run.int_value("al_u64") == 8);
     }
 
-    SECTION("Arrays, phase 5") { check_later_phase("const sz = @sizeOf([4]u8);", "array_type"); }
+    SECTION("Arrays") { CHECK(accepted("const sz = @sizeOf([4]u8);").int_value("sz") == 4); }
     SECTION("Math builtins, phase 7") {
         check_later_phase("const v_abs = @abs(-42);", "@abs");
         check_later_phase("const v_clz = @clz(1);", "@clz");
@@ -232,8 +237,8 @@ TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer wid
     CHECK(narrow.int_value("sz_usize") == 4);
     CHECK(narrow.int_value("al_usize") == 4);
 
-    // Pointers, slices and structs arrive in phase 5
-    check_later_phase("const sz_ptr = @sizeOf(^i32);", "address_of");
+    const auto pointer{accepted("const sz_ptr = @sizeOf(^i32);")};
+    CHECK(pointer.int_value("sz_ptr") == sizeof(void*));
 }
 
 TEST_CASE("Target builtins constant eval", "[uir]") {
@@ -249,7 +254,7 @@ TEST_CASE("Target enum comparison folds against a bare member", "[uir]") {
 TEST_CASE("MulAdd and TagName constant eval", "[uir]") {
     check_later_phase("const v_mul_add = @mulAdd(i32, 2, 3, 4);", "@mulAdd");
     check_later_phase("const Color = enum { RED, GREEN, BLUE }; const tag = @tagName(Color.GREEN);",
-                      "enum_decl");
+                      "@tagName");
 }
 
 TEST_CASE("Const symbol reference propagation constant eval", "[uir]") {
@@ -259,8 +264,8 @@ TEST_CASE("Const symbol reference propagation constant eval", "[uir]") {
 }
 
 TEST_CASE("Array dimension resolution constant eval", "[uir]") {
-    check_later_phase("const N = 4; const a: [N * 2]u8 = [8]u8{1, 2, 3, 4, 5, 6, 7, 8};",
-                      "array_type");
+    const auto run{accepted("const N = 4; const a: [N * 2]u8 = [8]u8{1, 2, 3, 4, 5, 6, 7, 8};")};
+    CHECK(run.value_type_name("a") == "[8]u8");
 }
 
 TEST_CASE("Const eval function evaluation", "[uir]") {
@@ -315,35 +320,89 @@ TEST_CASE("Const eval variable mutation and loops", "[uir]") {
 }
 
 TEST_CASE("Const eval for loops over ranges and arrays", "[uir]") {
-    check_later_phase(R"(
+    const auto run{accepted(R"(
         const range_sum = fn(n: i32): i32 {
             let mut sum = 0;
-            for (1..(n + 1)) |i| { sum += i; }
+            for (1..(n + 1)) |i| {
+                sum += i;
+            }
             return sum;
         };
-    )",
-                      "range");
+        const arr_sum = fn(): i32 {
+            let mut sum = 0;
+            for (0..3, [_]i32{10, 20, 30}) |i, val| {
+                sum += val;
+            }
+            return sum;
+        };
+        const r_sum_10 = range_sum(10);
+        const a_sum = arr_sum();
+    )")};
+    CHECK(run.int_value("r_sum_10") == 55);
+    CHECK(run.int_value("a_sum") == 60);
 }
 
 TEST_CASE("Array constant eval indexing", "[uir]") {
-    check_later_phase("const arr = [_]i32{10, 20, 30, 40}; const elem0 = arr[0];", "array");
+    const auto run{accepted(R"(
+        const arr = [_]i32{10, 20, 30, 40};
+        const elem0 = arr[0];
+        const elem2 = arr[2];
+    )")};
+    CHECK(run.int_value("elem0") == 10);
+    CHECK(run.int_value("elem2") == 30);
 }
 
 TEST_CASE("Struct member constant eval access", "[uir]") {
-    check_later_phase("const Point = struct { x: i32, y: i32 }; const pt = Point{ .x = 15, .y = "
-                      "25 }; const px = pt.x;",
-                      "struct_decl");
+    const auto run{accepted(R"(
+        const Point = struct { x: i32, y: i32 };
+        const pt = Point{ .x = 15, .y = 25 };
+        const px = pt.x;
+        const py = pt.y;
+    )")};
+    CHECK(run.int_value("px") == 15);
+    CHECK(run.int_value("py") == 25);
 }
 
 TEST_CASE("Union constant eval active and inactive member access", "[uir]") {
-    check_later_phase("const Payload = union(enum) { int_val: i32, float_val: f64 }; const u = "
-                      "Payload{ .int_val = 42 };",
-                      "union_decl");
+    const auto run{rejected(R"(
+        const Payload = union(enum) { int_val: i32, float_val: f64 };
+        const u = Payload{ .int_val = 42 };
+        const active_val = u.int_val;
+        const inactive_val = u.float_val;
+    )")};
+    CHECK(run.codes() == std::vector{error::COMPTIME_EVALUATION_FAILED});
+    CHECK(run.int_value("active_val") == 42);
+    CHECK_FALSE(run.has_value("inactive_val"));
 }
 
 TEST_CASE("Match constant eval expression evaluation", "[uir]") {
-    check_later_phase(
-        "const classify = fn(x: i32): i32 { return match (x) { 0 => 100, _ => 300 }; };", "match");
+    const auto run{accepted(R"(
+        const classify = fn(x: i32): i32 {
+            return match (x) {
+                0 => 100,
+                1 => 200,
+                _ => 300,
+            };
+        };
+        const Color = enum { RED, GREEN, BLUE };
+        const color_code = fn(c: Color): i32 {
+            return match (c) {
+                .RED => 10,
+                .GREEN => 20,
+                .BLUE => 30,
+            };
+        };
+        const c0 = classify(0);
+        const c1 = classify(1);
+        const c99 = classify(99);
+        const code_red = color_code(Color.RED);
+        const code_blue = color_code(.BLUE);
+    )")};
+    CHECK(run.int_value("c0") == 100);
+    CHECK(run.int_value("c1") == 200);
+    CHECK(run.int_value("c99") == 300);
+    CHECK(run.int_value("code_red") == 10);
+    CHECK(run.int_value("code_blue") == 30);
 }
 
 TEST_CASE("Resolve deferred call returning type", "[uir]") {
@@ -371,15 +430,26 @@ TEST_CASE("Division by zero failure handling in constant eval", "[uir]") {
 }
 
 TEST_CASE("Builtin const eval @This", "[uir]") {
-    check_later_phase("const Node = struct { val: i32, const Self = @This(); };", "struct_decl");
+    const auto run{accepted(R"(
+        const Node = struct {
+            val: i32,
+
+            const Self = @This();
+            pub const bar = fn(s: &Self): i32 { return 0; };
+        };
+        const sz = @sizeOf(Node);
+        const al = @alignOf(Node);
+    )")};
+    CHECK(run.int_value("sz") == 4);
+    CHECK(run.int_value("al") == 4);
 }
 
 TEST_CASE("Volatile variables refuse constant folding in const eval", "[uir]") {
-    check_later_phase("const v: volatile i32 = 42; const read_v = v;", "ptr_type");
+    check_later_phase("const v: volatile i32 = 42; const read_v = v;", "volatile");
 }
 
 TEST_CASE("Const eval string concatenation and comparison folding", "[uir]") {
-    check_later_phase(R"(const greeting = "Hello, " + "world!";)", "str");
+    check_later_phase(R"(const greeting = "Hello, " + "world!";)", "operator");
 }
 
 TEST_CASE("Const eval @setEvalRecursionLimit in function scope", "[uir]") {
@@ -398,17 +468,17 @@ TEST_CASE("Const eval @setEvalRecursionLimit in function scope", "[uir]") {
 TEST_CASE("Const eval folds @export to void and the resolver names the entry point", "[uir]") {
     check_later_phase(
         R"(const custom_entry = fn(): void {}; const setup = @export(custom_entry, .{ .name = "main" });)",
-        "str");
+        "@export");
 }
 
 TEST_CASE("Const eval folds method call on struct instance", "[uir]") {
     check_later_phase(
         "const Point = struct { x: i32, pub const sum = fn(self): i32 { return self.x; }; };",
-        "struct_decl");
+        "self parameter");
 }
 
 TEST_CASE("Const eval folds impl method call", "[uir]") {
-    check_later_phase("const Rect = struct { w: i32, h: i32 };\nimpl Rect {}", "struct_decl");
+    check_later_phase("const Rect = struct { w: i32, h: i32 };\nimpl Rect {}", "`impl` block");
 }
 
 TEST_CASE("unlabeled comptime block in statement position executes at compile time", "[uir]") {
@@ -457,9 +527,34 @@ TEST_CASE("Const eval unreachable in conditional branches", "[uir]") {
 }
 
 TEST_CASE("Const eval unreachable in match expression", "[uir]") {
-    check_later_phase(
-        "const dispatch = fn(tag: i32): i32 { return match (tag) { 0 => 10, _ => unreachable }; };",
-        "match");
+    SECTION("Unreached catch-all arm does not error") {
+        const auto run{accepted(R"(
+            const dispatch = fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    1 => 20,
+                    _ => unreachable,
+                };
+            };
+            const res = dispatch(0);
+        )",
+                                UNSAFE)};
+        CHECK(run.int_value("res") == 10);
+    }
+
+    SECTION("Reached unreachable arm errors") {
+        const auto run{rejected(R"(
+            const dispatch = fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    _ => unreachable,
+                };
+            };
+            const res = dispatch(99);
+        )",
+                                UNSAFE)};
+        CHECK(run.codes() == std::vector{error::UNREACHABLE_CODE_REACHED});
+    }
 }
 
 TEST_CASE("`unroll for` iterating over `[]u8` parameter", "[uir]") {

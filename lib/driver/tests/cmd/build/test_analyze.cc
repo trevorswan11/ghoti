@@ -133,8 +133,8 @@ TEST_CASE("analyze --sema=uir runs UIR's Sema") {
     }
 
     SECTION("A construct UIR Sema doesn't analyze yet is named, with where it is") {
-        tempfile src_file{"test_analyze_uir_struct.gh"};
-        write_source(src_file, "const P = struct { x: i32 };\n");
+        tempfile src_file{"test_analyze_uir_type_name.gh"};
+        write_source(src_file, "const n = @typeName(i32);\n");
 
         std::ostringstream errors;
         cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, false, errors};

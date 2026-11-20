@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -14,9 +16,12 @@
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/ip/index.hh"
+#include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
@@ -37,12 +42,59 @@ compilation::compilation(gs::context& ctx, const program& prog, const options& o
       limits_{.recursion = DEFAULT_RECURSION_LIMIT, .unroll = ctx.eval_unroll_limit} {
     // The builtin types are resolved when the prelude is injected
     ctx_.inject_prelude();
-    units_.reserve(prog.modules.size());
+
+    // Units are never moved once made, since nominals and instances point at them
+    units_.reserve(prog.modules.size() + 1);
     for (u32 i{0}; const auto& lowered : prog.modules) {
         units_.emplace_back<unit>(
             {.source = lowered.source, .uir = &lowered.result.uir, .index = i++});
         decls_.emplace_back(lowered.result.uir.decls().size());
     }
+
+    if (!ctx_.modules.has_builtin_module()) { return; }
+    auto&       builtin_mod{ctx_.modules.builtin_module()};
+    const auto  cfg{gs::cfg_context::from(ctx_)};
+    prelude_.emplace(lower_module(builtin_mod, {.cfg = cfg, .modules = ctx_.modules}));
+    if (!prelude_->diagnostics.empty()) { return; }
+    prelude_unit_.emplace(static_cast<u32>(units_.size()));
+    units_.emplace_back<unit>(
+        {.source = &builtin_mod, .uir = &prelude_->uir, .index = *prelude_unit_});
+    decls_.emplace_back(prelude_->uir.decls().size());
+}
+
+auto compilation::prelude_decl(std::string_view name, const unit& user, const source& use)
+    -> result<operand> {
+    if (!prelude_unit_) { return unsupported(user, use, "a program without the `builtin` module"); }
+    const auto& u{units_[*prelude_unit_]};
+    for (const auto decl : u.uir->root_namespace().decls) {
+        if (u.uir->string(u.uir->decl_at(decl).name) == name) {
+            return analyze_decl(u, decl, *u.uir->decl_at(decl).node);
+        }
+    }
+
+    return unsupported(user, use, fmt::format("the `builtin` module's `{}`", name));
+}
+
+auto compilation::prelude_function(std::string_view name, const unit& user, const source& use)
+    -> result<gsl::not_null<instance*>> {
+    const auto value{TRY(prelude_decl(name, user, use))};
+    const auto fn{value.as_opt<function_ref>()};
+    if (!fn) { return unsupported(user, use, fmt::format("the `builtin` module's `{}`", name)); }
+    request_body(*fn->fn);
+    return fn->fn;
+}
+
+auto compilation::prelude_type(std::string_view name, const unit& user, const source& use)
+    -> result<gsl::not_null<gs::type*>> {
+    const auto value{TRY(prelude_decl(name, user, use))};
+    const auto index{value.as_opt<ip::index>()};
+    if (!index || !constants().is_type(*index)) {
+        return unsupported(user, use, fmt::format("the `builtin` module's `{}`", name));
+    }
+
+    auto& type{constants().type_at(*index)};
+    TRY(require_fields(user, use, type));
+    return &type;
 }
 
 auto compilation::run() -> outcome {
@@ -61,20 +113,29 @@ auto compilation::run() -> outcome {
         out.diagnostics = std::move(diagnostics_);
         return out;
     }
+
     out.gir.emplace(std::move(gir_));
     return out;
 }
 
 auto compilation::analyze_roots() -> void {
-    // Every non-generic declaration of every module is a root until lazy builds land
+    // TODO: Every non-generic declaration of every module is a root until lazy builds land
     for (const auto& u : units_) {
+        if (prelude_unit_ && u.index == *prelude_unit_) { continue; }
         for (const auto decl : u.uir->root_namespace().decls) {
             const auto& d{u.uir->decl_at(decl)};
             switch (d.kind) {
-            case decl_kind::VALUE:
+            case decl_kind::VALUE: {
                 // A declaration that is only `@compileError(...)` reports where it is used
-                if (!is_deferred_error(u, d)) { DISCARD(analyze_decl(u, decl, *d.node)); }
+                if (is_deferred_error(u, d)) { break; }
+                const auto value{analyze_decl(u, decl, *d.node)};
+                if (!value) { break; }
+                if (const auto type{declared_type(u, d.value_body, *value)}) {
+                    analyze_members(u, *type);
+                }
+
                 break;
+            }
             case decl_kind::IMPORT: break;
             case decl_kind::TEST:
                 if (ctx_.testing) { DISCARD(unsupported(u, *d.node, "a `test` block")); }
@@ -82,6 +143,7 @@ auto compilation::analyze_roots() -> void {
             case decl_kind::IMPL:     DISCARD(unsupported(u, *d.node, "an `impl` block")); break;
             case decl_kind::COMPTIME: DISCARD(unsupported(u, *d.node, "a `comptime` block")); break;
             }
+
             if (stopped_at_) { return; }
         }
     }
@@ -116,7 +178,7 @@ auto compilation::deferred_error_message(const unit& u, const decl& d) const -> 
     const auto    body{u.uir->body(d.value_body)};
     const auto    call{*as_inst(u.uir->data_of(body.back()).un.operand)};
     record_reader rec{*u.uir, u.uir->data_of(call).pl.extra};
-    DISCARD(rec.u32_field());
+    rec.skip_u32();
     return compile_error_message(*u.uir, rec.refs_field());
 }
 
@@ -127,12 +189,17 @@ auto compilation::root_values() -> ankerl::unordered_dense::map<std::string, ip:
         for (const auto decl : u.uir->root_namespace().decls) {
             const auto& state{decls_[u.index][std::to_underlying(decl)]};
             if (state.status != decl_status::RESOLVED || !state.value) { continue; }
-            if (const auto index{state.value->as_opt<ip::index>()}) {
+            const auto index{[&] -> stdx::option<ip::index> {
+                if (const auto g{state.value->as_opt<global_const>()}) { return g->value; }
+                return state.value->as_opt<ip::index>().transform([](ip::index i) { return i; });
+            }()};
+            if (index) {
                 values.insert_or_assign(std::string{u.uir->string(u.uir->decl_at(decl).name)},
                                         *index);
             }
         }
     }
+
     return values;
 }
 
@@ -148,6 +215,8 @@ auto compilation::analyze_body(instance& fn) -> result<void> {
     if (const auto sig{fn.type->get_data().as_opt<gs::types::function>()}) {
         gir_fn.set_calling_conv(sig->conv);
     }
+
+    gir_fn.set_weak(fn.weak);
     analyzer a{*this, *fn.owner, fn, gir_fn};
     return a.analyze_function();
 }
@@ -158,6 +227,7 @@ auto compilation::report(const unit&                          u,
                          std::string                          message,
                          const stdx::option<diagnostic_note>& note) -> stdx::err<stop> {
     const auto span{span_of(u, src)};
+
     // A body run at compile time and analyzed for runtime reports its errors once
     const bool repeated{std::ranges::any_of(diagnostics_, [&](const gs::diagnostic& seen) {
         return seen.get_error() == code && seen.get_message() == message &&
@@ -176,12 +246,13 @@ auto compilation::report(const unit&                          u,
 auto compilation::unsupported(const unit& u, const source& src, std::string what)
     -> stdx::err<stop> {
     if (!stopped_at_) {
-        stopped_at_.emplace(sema::unsupported{
+        stopped_at_.emplace<sema::unsupported>({
             .what  = std::move(what),
             .path  = u.source->path,
             .where = location_of(u, src),
         });
     }
+
     return stdx::err{stop::UNSUPPORTED};
 }
 

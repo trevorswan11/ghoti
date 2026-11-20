@@ -57,18 +57,19 @@ auto format_constant(const ip::pool& constants, ip::index at) -> std::string {
         [](const auto& v) { return fmt::format("{}", v); });
 }
 
+auto format_local(local_id loc) -> std::string {
+    switch (loc.get_kind()) {
+    case local_kind::TEMPORARY: return fmt::format("%{}", loc.get_index());
+    case local_kind::PARAMETER: return fmt::format("param.{}", loc.get_index());
+    case local_kind::ALLOCA:    return fmt::format("%{}", loc.get_index());
+    case local_kind::GLOBAL:    return fmt::format("@{}", loc.get_index());
+    default:                    UNREACHABLE("Unknown local ID");
+    }
+}
+
 auto format_value(const ip::pool& constants, const value& val) -> std::string {
-    return val.data.visit(
-        [](local_id loc) {
-            switch (loc.get_kind()) {
-            case local_kind::TEMPORARY: return fmt::format("%{}", loc.get_index());
-            case local_kind::PARAMETER: return fmt::format("param.{}", loc.get_index());
-            case local_kind::ALLOCA:    return fmt::format("%{}", loc.get_index());
-            case local_kind::GLOBAL:    return fmt::format("@{}", loc.get_index());
-            default:                    UNREACHABLE("Unknown local ID");
-            }
-        },
-        [&constants](ip::index at) { return format_constant(constants, at); });
+    return val.data.visit([](local_id loc) { return format_local(loc); },
+                          [&constants](ip::index at) { return format_constant(constants, at); });
 }
 
 auto linkage_name(gir::linkage l) noexcept -> std::string_view {
@@ -113,7 +114,7 @@ auto format_instruction(const ip::pool& constants, const instruction& inst, bool
                 "store {}, {}", format_value(inst.operands[0]), format_value(inst.operands[1]));
         } else if (inst.operands.size() == 1 && inst.result) {
             return fmt::format(
-                "store {}, %{}", format_value(inst.operands[0]), inst.result->get_index());
+                "store {}, {}", format_value(inst.operands[0]), format_local(*inst.result));
         }
         return fmt::format("store {}, {}",
                            inst.operands.size() > 0 ? format_value(inst.operands[0])

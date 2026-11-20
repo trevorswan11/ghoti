@@ -15,6 +15,8 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -25,7 +27,9 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "support/big_int.hh"
@@ -45,11 +49,18 @@ enum class stop : u8 {
 
 template <typename T> using result = stdx::result<T, stop>;
 
+// Where GIR's built-in aggregates keep their parts
+inline constexpr u64 SLICE_PTR_FIELD{0};
+inline constexpr u64 SLICE_LEN_FIELD{1};
+inline constexpr u64 ARRAY_PTR_FIELD{0};
+inline constexpr u64 UNION_TAG_FIELD{0};
+inline constexpr u64 UNION_PAYLOAD_FIELD{1};
+
 // One lowered module and the source it came from
 struct unit {
-    gsl::not_null<const mod::module_t*> source;
-    gsl::not_null<const module_t*>      uir;
-    u32                                 index;
+    gsl::not_null<mod::module_t*>  source; // mutable since type payloads hold their module
+    gsl::not_null<const module_t*> uir;
+    u32                            index;
 };
 
 struct instance;
@@ -59,11 +70,25 @@ struct function_ref {
     gsl::not_null<instance*> fn;
 };
 
+// A tagged union's field whose payload address isn't computed yet (read checks tag before it)
+struct union_field {
+    gir::value       union_address;
+    u64              index;
+    std::string_view name;
+};
+
 // An addressable slot that loads read and stores write
 struct place {
-    gir::value               address;
-    gsl::not_null<gs::type*> pointee;
-    bool                     is_mutable;
+    gir::value                address;
+    gsl::not_null<gs::type*>  pointee;
+    bool                      is_mutable;
+    stdx::option<union_field> pending{};
+};
+
+// The values a `for` range's counter takes, which let it convert to any integer holding them all
+struct value_range {
+    big_int lo;
+    big_int hi;
 };
 
 // A runtime merge whose arms are all untyped constants, given a type where it is used
@@ -82,10 +107,45 @@ struct comptime_place {
     u32 alloc;
 };
 
-// A comptime value, a runtime value, a function, a place, a pending untyped merge, a global, or a
-// comptime allocation
-using operand = stdx::
-    variant<ip::index, gir::value, function_ref, place, merge_ref, global_ref, comptime_place>;
+// An immutable runtime value kept in a slot, read by loading it and addressed where it lies
+struct slot_value {
+    gir::value               address;
+    gsl::not_null<gs::type*> type;
+    // A parameter the body assigns to, whose slot stores may write
+    bool is_mutable{false};
+    // A `for` range capture with known bounds
+    stdx::option<value_range> range{};
+};
+
+// An untyped `.{ ... }` literal, which takes the type it is coerced to
+struct anon_init {
+    inst_id inst;
+};
+
+// An untyped `.name`, which names a variant of the enum it is coerced to
+struct enum_literal {
+    inst_id inst;
+};
+
+// A module-level aggregate `const`, which runtime code reads through its GIR global
+struct global_const {
+    gsl::not_null<const std::string*> symbol;
+    gsl::not_null<gs::type*>          type;
+    ip::index                         value;
+};
+
+// What analyzing an instruction yields
+using operand = stdx::variant<ip::index,      // a comptime value
+                              gir::value,     // a runtime value
+                              function_ref,   // a function
+                              place,          // an addressable place
+                              merge_ref,      // a pending merge of untyped branch values
+                              global_ref,     // a module-level `let mut`
+                              comptime_place, // a place in a comptime allocation
+                              slot_value,     // a value held in a slot
+                              anon_init,      // an untyped `.{ ... }` literal
+                              enum_literal,   // an untyped `.name` literal
+                              global_const>;  // a module-level aggregate `const`
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -99,11 +159,14 @@ struct comptime_alloc {
     bool keeps_comptime_type;
 };
 
+struct memo_key;
+
 // One compile-time call in progress, for the recursion limit and the notes of its errors
 struct comptime_frame {
-    gsl::not_null<const unit*> caller;
-    source                     call_src;
-    std::string_view           callee;
+    gsl::not_null<const unit*>     caller;
+    source                         call_src;
+    std::string_view               callee;
+    gsl::not_null<const memo_key*> key;
     // Allocations from here on belong to the call, so storing below it makes the call impure
     u32  alloc_base;
     bool impure{false};
@@ -145,6 +208,7 @@ struct instance {
     std::vector<gsl::not_null<gs::type*>> params;
     gsl::not_null<gs::type*>              return_type;
     gir::linkage                          linkage{gir::linkage::INTERNAL};
+    bool                                  weak{false};
     bool                                  queued{false};
     // Returns `type`, so every call runs at compile time and there is no runtime body
     bool comptime_only{false};
@@ -156,7 +220,50 @@ struct eval_limits {
     usize unroll;
 };
 
+enum class nominal_state : u8 {
+    DECLARED, // Identity and name, enough for a pointer or slice to it
+    FIELDS_RESOLVING,
+    RESOLVED,
+    LAYOUT_RESOLVING, // Inside an `@sizeOf` or `@alignOf` of itself
+    FAILED,
+};
+
+// A struct, union or enum type a `*_decl` instruction created
+struct nominal {
+    gsl::not_null<const unit*> owner;
+    inst_id                    inst;
+    gsl::not_null<gs::type*>   type;
+    std::string                name;
+    nominal_state              state{nominal_state::DECLARED};
+    // Created inside a comptime call, whose instance its members would need
+    bool in_call{false};
+    // An enum's value for each variant, in declaration order
+    std::vector<i64> enum_values{};
+};
+
+// A nominal type's instruction and the comptime call it was created in
+struct nominal_key {
+    u32                    unit;
+    inst_id                inst;
+    std::vector<ip::index> args;
+
+    [[nodiscard]] auto operator==(const nominal_key&) const noexcept -> bool = default;
+};
+
+struct nominal_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const nominal_key& key) const noexcept -> u64;
+};
+
 class compilation {
+  public:
+    // What a speculative compile-time evaluation could leave behind, so it can be undone
+    struct speculation {
+        usize diagnostics;
+        bool  stopped;
+        bool  runtime_site;
+    };
+
   public:
     compilation(gs::context& ctx, const program& prog, const options& opts);
     ~compilation() = default;
@@ -195,7 +302,8 @@ class compilation {
     [[nodiscard]] auto span_of(const unit& u, const source& src) const -> source_span;
 
     // The GIR symbol and linkage of a module-level declaration
-    [[nodiscard]] auto        symbol_for(const unit& u, const decl& d) const -> std::string;
+    [[nodiscard]] auto symbol_for(const unit& u, decl_id decl, const source& src)
+        -> result<std::string>;
     [[nodiscard]] static auto linkage_of(const decl& d) noexcept -> gir::linkage;
     // Keeps a `let mut` global's symbol alive for the `global_ref`s that name it
     [[nodiscard]] auto own_symbol(const unit& u, decl_id decl, std::string symbol)
@@ -219,6 +327,35 @@ class compilation {
     auto               note_store(comptime_place p) -> void;
     [[nodiscard]] auto next_frame() noexcept -> u32 { return next_frame_++; }
 
+    // The struct, union or enum `inst` declares, created the first time the current comptime call
+    // reaches it
+    [[nodiscard]] auto declare_nominal(const unit& u, inst_id inst, gs::type_kind kind) -> nominal&;
+    [[nodiscard]] auto nominal_of(const gs::type& t) -> stdx::option<nominal&>;
+    // A copy of `name` that lives as long as the context
+    [[nodiscard]] auto lasting_name(std::string_view name) -> std::string_view;
+    // The nominal `inst` declared outside any comptime call, if it was declared yet
+    [[nodiscard]] auto existing_nominal(const unit& u, inst_id inst) -> stdx::option<nominal&>;
+    // Names an anonymous nominal type for the declaration that declared it
+    auto name_nominal(gs::type& t, std::string_view name) -> void;
+    // Resolves `t`'s fields the first time something needs them, detecting cycles
+    [[nodiscard]] auto require_fields(const unit& u, const source& use, gs::type& t)
+        -> result<void>;
+
+    // A declaration of the compiler's `builtin` module, analyzed the first time `use` needs it
+    [[nodiscard]] auto prelude_decl(std::string_view name, const unit& user, const source& use)
+        -> result<operand>;
+    [[nodiscard]] auto prelude_function(std::string_view name, const unit& user, const source& use)
+        -> result<gsl::not_null<instance*>>;
+    [[nodiscard]] auto prelude_type(std::string_view name, const unit& user, const source& use)
+        -> result<gsl::not_null<gs::type*>>;
+
+    [[nodiscard]] auto speculate() const -> speculation;
+    // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
+    auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
+
+    // The `and` / `or` whose left side is the `and` / `or` `inst`, if any
+    [[nodiscard]] auto bool_parent(const unit& u, inst_id inst) -> stdx::option<inst_id>;
+
     // Records where a comptime evaluation needed a runtime value and returns the deferred stop
     [[nodiscard]] auto needs_runtime(const unit& u, const source& src) -> stdx::err<stop>;
     // Notes that the runtime need came through the immutable `let` named `name`
@@ -240,7 +377,13 @@ class compilation {
     using memo_entry = stdx::option<operand>;
 
   private:
-    auto               analyze_roots() -> void;
+    auto analyze_roots() -> void;
+    // Analyzes the member declarations of a type a module-level declaration declared
+    auto analyze_members(const unit& u, gs::type& owner) -> void;
+    // The type a declaration's value body declares directly
+    [[nodiscard]] auto declared_type(const unit&                   u,
+                                     const stdx::option<body_ref>& body,
+                                     const operand& value) -> stdx::option<gs::type&>;
     auto               drain_queue() -> void;
     [[nodiscard]] auto analyze_body(instance& fn) -> result<void>;
     // A declaration whose whole value is `@compileError(...)`, which fires where it is used
@@ -256,7 +399,9 @@ class compilation {
     options                                                           opts_;
     std::vector<unit>                                                 units_;
     std::vector<std::vector<decl_state>>                              decls_;
-    std::vector<stdx::box<instance>>                                  instances_;
+    // Instances and nominals are referenced by address, so the arena keeps them in place
+    ghoti::arena                                                      arena_;
+    std::vector<gsl::not_null<instance*>>                             instances_;
     std::vector<gsl::not_null<instance*>>                             queue_;
     gir::module_t                                                     gir_;
     gs::diagnostics                                                   diagnostics_;
@@ -268,6 +413,15 @@ class compilation {
     eval_limits                                                       limits_;
     stdx::option<runtime_site>                                        runtime_site_;
     u32                                                               next_frame_{0};
+    std::vector<gsl::not_null<nominal*>>                              nominals_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>  nominal_ids_;
+    // The `builtin` module, lowered here since the program's modules don't import it
+    stdx::option<lowered> prelude_;
+    stdx::option<u32>     prelude_unit_;
+    // Per unit, each `and` / `or` that is the left side of another, built on first use
+    std::vector<stdx::option<ankerl::unordered_dense::map<inst_id, inst_id>>> bool_parents_;
+    // Each GIR symbol a declaration claimed, with the unit and declaration that claimed it
+    ankerl::unordered_dense::map<std::string, std::pair<u32, decl_id>> symbols_;
 };
 
 // The result of analyzing a body: the value it yields, or none when control left it
@@ -324,6 +478,8 @@ class analyzer {
     [[nodiscard]] auto analyze_function() -> result<void>;
     // A module-level declaration's value, emitting its GIR global when it has one
     [[nodiscard]] auto analyze_decl(decl_id decl) -> result<operand>;
+    // Resolves a nominal type's fields, or an enum's values
+    [[nodiscard]] auto resolve_fields(nominal& n) -> result<void>;
 
     // The comptime value of `op`, none when it is only known at runtime
     [[nodiscard]] auto comptime_value(const operand& op) const -> stdx::option<ip::index>;
@@ -359,6 +515,52 @@ class analyzer {
         stdx::option<operand> value;
     };
 
+    // A `for` range's bounds once resolved
+    struct range_operands {
+        stdx::option<operand> lo;
+        stdx::option<operand> hi;
+        bool                  lo_is_literal{false};
+    };
+
+    // One `for` iterable while its loop is emitted: a range's counter, or an index into a container
+    struct iterable {
+        bool                      is_range;
+        bool                      inclusive;
+        bool                      open_upper;
+        gir::value                counter;
+        gsl::not_null<gs::type*>  elem;
+        gir::value                end;
+        stdx::option<gir::value>  descending;
+        gir::value                container;
+        bool                      is_slice;
+        stdx::option<value_range> values{};
+    };
+
+    // One `match` arm as UIR lists it
+    struct match_arm {
+        gsl::span<const ref>     patterns;
+        stdx::option<ref>        capture;
+        gsl::span<const inst_id> guard;
+        gsl::span<const inst_id> body;
+    };
+
+    // A name a `match` arm binds, held in its own slot
+    struct capture_slot {
+        std::string_view         name;
+        gsl::not_null<gs::type*> type;
+        gir::value               address;
+        bool                     is_void;
+    };
+
+    // A runtime `match` while its decision tree is emitted
+    struct match_lowering {
+        const gs::pattern::decision_tree&      tree;
+        gir::value                             root;
+        std::vector<gir::segment_id>           bodies;
+        std::vector<std::vector<capture_slot>> slots;
+        source                                 src;
+    };
+
     // Where a value is converted to a known type, which names the mismatch when it can't be
     struct use_site {
         enum class kind : u8 {
@@ -371,6 +573,7 @@ class analyzer {
         std::string_view callee{};
     };
 
+  private:
     // Instructions
     [[nodiscard]] auto analyze_body(gsl::span<const inst_id> body) -> result<flow>;
     [[nodiscard]] auto analyze_inst(inst_id inst) -> result<operand>;
@@ -387,6 +590,153 @@ class analyzer {
     [[nodiscard]] auto analyze_float_lit(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_int_type(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_func(inst_id inst) -> result<operand>;
+    // `^T`, `&T` and `[]T`
+    [[nodiscard]] auto analyze_elem_type(inst_id inst, tag t) -> result<operand>;
+    [[nodiscard]] auto analyze_array_type(inst_id inst) -> result<operand>;
+    // An array length, which must be known at compile time
+    [[nodiscard]] auto array_length(ref len_ref, const source& src) -> result<usize>;
+
+    // Nominal types (aggregates.cc)
+    [[nodiscard]] auto analyze_nominal_decl(inst_id inst, gs::type_kind kind) -> result<operand>;
+    [[nodiscard]] auto resolve_struct(nominal& n) -> result<void>;
+    [[nodiscard]] auto resolve_union(nominal& n) -> result<void>;
+    [[nodiscard]] auto resolve_enum(nominal& n) -> result<void>;
+    [[nodiscard]] auto field_type_of(gsl::span<const inst_id> body,
+                                     std::string_view         name,
+                                     const source& src) -> result<gsl::not_null<gs::type*>>;
+    // The enum's variant `name` as a constant
+    [[nodiscard]] auto enum_constant(gs::type& enum_type, std::string_view name, const source& src)
+        -> result<operand>;
+    // `T.name`: an enum variant, or a member declaration
+    [[nodiscard]] auto member_of(gs::type& owner, std::string_view name, const source& src)
+        -> result<operand>;
+
+    // Field and element access (access.cc)
+    [[nodiscard]] auto analyze_field_val(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_field_ptr(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_elem_val(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_elem_ptr(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand>;
+    [[nodiscard]] auto analyze_deref(inst_id inst) -> result<operand>;
+    // The storage `r` names, spilling a value that has none into a slot
+    [[nodiscard]] auto address_of(ref r, const source& src) -> result<place>;
+    [[nodiscard]] auto spill(const gir::value& v, gs::type& type, bool to_entry) -> place;
+    [[nodiscard]] auto load(const place& p) -> gir::value;
+    // A place with its address computed, a tagged union's payload included
+    [[nodiscard]] auto settle(const place& p) -> place;
+    // Loads a place, checking a tagged union's active field first
+    [[nodiscard]] auto read(const place& p, const source& src) -> result<gir::value>;
+    // The storage of an operand whose instruction isn't at hand, spilling a value with none
+    [[nodiscard]] auto operand_address(const operand& op, const source& src) -> result<place>;
+    [[nodiscard]] auto global_place(std::string_view symbol, gs::type& type, bool is_mutable)
+        -> place;
+    // `type` as a binding named by `r` holds it, mutable unless the binding is immutable
+    [[nodiscard]] auto binding_view(ref r, gs::type& type) -> gs::type&;
+    // What a pointer or reference place points at, else the place itself
+    [[nodiscard]] auto through_pointer(const place& base, const source& src) -> result<place>;
+    // The place a pointer or reference value points at
+    [[nodiscard]] auto pointer_place(const operand& ptr, const source& src) -> result<place>;
+    [[nodiscard]] auto field_index(gs::type& type, std::string_view name, const source& src)
+        -> result<usize>;
+    // A field's type as a place reaches it, with an array's elements mutable through a mutable one
+    [[nodiscard]] auto mutable_view(gs::type& field, bool through_mutable) -> gs::type&;
+    [[nodiscard]] auto field_place(const place& object, std::string_view name, const source& src)
+        -> result<place>;
+    [[nodiscard]] auto index_operand(ref index_ref, const source& src) -> result<gir::value>;
+    [[nodiscard]] auto
+    bounds_check(const gir::value& index, const gir::value& bound, bool sentinel, const source& src)
+        -> result<void>;
+    [[nodiscard]] auto elem_place(const place& object, ref index_ref, const source& src)
+        -> result<place>;
+    [[nodiscard]] auto comptime_field(ip::index object, std::string_view name, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto comptime_elem(ip::index object, ip::index at, const source& src)
+        -> result<operand>;
+
+    // Ranges, slicing and `for` (iteration.cc)
+    [[nodiscard]] auto analyze_range(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_bind(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_slice(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_for(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto usize_bound(ref r, const source& src) -> result<gir::value>;
+    // The type a `for` range counts in
+    [[nodiscard]] auto counter_type(const range_operands& r) -> gs::type&;
+    // Every value a range takes, when both its bounds are known
+    [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
+        -> stdx::option<value_range>;
+    // A `for` at compile time, binding each iteration's values as constants
+    [[nodiscard]] auto run_for(inst_id                                   inst,
+                               gsl::span<const ref>                      iterables,
+                               const std::vector<stdx::option<inst_id>>& binds,
+                               gsl::span<const inst_id>                  body,
+                               gsl::span<const inst_id> else_body) -> result<operand>;
+
+    // `match` (match.cc)
+    [[nodiscard]] auto analyze_match(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto match_arms(inst_id inst) -> std::vector<match_arm>;
+    [[nodiscard]] auto capture_name(const ast::capture_t& capture) const -> std::string_view;
+    // A pattern's value, which must be known at compile time
+    [[nodiscard]] auto pattern_value(gsl::span<const inst_id> body,
+                                     gs::type&                type,
+                                     const source&            src) -> result<ip::index>;
+    [[nodiscard]] auto pattern_node(inst_id pat, gs::type& type) -> result<gs::pattern::node_ptr>;
+    // The value of a runtime match that runs entirely at compile time to a number or `bool`
+    [[nodiscard]] auto fold_match(const std::vector<match_arm>&              arms,
+                                  const std::vector<gs::pattern::row_input>& rows,
+                                  ref                                        operand_ref,
+                                  const source& src) -> result<stdx::option<operand>>;
+    // A `match` at compile time, which analyzes only the arm it takes
+    [[nodiscard]] auto run_match(const std::vector<match_arm>&              arms,
+                                 const std::vector<gs::pattern::row_input>& rows,
+                                 const operand&                             scrutinee,
+                                 const source&                              src) -> result<operand>;
+    [[nodiscard]] auto emit_match(const std::vector<match_arm>&              arms,
+                                  const std::vector<gs::pattern::row_input>& rows,
+                                  const gs::pattern::decision_tree&          tree,
+                                  ref                                        operand_ref,
+                                  const operand&                             scrutinee,
+                                  const source& src) -> result<operand>;
+    [[nodiscard]] auto
+    scrutinee_address(ref operand_ref, const operand& scrutinee, bool aggregate, const source& src)
+        -> result<gir::value>;
+    [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
+    [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
+
+    // Initializers (init.cc)
+    [[nodiscard]] auto analyze_init_struct(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_init_array(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_array_lit(inst_id inst) -> result<operand>;
+    // The initializer `inst` builds as a `type`
+    [[nodiscard]] auto init_as(inst_id inst, gs::type& type, const source& src) -> result<operand>;
+    [[nodiscard]] auto init_struct(inst_id inst, gs::type& type, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto init_union(inst_id inst, gs::type& type, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto init_array(inst_id inst, gs::type& type, const source& src)
+        -> result<operand>;
+    // Each field's default body, empty for a field with none
+    [[nodiscard]] auto field_defaults(gs::type& type, const source& src)
+        -> result<std::vector<gsl::span<const inst_id>>>;
+    [[nodiscard]] auto
+    field_default(gs::type& type, usize index, gsl::span<const inst_id> body, const source& src)
+        -> result<operand>;
+    // Builds a folded aggregate constant into runtime storage
+    [[nodiscard]] auto materialize(ip::index index, const source& src) -> result<gir::value>;
+
+    // Runtime safety (safety.cc)
+    [[nodiscard]] auto usize_constant(u64 value) -> gir::value;
+    [[nodiscard]] auto string_slice(std::string_view text, gs::type& slice_type) -> gir::value;
+    // A string constant viewed as a slice of `slice_type`, copied when the slice is mutable
+    [[nodiscard]] auto string_as_slice(std::string_view text, gs::type& slice_type) -> gir::value;
+    [[nodiscard]] auto emit_panic(std::string_view message, const source& src) -> result<void>;
+    // Continues where `ok` holds, panicking with `message` where it doesn't
+    [[nodiscard]] auto guard(gir::value ok, std::string_view message, const source& src)
+        -> result<void>;
+    [[nodiscard]] auto check_not_null(const gir::value& ptr, const source& src) -> result<void>;
+    [[nodiscard]] auto check_active_field(const gir::value& union_address,
+                                          u64               field,
+                                          std::string_view  name,
+                                          const source&     src) -> result<void>;
 
     // Operators (arith.cc)
     [[nodiscard]] auto analyze_binary(inst_id inst, tag t) -> result<operand>;
@@ -398,6 +748,15 @@ class analyzer {
     [[nodiscard]] auto
     fold_shift(const binary_info& info, const operand& lhs, const operand& rhs, const source& src)
         -> result<operand>;
+    // `u == .field` on a tagged union, none for any other comparison
+    [[nodiscard]] auto
+    compare_tag(const binary_info& info, const operand& lhs, const operand& rhs, const source& src)
+        -> result<stdx::option<operand>>;
+    // A comparison of pointers or `nullptr`, none for any other comparison
+    [[nodiscard]] auto compare_pointers(const binary_info& info,
+                                        const operand&     lhs,
+                                        const operand&     rhs,
+                                        const source&      src) -> result<stdx::option<operand>>;
     // `lhs op rhs` when both are known and the operation doesn't fault, else none
     [[nodiscard]] auto fold_binary(const binary_info& info,
                                    gs::type&          peer,
@@ -409,7 +768,7 @@ class analyzer {
     [[nodiscard]] auto domain_of(const gs::type& t) const -> gir::semantics::int_domain;
     // Whether `gir::semantics` folds `t`'s values, which it does up to 128 bits
     [[nodiscard]] auto folds_exactly(const gs::type& t) const -> bool;
-    // Whether the runtime instruction checks `op` on `t`, as the old emitter decides it
+    // Whether the runtime instruction for `op` on `t` checks for overflow
     [[nodiscard]] auto checks_overflow(gir::semantics::int_op op, const gs::type& t) const -> bool;
 
     // Coercion (coerce.cc)
@@ -421,9 +780,16 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto peer_type(gsl::span<const operand> ops, const source& src)
         -> result<gsl::not_null<gs::type*>>;
+    // The array of type `from` at `address` viewed as a slice of its elements
+    [[nodiscard]] auto array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
+        -> result<stdx::option<operand>>;
     [[nodiscard]] auto as_runtime(const operand& op, const source& src) -> result<gir::value>;
     [[nodiscard]] auto materialize_merge(merge_ref m, gs::type& type, const source& src)
         -> result<gir::value>;
+    // A `.{...}` or `.name` that takes its type from where it is used
+    [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
+        return op.is<anon_init>() || op.is<enum_literal>();
+    }
     [[nodiscard]] auto concrete(const operand& op, const source& src) -> result<operand>;
 
     // Locals and memory (memory.cc)
@@ -434,6 +800,8 @@ class analyzer {
     [[nodiscard]] auto analyze_let_value(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_const_local(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_store(inst_id inst) -> result<operand>;
+    // Where a store to `target` writes: a place, a written parameter, or what a pointer points at
+    [[nodiscard]] auto store_destination(const operand& target, const source& src) -> result<place>;
     [[nodiscard]] auto analyze_load(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_decl_val(inst_id inst, bool as_place) -> result<operand>;
     [[nodiscard]] auto analyze_discard(inst_id inst) -> result<operand>;
@@ -465,6 +833,12 @@ class analyzer {
     // Reports a runtime need that reached a comptime boundary in a runtime function
     [[nodiscard]] auto at_comptime_boundary(result<operand> value) -> result<operand>;
     [[nodiscard]] auto known_bool(const operand& op, const source& src) -> result<bool>;
+    // The result slot of a runtime `and` / `or`, holding the value its left side decides alone
+    [[nodiscard]] auto bool_slot(inst_id inst, bool is_and) -> gir::value;
+    // Whether a branch body ends yielding nothing, like a statement `if`'s arms
+    [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
+    // A runtime condition's value when running it again at compile time knows it
+    [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
     [[nodiscard]] auto finish_merge(const std::vector<incoming>& arrivals,
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
@@ -475,6 +849,13 @@ class analyzer {
 
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
+    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
+    [[nodiscard]] auto call_function(instance&            target,
+                                     gsl::span<const ref> args,
+                                     const source&        src,
+                                     const source&        callee_src,
+                                     bool                 through_member) -> result<operand>;
     [[nodiscard]] auto call_at_comptime(instance&            target,
                                         gsl::span<const ref> args,
                                         const source&        src) -> result<operand>;
@@ -489,6 +870,11 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src)
         -> result<operand>;
+    [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_this(const source& src) -> result<operand>;
+    // Resolves what `@sizeOf(type)` needs, reporting a layout that depends on itself
+    [[nodiscard]] auto layout_ready(gs::type& type, const source& src) -> result<void>;
 
     // Comptime knownness
     // The operand's comptime value, or the runtime need when it has none
@@ -497,6 +883,8 @@ class analyzer {
     [[nodiscard]] auto reevaluate(ref r, const source& src) -> result<operand>;
 
     // Declarations (decls.cc)
+    // Whether the declaration's value is a type it declares: `const P = struct { ... }`
+    [[nodiscard]] auto declares_type(const decl& d) const -> bool;
     [[nodiscard]] auto analyze_global(decl_id                 decl,
                                       const operand&          value,
                                       stdx::option<gs::type&> declared,
@@ -533,8 +921,10 @@ class analyzer {
     stdx::option<gir::function&>                   gir_fn_;
     gir::builder                                   builder_;
     ankerl::unordered_dense::map<inst_id, operand> values_;
-    std::vector<target>                            targets_;
-    std::vector<pending_merge>                     merges_;
+    // Result slots an inner `and` / `or` already made for the ones it is the left side of
+    ankerl::unordered_dense::map<inst_id, gir::value> bool_slots_;
+    std::vector<target>                               targets_;
+    std::vector<pending_merge>                        merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // The runtime branches enclosing the instruction being analyzed
@@ -544,11 +934,15 @@ class analyzer {
     stdx::option<jump> jump_;
 };
 
-// Messages shared with the old pipeline's checks (messages.cc)
+// Diagnostic messages shared across checks (messages.cc)
 namespace messages {
 
 constexpr std::string_view MUTABLE_TYPE_BINDING{
     "a 'type' value cannot be stored in a 'let' or 'let mut' binding; use 'const' instead"};
+constexpr std::string_view MUTABLE_ADDRESS_OF_IMMUTABLE{
+    "Cannot take a mutable address of an immutable value"};
+constexpr std::string_view MUTABLE_ADDRESS_OF_ELEMENT{
+    "Cannot take a mutable address of an element of a non-mutable array or slice"};
 
 [[nodiscard]] auto
 store_mismatch(const gs::context& ctx, const gs::type& from, const gs::type& to, u32 ptr_bits)
@@ -582,6 +976,14 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 
 // `value` as a `type` constant, at the narrowest integer width that holds it
 [[nodiscard]] auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index;
+
+// Whether a value of `type` holds a `type` somewhere, which only exists at compile time
+[[nodiscard]] auto holds_types(const gs::type& type) -> bool;
+
+// Whether a binding's value lives on past one use, so its spill is reused
+[[nodiscard]] constexpr auto is_binding(tag t) noexcept -> bool {
+    return t == tag::param || t == tag::let_value || t == tag::bind;
+}
 // An integer constant's value, none for any other kind of constant
 [[nodiscard]] auto int_of(const ip::value& v) -> stdx::option<big_int>;
 

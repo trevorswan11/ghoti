@@ -35,7 +35,7 @@ class corpus_context {
     }
 
     // Lowers `root` and everything it reaches, requiring every module to lower cleanly
-    auto check_lowers(const mod::module_t& root) -> void {
+    auto check_lowers(mod::module_t& root) -> void {
         const auto lowered{uir::lower_reachable(root, {.cfg = cfg_, .modules = manager_})};
         CHECK_FALSE(lowered.empty());
         for (const auto& item : lowered) {

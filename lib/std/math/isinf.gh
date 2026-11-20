@@ -1,7 +1,6 @@
 //! Ported from:
 //!
 //! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/math/isinf.zig
-//! TODO(tcs) #419: Commented out expectations below fail with @as trying to convert the literal to the `type` type
 import std;
 
 const math = std.math;
@@ -18,8 +17,8 @@ const math = std.math;
 
 test "is_inf" {
     unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
-        // @expect(!is_inf(@as(T, 0.0)));
-        // @expect(!is_inf(@as(T, -0.0)));
+        @expect(!is_inf(@as(T, 0.0)));
+        @expect(!is_inf(@as(T, -0.0)));
         @expect(is_inf(math.inf(T)));
         @expect(is_inf(-math.inf(T)));
         @expect(!is_inf(math.nan(T)));
@@ -34,8 +33,8 @@ test "is_inf" {
 
 test "is_positive_inf" {
     unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
-        // @expect(!is_positive_inf(@as(T, 0.0)));
-        // @expect(!is_positive_inf(@as(T, -0.0)));
+        @expect(!is_positive_inf(@as(T, 0.0)));
+        @expect(!is_positive_inf(@as(T, -0.0)));
         @expect(is_positive_inf(math.inf(T)));
         @expect(!is_positive_inf(-math.inf(T)));
         @expect(!is_positive_inf(math.nan(T)));
@@ -50,8 +49,8 @@ test "is_positive_inf" {
 
 test "is_negative_inf" {
     unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
-        // @expect(!is_negative_inf(@as(T, 0.0)));
-        // @expect(!is_negative_inf(@as(T, -0.0)));
+        @expect(!is_negative_inf(@as(T, 0.0)));
+        @expect(!is_negative_inf(@as(T, -0.0)));
         @expect(!is_negative_inf(math.inf(T)));
         @expect(is_negative_inf(-math.inf(T)));
         @expect(!is_negative_inf(math.nan(T)));

@@ -35,7 +35,7 @@ auto llvm_init_warmup() -> void {
     stdx::untracked_scope untracked_guard;
     codegen::initialize_all_targets();
     using namespace std::string_view_literals;
-    constexpr static std::array warmup_triples{
+    static constexpr std::array warmup_triples{
         ""sv,
         "x86_64-unknown-linux-gnu"sv,
         "x86_64-w64-windows-gnu"sv,

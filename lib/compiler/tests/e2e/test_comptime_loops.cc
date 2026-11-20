@@ -487,4 +487,26 @@ TEST_CASE("`unroll for` over a range past the unroll limit is an error, not a ha
     )") == 250);
 }
 
+TEST_CASE("`unroll for` over types binds each iteration's type where a type is expected") {
+    CHECK(helpers::compile_and_run(R"(
+        const is_zero = fn(x: auto): bool {
+            const T = @TypeOf(x);
+            return x == @as(T, 0.0);
+        };
+        const width = fn(x: auto): i32 { return @bitSizeOf(@TypeOf(x)); };
+        pub const main = fn(): i32 {
+            let mut n: i32 = 0;
+            unroll for ([_]type{ f32, f64 }) |T| {
+                if (is_zero(@as(T, 0.0))) n += 1;
+                if (!is_zero(@as(T, -1.0))) n += 1;
+                const z: T = 0.0;
+                if (is_zero(z)) n += 1;
+                let y = @as(T, 2.0);
+                n += width(y);
+            }
+            return n;
+        };
+    )") == 102);
+}
+
 } // namespace ghoti::tests

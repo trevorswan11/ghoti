@@ -33,7 +33,7 @@ template <node_kind... AllowedKinds> class handle {
         requires(detail::any_kind_compatible<AllowedKinds...>(OtherKinds) || ...)
     constexpr handle(handle<OtherKinds...> other) noexcept : id_{*other} {}
 
-    [[nodiscard]] constexpr static auto any_compatible(node_kind kind) noexcept -> bool {
+    [[nodiscard]] static constexpr auto any_compatible(node_kind kind) noexcept -> bool {
         return detail::any_kind_compatible<AllowedKinds...>(kind);
     }
 

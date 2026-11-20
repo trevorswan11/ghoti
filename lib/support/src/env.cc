@@ -37,7 +37,7 @@ auto get_env(const std::string& name) -> stdx::option<std::string_view> {
 namespace {
 
 auto trim_env_value(std::string_view value) -> std::string_view {
-    constexpr static std::string_view whitespace{" \t\r\n"};
+    static constexpr std::string_view whitespace{" \t\r\n"};
     const auto                        first{value.find_first_not_of(whitespace)};
     if (first == std::string_view::npos) { return {}; }
     value = stdx::string::substr(value, first, value.find_last_not_of(whitespace) - first + 1);

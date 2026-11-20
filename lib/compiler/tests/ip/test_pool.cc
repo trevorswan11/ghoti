@@ -145,8 +145,8 @@ TEST_CASE("A struct value is held in field order, with unset fields left out") {
             z: bool,
         };
     )")};
-    const auto [_1, _2, point_type]{ctx->get_type_sym_info<sema::symbols::node_t>("Point", idx)};
-    auto& point{sema::denoted_type(const_cast<sema::type&>(point_type))};
+    auto [_1, _2, point_type]{ctx->get_type_sym_info<sema::symbols::node_t>("Point", idx)};
+    auto& point{sema::denoted_type(point_type)};
     auto& pool{ctx->analyzer.get_pool().intern()};
 
     gir::const_struct fields;

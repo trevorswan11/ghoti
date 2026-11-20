@@ -3,6 +3,7 @@
 
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -41,21 +42,88 @@ auto int_of(const ip::value& v) -> stdx::option<big_int> {
 auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     -> result<stdx::option<operand>> {
     if (const auto m{op.as_opt<merge_ref>()}) {
-        if (!gs::is_numeric(target.get_kind())) { return stdx::none; }
+        const auto kind{target.get_kind()};
+        const bool literals{is_untyped_literal(merges_[m->index].arrivals.front().value)};
+        const bool takes{literals ? kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION ||
+                                        kind == gs::type_kind::ARRAY || kind == gs::type_kind::ENUM
+                                  : gs::is_numeric(kind)};
+        if (!takes) { return stdx::none; }
         return operand{TRY(materialize_merge(*m, target, src))};
     }
+
+    if (const auto literal{op.as_opt<enum_literal>()}) {
+        if (target.get_kind() != gs::type_kind::ENUM) { return stdx::none; }
+        return enum_constant(target, mod().string(mod().data_of(literal->inst).str), src);
+    }
+
+    if (const auto init{op.as_opt<anon_init>()}) {
+        const auto kind{target.get_kind()};
+        if (kind != gs::type_kind::STRUCT && kind != gs::type_kind::UNION &&
+            kind != gs::type_kind::ARRAY) {
+            return stdx::none;
+        }
+
+        return operand{TRY(init_as(init->inst, target, src))};
+    }
+
     auto& from{type_of(op)};
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
     if (gs::is_same_unqualified(from, target)) { return op; }
 
     auto& pool{comp_.constants()};
     auto& ctx{comp_.ctx()};
+
+    // A range capture converts to any integer that holds every value it takes
+    if (const auto slot{op.as_opt<slot_value>()};
+        slot && slot->range && gs::is_integer(target.get_kind()) &&
+        gs::comptime_int_fits(slot->range->lo, target, comp_.ptr_bits()) &&
+        gs::comptime_int_fits(slot->range->hi, target, comp_.ptr_bits())) {
+        TRY(require_runtime(src));
+        const auto value{
+            load(place{.address = slot->address, .pointee = slot->type, .is_mutable = false})};
+        return operand{
+            gir::value{builder_.emit_cast(gir::instruction_kind::INT_CAST, value, target), target}};
+    }
+
+    if (from.get_kind() == gs::type_kind::ARRAY && target.get_kind() == gs::type_kind::SLICE) {
+        if (comptime_value(op) && is_comptime()) {
+            return comp_.unsupported(u_, src, "a slice of a compile-time array");
+        }
+
+        if (!comptime_value(op)) {
+            const auto base{TRY(operand_address(op, src))};
+            return array_as_slice(base.address, from, target);
+        }
+    }
+
+    // A reference to an array views it as a slice
+    if (from.get_kind() == gs::type_kind::REFERENCE && target.get_kind() == gs::type_kind::SLICE) {
+        auto& referent{from.get_data().as<gs::types::reference>().underlying};
+        if (referent.get_kind() == gs::type_kind::ARRAY &&
+            (target.is_constant() || !from.is_constant())) {
+            TRY(require_runtime(src));
+            return array_as_slice(TRY(as_runtime(op, src)), referent, target);
+        }
+    }
+
     if (const auto index{comptime_value(op)}) {
         if (pool.is_type(*index)) { return stdx::none; }
         const auto& v{pool.value_at(*index)};
         if (from.get_kind() == gs::type_kind::UNDEFINED) {
             return operand{pool.intern(ip::undefined_value{}, target)};
         }
+
+        if (v.data.is<ip::nullptr_value>() && target.get_kind() == gs::type_kind::POINTER) {
+            return operand{pool.intern(ip::nullptr_value{}, target)};
+        }
+
+        // A known typed integer is exactly a `comptime_int`
+        if (const auto value{int_of(v)}; value &&
+                                         target.get_kind() == gs::type_kind::COMPTIME_INT &&
+                                         gs::is_integer(from.get_kind())) {
+            return operand{intern_int(pool, *value, target)};
+        }
+
         if (const auto value{int_of(v)}; value && gs::is_integer(target.get_kind())) {
             if (!gs::comptime_int_fits(*value, target, comp_.ptr_bits())) {
                 return comp_.report(u_,
@@ -65,9 +133,11 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
                                         ? messages::literal_out_of_range(ctx, target)
                                         : messages::value_out_of_range(ctx, *value, target));
             }
+
             return operand{intern_int(pool, *value, target)};
         }
-        // A known integer converts to any float, as the old emitter's `int_as_float` does
+
+        // A known integer converts to any float
         const bool to_float{gs::is_float(target.get_kind()) ||
                             target.get_kind() == gs::type_kind::COMPTIME_FLOAT};
         if (to_float && int_of(v)) {
@@ -76,16 +146,31 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             if (!exact) {
                 return comp_.unsupported(u_, src, "a wide integer converted to a float");
             }
+
             const auto as_float{gir::semantics::float_from_int(
                 {.bits = 128, .is_signed = true}, static_cast<u128>(*exact), float_format::QUAD)};
             return operand{gir::value::constant(pool, as_float, target).constant_index()};
         }
+
         if (const auto f{v.data.as_opt<f128>()};
             f && gs::is_float(target.get_kind()) &&
             (from.get_kind() == gs::type_kind::COMPTIME_FLOAT ||
              gs::is_implicit_widenable(from, target))) {
             return operand{gir::value::constant(pool, *f, target).constant_index()};
         }
+
+        // A string's bytes view as a byte slice, a sentinel one only from a sentinel string
+        if (const auto text{v.data.as_opt<std::string>()};
+            text && target.get_kind() == gs::type_kind::SLICE) {
+            const auto& slice{target.get_data().as<gs::types::slice>()};
+            const auto  arr{from.get_data().as_opt<gs::types::array>()};
+            const auto  bytes{gs::as_integer(slice.underlying)};
+            if (bytes && bytes->bits == 8 && !bytes->is_signed &&
+                (!slice.null_terminated || (arr && arr->null_terminated))) {
+                return operand{pool.intern(*text, target)};
+            }
+        }
+
         return stdx::none;
     }
 
@@ -96,8 +181,49 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             return operand{gir::value{
                 builder_.emit_cast(gir::instruction_kind::WIDEN_CAST, *value, target), target}};
         }
+
+        // A view that only loses mutability is the same value
+        const auto is_view{[](const gs::type& t) {
+            const auto kind{t.get_kind()};
+            return kind == gs::type_kind::POINTER || kind == gs::type_kind::REFERENCE ||
+                   kind == gs::type_kind::SLICE;
+        }};
+        if (is_view(from) && from.get_kind() == target.get_kind() &&
+            gs::is_assignable(from, target)) {
+            return op;
+        }
     }
+
     return stdx::none;
+}
+
+auto analyzer::array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
+    -> result<stdx::option<operand>> {
+    const auto& arr{from.get_data().as<gs::types::array>()};
+    const auto& slice{target.get_data().as<gs::types::slice>()};
+    if (!gs::is_same_unqualified(arr.underlying, slice.underlying) ||
+        (slice.null_terminated && !arr.null_terminated) ||
+        (!target.is_constant() && from.is_constant())) {
+        return stdx::none;
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto mut{from.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
+    auto&      ptr_type{ctx.get_pointer(mut, arr.underlying)};
+    auto&      slice_type{ctx.get_slice(mut, arr.null_terminated, arr.underlying)};
+    auto&      usize_type{builtin(gs::type_kind::USIZE)};
+    const auto slot{builder_.emit_alloca(slice_type)};
+    const auto elem0{builder_.emit_get_element_ptr(address, {usize_constant(0)}, ptr_type)};
+    const auto ptr_field{builder_.emit_get_element_ptr(
+        gir::value{slot, slice_type}, {usize_constant(SLICE_PTR_FIELD)}, ptr_type)};
+    builder_.emit_store(gir::value{ptr_field, ptr_type}, gir::value{elem0, ptr_type})
+        .is_initializer = true;
+    const auto len_field{builder_.emit_get_element_ptr(
+        gir::value{slot, slice_type}, {usize_constant(SLICE_LEN_FIELD)}, usize_type)};
+    builder_.emit_store(gir::value{len_field, usize_type}, usize_constant(arr.len)).is_initializer =
+        true;
+    return operand{
+        gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type}};
 }
 
 auto analyzer::coerce_to(const operand&  op,
@@ -125,6 +251,7 @@ auto analyzer::coerce_to(const operand&  op,
                             messages::argument_mismatch(
                                 ctx, site.arg_index, from, target, site.callee, comp_.ptr_bits()));
     }
+
     UNREACHABLE("every use site has a message");
 }
 
@@ -137,37 +264,73 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
         if (t.is_poison()) { return stdx::err{stop::POISON}; }
         peers.emplace_back<gs::peer_operand>({.type = &t});
     }
+
     auto&      ctx{comp_.ctx()};
     const auto peer{gs::peer_type(ctx, peers)};
     if (!peer) {
         return comp_.report(
             u_, src, gs::error::NO_PEER_TYPE, gs::peer_error_message(ctx, peers, peer.error()));
     }
+
     return *peer;
 }
 
 auto analyzer::concrete(const operand& op, const source& src) -> result<operand> {
     if (const auto m{op.as_opt<merge_ref>()}) {
+        if (is_untyped_literal(merges_[m->index].arrivals.front().value)) {
+            return comp_.unsupported(u_, src, "an untyped literal with no type to take");
+        }
+
         auto& untyped{type_of(op)};
         return operand{TRY(materialize_merge(*m, comp_.ctx().default_concrete(untyped), src))};
     }
+
     auto& t{type_of(op)};
     if (comptime_value(op) && gs::is_comptime_numeric(t.get_kind())) {
         auto& target{comp_.ctx().default_concrete(t)};
         if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     }
+
     return op;
 }
 
 auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::value> {
     const auto typed{TRY(concrete(op, src))};
     if (const auto value{typed.as_opt<gir::value>()}) { return *value; }
+    if (const auto slot{typed.as_opt<slot_value>()}) {
+        TRY(require_runtime(src));
+        return load(place{.address = slot->address, .pointee = slot->type, .is_mutable = false});
+    }
+
+    if (const auto global{typed.as_opt<global_const>()}) {
+        TRY(require_runtime(src));
+        return load(global_place(*global->symbol, *global->type, false));
+    }
+
     if (const auto index{comptime_value(typed)}) {
         if (comp_.constants().is_type(*index)) {
             return comp_.unsupported(u_, src, "a type used as a runtime value");
         }
+
+        const auto& data{comp_.constants().value_at(*index).data};
+        if (data.is<ip::aggregate_value>() || data.is<ip::union_value>()) {
+            TRY(require_runtime(src));
+            return materialize(*index, src);
+        }
+
+        if (const auto text{data.as_opt<std::string>()};
+            text && type_of(typed).get_kind() == gs::type_kind::SLICE) {
+            TRY(require_runtime(src));
+            return string_as_slice(*text, type_of(typed));
+        }
+
         return constant(*index, type_of(typed));
     }
+
+    if (typed.is<anon_init>() || typed.is<enum_literal>()) {
+        return comp_.unsupported(u_, src, "an untyped literal with no type to take");
+    }
+
     return comp_.unsupported(u_, src, "a function or place used as a runtime value");
 }
 
@@ -180,22 +343,29 @@ auto analyzer::materialize_merge(merge_ref m, gs::type& type, const source& src)
         here->get_id() == pending.seg) {
         return *pending.materialized;
     }
+
     TRY(require_runtime(src));
 
     const auto slot{builder_.emit_alloca_in_entry(type)};
     const auto restore{builder_.get_segment()};
     const bool was_splicing{builder_.is_splicing()};
-    for (const auto& arrival : pending.arrivals) {
-        const auto stored{
-            TRY(coerce_to(arrival.value, type, arrival.src, {.what = use_site::kind::STORE}))};
-        const auto value{TRY(as_runtime(stored, arrival.src))};
-        builder_.set_segment(*gir_fn_->get_segment(arrival.seg));
-        builder_.set_splice(true);
-        builder_.emit_store(slot, value);
-        builder_.set_splice(false);
+    {
+        const auto back{gsl::finally([&] {
+            builder_.set_segment(*restore);
+            builder_.set_splice(was_splicing);
+        })};
+
+        // Each arm converts where it arrives, which an initializer needs room in
+        for (const auto& arrival : pending.arrivals) {
+            builder_.set_segment(*gir_fn_->get_segment(arrival.seg));
+            builder_.set_splice(true);
+            const auto stored{
+                TRY(coerce_to(arrival.value, type, arrival.src, {.what = use_site::kind::STORE}))};
+            const auto value{TRY(as_runtime(stored, arrival.src))};
+            builder_.emit_store(slot, value);
+        }
     }
-    builder_.set_segment(*restore);
-    builder_.set_splice(was_splicing);
+
     const gir::value loaded{builder_.emit_load(slot, type), type};
     if (builder_.get_segment()->get_id() == pending.seg) { pending.materialized.emplace(loaded); }
     return loaded;

@@ -1,5 +1,7 @@
 #include <array>
 #include <compare>
+#include <ranges>
+#include <vector>
 
 #include <fmt/format.h>
 #include <stdx/assert.hh>
@@ -85,8 +87,11 @@ constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
     case op_class::ORDERING:   return numeric;
     case op_class::BITWISE:
     case op_class::SHIFT:      return is_int_like(lhs) && is_int_like(rhs);
-    case op_class::EQUALITY:   return numeric || (is_bool(lhs) && is_bool(rhs));
+    case op_class::EQUALITY:
+        return numeric || (is_bool(lhs) && is_bool(rhs)) ||
+               (lhs.get_kind() == gs::type_kind::ENUM && gs::is_same_unqualified(lhs, rhs));
     }
+
     return false;
 }
 
@@ -100,6 +105,7 @@ constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
     case semantics::int_compare_op::GT: return lhs > rhs;
     case semantics::int_compare_op::GE: return lhs >= rhs;
     }
+
     return false;
 }
 
@@ -124,13 +130,50 @@ auto analyzer::checks_overflow(semantics::int_op op, const gs::type& t) const ->
 auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
-    const auto  lhs{TRY(resolve_value(d.bin.lhs, src))};
-    const auto  rhs{TRY(resolve_value(d.bin.rhs, src))};
-    auto&       lhs_type{type_of(lhs)};
-    auto&       rhs_type{type_of(rhs)};
-    if (lhs_type.is_poison() || rhs_type.is_poison()) { return stdx::err{stop::POISON}; }
+    auto        lhs{TRY(resolve_value(d.bin.lhs, src))};
+    auto        rhs{TRY(resolve_value(d.bin.rhs, src))};
+
+    // An enum literal names a variant of the other side's enum
+    if (lhs.is<enum_literal>() && type_of(rhs).get_kind() == gs::type_kind::ENUM) {
+        lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
+    } else if (rhs.is<enum_literal>() && type_of(lhs).get_kind() == gs::type_kind::ENUM) {
+        rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
+    }
 
     const auto info{binary_info_of(t)};
+    if (info.cls == op_class::EQUALITY) {
+        if (const auto compared{TRY(compare_tag(info, lhs, rhs, src))}) { return *compared; }
+        if (const auto compared{TRY(compare_pointers(info, lhs, rhs, src))}) { return *compared; }
+    }
+
+    // A range capture takes the other side's integer type when that holds every value it takes
+    const auto narrows_to{[&](const operand& capture, const operand& other) {
+        const auto slot{capture.as_opt<slot_value>()};
+        auto&      target{type_of(other)};
+        return slot && slot->range && gs::is_integer(target.get_kind()) &&
+               !gs::is_same_unqualified(*slot->type, target) &&
+               gs::comptime_int_fits(slot->range->lo, target, comp_.ptr_bits()) &&
+               gs::comptime_int_fits(slot->range->hi, target, comp_.ptr_bits());
+    }};
+    if (narrows_to(lhs, rhs)) {
+        lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
+    } else if (narrows_to(rhs, lhs)) {
+        rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
+    }
+
+    auto& lhs_type{type_of(lhs)};
+    auto& rhs_type{type_of(rhs)};
+    if (lhs_type.is_poison() || rhs_type.is_poison()) { return stdx::err{stop::POISON}; }
+
+    // Operators on strings, arrays and other aggregates arrive with their own phases
+    const auto plain{[](const gs::type& type) {
+        return gs::is_numeric(type.get_kind()) || type.get_kind() == gs::type_kind::BOOL ||
+               type.get_kind() == gs::type_kind::ENUM;
+    }};
+    if (!plain(lhs_type) || !plain(rhs_type)) {
+        return comp_.unsupported(u_, src, "an operator on this kind of value");
+    }
+
     if (!applies(info.cls, lhs_type, rhs_type)) {
         return comp_.report(
             u_,
@@ -138,11 +181,13 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
             gs::error::OPERATOR_TYPE_MISMATCH,
             messages::operator_mismatch(comp_.ctx(), operator_spelling(t), lhs_type, rhs_type));
     }
+
     if (info.cls == op_class::SHIFT) { return analyze_shift(inst, info, lhs, rhs); }
 
     const std::array operands{lhs, rhs};
     auto&            peer{*TRY(peer_type(operands, src))};
-    // Untyped operands only stay untyped when both are known, and fold
+
+    // Untyped operands only stay untyped when both are known
     const bool     both_known{comptime_value(lhs) && comptime_value(rhs)};
     auto&          work{both_known || !gs::is_comptime_numeric(peer.get_kind())
                             ? peer
@@ -161,12 +206,82 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         auto& result_type{builtin(gs::type_kind::BOOL)};
         return gir::value{builder_.emit_binary(info.kind, lv, rv, result_type), result_type};
     }
+
     auto&      result_type{type_of(operand{lv})};
     const auto op{semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
     const bool checked{op && checks_overflow(*op, result_type)};
     return gir::value{
         builder_.emit_binary(info.kind, lv, rv, result_type, checked, info.saturating),
         result_type};
+}
+
+auto analyzer::compare_tag(const binary_info& info,
+                           const operand&     lhs,
+                           const operand&     rhs,
+                           const source&      src) -> result<stdx::option<operand>> {
+    // A tagged union compares its active field against an enum literal
+    const bool literal_right{rhs.is<enum_literal>()};
+    if (!literal_right && !lhs.is<enum_literal>()) { return stdx::none; }
+    const auto& tagged{literal_right ? lhs : rhs};
+    const auto  literal{(literal_right ? rhs : lhs).as<enum_literal>()};
+    auto&       tagged_type{type_of(tagged)};
+    const auto  referent{gs::pointee_of(tagged_type)};
+    auto& union_type{referent && tagged_type.get_kind() == gs::type_kind::REFERENCE ? *referent
+                                                                                    : tagged_type};
+    const auto ut{union_type.get_data().as_opt<gs::types::union_t>()};
+    if (!ut || ut->is_untagged) { return stdx::none; }
+    const auto name{mod().string(mod().data_of(literal.inst).str)};
+    const auto index{TRY(field_index(union_type, name, src))};
+    auto&      bool_type{builtin(gs::type_kind::BOOL)};
+    auto&      pool{comp_.constants()};
+
+    if (const auto known{comptime_value(tagged)}) {
+        const auto un{pool.value_at(*known).data.as_opt<ip::union_value>()};
+        if (!un) { return comp_.unsupported(u_, src, "comparing this comptime union"); }
+        const bool equal{un->active_field == name};
+        return operand{pool.intern(info.kind == instruction_kind::EQ ? equal : !equal, bool_type)};
+    }
+
+    TRY(require_runtime(src));
+
+    // A reference already is the union's address
+    gir::value base;
+    if (&union_type == &tagged_type) {
+        base = TRY(operand_address(tagged, src)).address;
+    } else {
+        base = gir::value{TRY(as_runtime(tagged, src)).data, union_type};
+    }
+
+    auto&      i32_type{comp_.ctx().get_int(32, true)};
+    const auto tag_at{
+        builder_.emit_get_element_ptr(base, {usize_constant(UNION_TAG_FIELD)}, i32_type)};
+    const auto       tag{builder_.emit_load(gir::value{tag_at, i32_type}, i32_type)};
+    const gir::value equal{
+        builder_.emit_binary(instruction_kind::EQ,
+                             gir::value{tag, i32_type},
+                             constant(pool.intern(static_cast<i64>(index), i32_type), i32_type),
+                             bool_type),
+        bool_type};
+    if (info.kind == instruction_kind::EQ) { return operand{equal}; }
+    return operand{
+        gir::value{builder_.emit_unary(instruction_kind::NOT, equal, bool_type), bool_type}};
+}
+
+auto analyzer::compare_pointers(const binary_info& info,
+                                const operand&     lhs,
+                                const operand&     rhs,
+                                const source&      src) -> result<stdx::option<operand>> {
+    const auto pointer_like{[&](const operand& op) {
+        const auto kind{type_of(op).get_kind()};
+        return kind == gs::type_kind::POINTER || kind == gs::type_kind::NULLPTR;
+    }};
+    if (!pointer_like(lhs) || !pointer_like(rhs)) { return stdx::none; }
+    if (is_comptime()) { return comp_.unsupported(u_, src, "comparing pointers at compile time"); }
+    // Even two known pointers compare at runtime
+    auto&      bool_type{builtin(gs::type_kind::BOOL)};
+    const auto l{TRY(as_runtime(lhs, src))};
+    const auto r{TRY(as_runtime(rhs, src))};
+    return operand{gir::value{builder_.emit_binary(info.kind, l, r, bool_type), bool_type}};
 }
 
 auto analyzer::fold_binary(const binary_info& info,
@@ -207,6 +322,7 @@ auto analyzer::fold_binary(const binary_info& info,
         if (info.wrapping || info.saturating) {
             return comp_.unsupported(u_, src, "a wrapping or saturating operator on comptime_int");
         }
+
         const auto value{[&] -> stdx::option<big_int> {
             switch (info.kind) {
             case instruction_kind::ADD: return *l + *r;
@@ -232,6 +348,7 @@ auto analyzer::fold_binary(const binary_info& info,
                 gs::error::COMPTIME_EVALUATION_FAILED,
                 semantics::describe(fault, {}, comp_.ctx().type_display_name(peer)));
         }
+
         return operand{intern_int(pool, *value, peer)};
     }
 
@@ -243,8 +360,10 @@ auto analyzer::fold_binary(const binary_info& info,
         if (is_comptime()) {
             return comp_.unsupported(u_, src, "compile-time arithmetic past 128 bits");
         }
+
         return stdx::none;
     }
+
     const auto domain{domain_of(peer)};
     const auto bits{[&](const big_int& v) {
         return semantics::to_domain(
@@ -258,6 +377,7 @@ auto analyzer::fold_binary(const binary_info& info,
             gs::error::COMPTIME_EVALUATION_FAILED,
             semantics::describe(folded.error(), domain, comp_.ctx().type_display_name(peer)));
     }
+
     if (!folded) { return stdx::none; }
     const auto value{domain.is_signed ? big_int{semantics::signed_value(*folded, domain)}
                                       : big_int{semantics::unsigned_value(*folded, domain)}};
@@ -285,6 +405,7 @@ auto analyzer::fold_float(const binary_info& info, gs::type& peer, f128 lhs, f12
         }()};
         return operand{pool.intern(truth, builtin(gs::type_kind::BOOL))};
     }
+
     const auto op{[&] -> stdx::option<semantics::float_op> {
         switch (info.kind) {
         case instruction_kind::ADD: return semantics::float_op::ADD;
@@ -311,9 +432,11 @@ auto analyzer::analyze_shift(inst_id            inst,
     if (comptime_value(lhs) && comptime_value(rhs) && folds_exactly(shifted)) {
         return fold_shift(info, lhs, rhs, src);
     }
+
     if (!gs::is_integer(shifted.get_kind()) || comptime_value(lhs)) {
         return comp_.unsupported(u_, src, "a shift of a constant or untyped value");
     }
+
     TRY(require_runtime(src));
     const auto lv{TRY(as_runtime(lhs, src))};
     gir::value amount{};
@@ -335,12 +458,17 @@ auto analyzer::analyze_shift(inst_id            inst,
                                                         comp_.ctx().type_display_name(shifted)));
             }
         }
-        const bool    in_range{*small >= 0 && *small < domain.bits};
+
+        // An amount the shifted type holds stays as written
+        const u16  value_bits{static_cast<u16>(domain.is_signed ? domain.bits - 1 : domain.bits)};
+        const bool in_range{*small >= 0 &&
+                            (value_bits >= 127 || *small <= (i128{1} << value_bits) - 1)};
         const big_int clamped{in_range ? *small : i128{domain.bits}};
         amount = constant(intern_int(comp_.constants(), clamped, shifted), shifted);
     } else {
         amount = TRY(as_runtime(rhs, src));
     }
+
     const auto op{semantics::int_op_of(kind, info.wrapping, info.saturating)};
     const bool checked{op && checks_overflow(*op, shifted)};
     return gir::value{builder_.emit_binary(kind, lv, amount, shifted, checked, info.saturating),
@@ -369,9 +497,11 @@ auto analyzer::fold_shift(const binary_info& info,
         if (info.wrapping || info.saturating) {
             return comp_.unsupported(u_, src, "a wrapping or saturating shift of comptime_int");
         }
+
         if (!small_amount || *small_amount < 0) {
             return fault(semantics::int_fault::NEGATIVE_SHIFT, {});
         }
+
         if (*small_amount >= static_cast<i128>(MAX_COMPTIME_INT_BITS)) {
             return comp_.report(u_,
                                 src,
@@ -380,6 +510,7 @@ auto analyzer::fold_shift(const binary_info& info,
                                             "of comptime_int",
                                             MAX_COMPTIME_INT_BITS));
         }
+
         const auto bits{static_cast<u64>(*small_amount)};
         return operand{
             intern_int(pool,
@@ -390,6 +521,7 @@ auto analyzer::fold_shift(const binary_info& info,
     if (!gs::is_integer(shifted.get_kind()) || !small_amount) {
         return comp_.unsupported(u_, src, "a shift of this constant");
     }
+
     const auto op{*semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
     const auto domain{domain_of(shifted)};
     const auto bits{semantics::to_domain(
@@ -418,6 +550,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
         if (const auto index{comptime_value(operand_value)}) {
             return operand{pool.intern(!*pool.value_at(*index).data.as_opt<bool>(), type)};
         }
+
         TRY(require_runtime(src));
         const auto v{TRY(as_runtime(operand_value, src))};
         return gir::value{builder_.emit_unary(instruction_kind::NOT, v, type), type};
@@ -432,6 +565,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
             if (const auto f{v.data.as_opt<f128>()}; f && negate) {
                 return operand{pool.intern(-*f, type)};
             }
+
             const auto value{int_of(v)};
             if (!value) { break; }
             if (type.get_kind() == gs::type_kind::COMPTIME_INT) {
@@ -439,10 +573,12 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
                 const big_int one{i128{1}};
                 return operand{intern_int(pool, negate ? -*value : -*value - one, type)};
             }
+
             // `-128i8`'s literal is past `i8`, so it negates exactly before it must fit
             if (negate && !gs::comptime_int_fits(*value, type, comp_.ptr_bits())) {
                 return operand{intern_int(pool, -*value, type)};
             }
+
             const auto domain{domain_of(type)};
             const auto bits{semantics::to_domain(
                 value->is_negative() ? static_cast<u128>(*value->to_i128()) : *value->to_u128(),
@@ -457,6 +593,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
                 return operand{intern_int(pool, out, type)};
             }
         }
+
         TRY(require_runtime(src));
         const auto v{TRY(as_runtime(operand_value, src))};
         auto&      result_type{type_of(operand{v})};
@@ -464,15 +601,18 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
             return gir::value{builder_.emit_unary(instruction_kind::BITNOT, v, result_type),
                               result_type};
         }
+
         if (gs::is_integer(result_type.get_kind()) && !gs::is_signed_integer(result_type)) {
             if (t != tag::neg_wrap) {
                 return comp_.unsupported(u_, src, "negating an unsigned integer");
             }
+
             // `NEG` is signed-only, so an unsigned `-%x` is the wrapping `0 -% x` it means
             const auto zero{constant(intern_int(pool, big_int{i128{0}}, result_type), result_type)};
             return gir::value{builder_.emit_binary(instruction_kind::SUB, zero, v, result_type),
                               result_type};
         }
+
         const bool checked{t == tag::neg && comp_.ctx().runtime_safety &&
                            gs::is_integer(result_type.get_kind()) &&
                            semantics::any(semantics::runtime_checks(
@@ -483,7 +623,37 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
     }
     default: break;
     }
+
     return comp_.unsupported(u_, src, "this unary operator on this type");
+}
+
+auto analyzer::bool_slot(inst_id inst, bool is_and) -> gir::value {
+    auto& bool_type{builtin(gs::type_kind::BOOL)};
+    auto& pool{comp_.constants()};
+
+    // An outer `and` / `or` made it for this one, while setting up its own
+    if (const auto made{bool_slots_.find(inst)}; made != bool_slots_.end()) {
+        const auto slot{made->second};
+        bool_slots_.erase(made);
+        return slot;
+    }
+
+    const auto make{[&](bool for_and) {
+        const auto slot{builder_.emit_alloca(bool_type)};
+        builder_.emit_store(slot, constant(pool.intern(!for_and, bool_type), bool_type));
+        return gir::value{slot, bool_type};
+    }};
+
+    std::vector<inst_id> enclosing;
+    for (auto at{comp_.bool_parent(u_, inst)}; at; at = comp_.bool_parent(u_, *at)) {
+        enclosing.emplace_back(*at);
+    }
+
+    for (const auto outer : enclosing | std::views::reverse) {
+        bool_slots_.insert_or_assign(outer, make(mod().tag_of(outer) == tag::bool_and));
+    }
+
+    return make(is_and);
 }
 
 auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
@@ -507,8 +677,7 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
 
     TRY(require_runtime(src));
     const auto cond{TRY(as_runtime(lhs, src))};
-    const auto slot{builder_.emit_alloca(bool_type)};
-    builder_.emit_store(slot, constant(pool.intern(!is_and, bool_type), bool_type));
+    const auto slot{bool_slot(inst, is_and)};
     const auto rhs_seg{new_segment()};
     const auto merge{new_segment()};
     if (is_and) {
@@ -516,6 +685,7 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
     } else {
         builder_.emit_cond_goto(cond, merge, rhs_seg);
     }
+
     switch_to(rhs_seg);
     const auto out{[&] {
         const auto branch{runtime_branch()};
@@ -525,6 +695,7 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
     if (!out->yielded || terminated()) {
         return comp_.unsupported(u_, src, "a right side that leaves");
     }
+
     const auto rhs{TRY(coerce_to(*out->yielded, bool_type, src, {.what = use_site::kind::STORE}))};
     builder_.emit_store(slot, TRY(as_runtime(rhs, src)));
     emit_goto(merge);

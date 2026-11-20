@@ -19,12 +19,13 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// Two's-complement `u32` limbs, least significant first, as one `u128`
+// Two's-complement `u32` limbs, least significant first, packed into one `u128`
 [[nodiscard]] auto limbs_value(gsl::span<const u32> limbs) noexcept -> u128 {
     u128 value{0};
     for (usize i{0}; i < limbs.size() && i < 4; ++i) {
         value |= static_cast<u128>(limbs[i]) << (32U * i);
     }
+
     return value;
 }
 
@@ -35,11 +36,14 @@ auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::ind
         if (*small >= static_cast<i128>(INT64_MIN) && *small <= static_cast<i128>(INT64_MAX)) {
             return pool.intern(static_cast<i64>(*small), type);
         }
+
         if (*small >= 0 && *small <= static_cast<i128>(UINT64_MAX)) {
             return pool.intern(static_cast<u64>(*small), type);
         }
+
         return pool.intern(*small, type);
     }
+
     if (const auto wide{value.to_u128()}) { return pool.intern(*wide, type); }
     return pool.intern(value, type);
 }
@@ -55,6 +59,7 @@ auto analyzer::negated_to_fit(inst_id inst, const big_int& value, const gs::type
     if (std::to_underlying(next) >= mod().instruction_count() || mod().tag_of(next) != tag::neg) {
         return false;
     }
+
     return mod().data_of(next).un.operand == inst_ref(inst) &&
            gs::comptime_int_fits(-value, type, comp_.ptr_bits());
 }
@@ -68,6 +73,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
     if ((bits & (flags::INT_BIG | flags::INT_CHAR)) != 0) {
         return comp_.unsupported(u_, src, "a character or wider-than-128-bit literal");
     }
+
     const big_int value{limbs_value(limbs)};
     const bool    is_signed{(bits & flags::INT_SIGNED) != 0};
     auto&         ctx{comp_.ctx()};
@@ -75,6 +81,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
     if (!sized && width == 0) {
         return intern_int(comp_.constants(), value, builtin(gs::type_kind::COMPTIME_INT));
     }
+
     auto& type{sized ? builtin(is_signed ? gs::type_kind::ISIZE : gs::type_kind::USIZE)
                      : ctx.get_int(static_cast<u16>(width), is_signed)};
     if (!gs::comptime_int_fits(value, type, comp_.ptr_bits()) &&
@@ -82,6 +89,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, src, gs::error::LITERAL_OUT_OF_RANGE, messages::literal_out_of_range(ctx, type));
     }
+
     return intern_int(comp_.constants(), value, type);
 }
 
@@ -109,10 +117,81 @@ auto analyzer::analyze_int_type(inst_id inst) -> result<operand> {
     return interned_type(comp_.ctx().get_int(static_cast<u16>(bits), is_signed));
 }
 
+namespace {
+
+// The mutability a container type's flags spell
+[[nodiscard]] auto container_mutability(u32 bits) noexcept -> gs::types::mutability_modifiers {
+    if ((bits & flags::POLY) != 0) { return gs::types::mut::POLY; }
+    auto mut{(bits & flags::MUT) != 0 ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT};
+    if ((bits & flags::VOLATILE) != 0) { mut = mut | gs::types::mut::VOLATILE; }
+    return mut;
+}
+
+} // namespace
+
+auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    auto&       elem{*TRY(resolve_type(*rec.ref_field(), src))};
+    const auto  bits{rec.u32_field()};
+    if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
+    if ((bits & flags::VOLATILE) != 0) { return comp_.unsupported(u_, src, "a volatile type"); }
+    if (elem.get_kind() == gs::type_kind::DYN || elem.get_kind() == gs::type_kind::INTERFACE) {
+        return comp_.unsupported(u_, src, "a pointer to a `dyn` or interface type");
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto mut{container_mutability(bits)};
+    switch (t) {
+    case tag::ptr_type: return interned_type(ctx.get_pointer(mut, elem));
+    case tag::ref_type: return interned_type(ctx.get_reference(mut, elem));
+    default: return interned_type(ctx.get_slice(mut, (bits & flags::SENTINEL) != 0, elem));
+    }
+}
+
+auto analyzer::analyze_array_type(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    const auto  len_ref{rec.ref_field()};
+    auto&       elem{*TRY(resolve_type(*rec.ref_field(), src))};
+    const auto  bits{rec.u32_field()};
+    if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
+    if (!len_ref) { return comp_.unsupported(u_, src, "an array type sized by its items"); }
+    const auto len{TRY(array_length(*len_ref, src))};
+    return interned_type(comp_.ctx().get_array(
+        container_mutability(bits), (bits & flags::SENTINEL) != 0, len, elem));
+}
+
+auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
+    const auto known{[&] -> result<operand> {
+        const auto scope{comptime_scope()};
+        return reevaluate(len_ref, src);
+    }()};
+    if (!known && known.error() == stop::RUNTIME) {
+        return comp_.report_runtime_need(
+            u_,
+            stdx::none,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            "An array's length must be known at compile time; this one reads a runtime value");
+    }
+
+    const auto len{TRY(known)};
+    auto&      usize_type{builtin(gs::type_kind::USIZE)};
+    const auto coerced{TRY(coerce_to(len, usize_type, src, {.what = use_site::kind::STORE}))};
+    const auto value{int_of(comp_.constants().value_at(TRY(require_comptime(coerced, src))))};
+    const auto small{value ? value->to_u128() : stdx::none};
+    if (!small || *small > static_cast<u128>(UINT32_MAX)) {
+        return comp_.unsupported(u_, src, "an array length past 32 bits");
+    }
+
+    return static_cast<usize>(*small);
+}
+
 auto analyzer::analyze_func(inst_id inst) -> result<operand> {
     if (!declaring_ || !is_comptime()) {
         return comp_.unsupported(u_, src_of(inst), "a function literal used as a value");
     }
+
     return comp_.declare_function(u_, *std::exchange(declaring_, stdx::none), inst);
 }
 

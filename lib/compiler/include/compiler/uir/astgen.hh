@@ -28,12 +28,12 @@ struct lowered {
 [[nodiscard]] auto lower_module(const mod::module_t& mod, const astgen_context& cx) -> lowered;
 
 struct lowered_module {
-    gsl::not_null<const mod::module_t*> source;
+    gsl::not_null<mod::module_t*>       source;
     lowered                             result;
 };
 
 // Lowers `root` and every module it imports, directly or not, once each and in load order
-[[nodiscard]] auto lower_reachable(const mod::module_t& root, const astgen_context& cx)
+[[nodiscard]] auto lower_reachable(mod::module_t& root, const astgen_context& cx)
     -> std::vector<lowered_module>;
 
 // `lower_module`, failing with the diagnostics when there are any

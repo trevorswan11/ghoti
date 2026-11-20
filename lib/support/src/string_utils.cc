@@ -4,10 +4,23 @@
 #include <cctype>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <stdx/types.hh>
 
 namespace ghoti::string_utils {
+
+auto split(std::string_view text, std::string_view delimiter) -> std::vector<std::string_view> {
+    std::vector<std::string_view> pieces;
+    while (!text.empty()) {
+        const auto end{text.find(delimiter)};
+        pieces.emplace_back(text.substr(0, std::min(end, text.size())));
+        if (end == std::string_view::npos) { break; }
+        text.remove_prefix(end + delimiter.size());
+    }
+
+    return pieces;
+}
 
 auto to_u8string(std::string_view s) -> std::u8string {
     std::u8string out;

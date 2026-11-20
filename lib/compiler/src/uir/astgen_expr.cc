@@ -343,7 +343,7 @@ auto astgen::optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref
     return expr(*h);
 }
 
-auto astgen::place(ast::expr_handle h, use u) -> place_result {
+auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
     const ast::node_id id{h};
     const auto         inner{u == use::MUTATE ? use::MUTATE : use::PLACE};
     if (id.is<ast::identifier_expr>()) { return identifier_node(id, u); }
@@ -353,7 +353,8 @@ auto astgen::place(ast::expr_handle h, use u) -> place_result {
                        writer()
                            .ref_field(object.value)
                            .str_field(name_of(dot->member))
-                           .u32_field(object.is_place ? flags::PLACE : 0U),
+                           .u32_field((object.is_place ? flags::PLACE : 0U) |
+                                      (assigned ? flags::ASSIGNED : 0U)),
                        id),
                 true};
     }
@@ -369,8 +370,9 @@ auto astgen::place(ast::expr_handle h, use u) -> place_result {
                        id),
                 true};
     }
+    // `*p` names what `p` points at, checked before anything stored there is computed
     if (const auto deref{ast_.get_as_opt<ast::dereference_expr>(id)}) {
-        return {expr(deref->rhs), true};
+        return {add_un(tag::deref, expr(deref->rhs), flags::DEREF_PLACE, id), true};
     }
     return {expr(h), false};
 }
@@ -391,7 +393,7 @@ auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::assignment_expr& node) -> ref {
-    const auto target{place(node.lhs, use::MUTATE)};
+    const auto target{place(node.lhs, use::MUTATE, true)};
     const auto op{id.get_token_type()};
     ref        value{};
     if (const auto base{syntax::token_type::get_compound_base_op(op)}) {

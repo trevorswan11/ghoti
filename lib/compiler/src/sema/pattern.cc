@@ -70,10 +70,8 @@ struct int_bounds {
     } else {
         return stdx::none;
     }
-    if (bits == 0) { return int_bounds{.lo = big_int{i128{0}}, .hi = big_int{i128{0}}}; }
-    const auto one{big_int{i128{1}}};
-    if (!is_signed) { return int_bounds{.lo = big_int{i128{0}}, .hi = one.shl(bits) - one}; }
-    return int_bounds{.lo = -one.shl(bits - 1), .hi = one.shl(bits - 1) - one};
+    return int_bounds{.lo = big_int::min_of(bits, is_signed),
+                      .hi = big_int::max_of(bits, is_signed)};
 }
 
 [[nodiscard]] auto is_int_column(const type& t, u32 ptr_bits) -> bool {
