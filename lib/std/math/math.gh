@@ -45,6 +45,13 @@ test {
     import "sqrt.gh";
 }
 
+import "ldexp.gh" as ldexp_;
+pub const ldexp = ldexp_.ldexp;
+
+test {
+    import "ldexp.gh";
+}
+
 import "isinf.gh" as isinf;
 
 pub const is_inf = isinf.is_inf;
