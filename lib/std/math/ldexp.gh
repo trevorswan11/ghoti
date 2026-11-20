@@ -1,0 +1,155 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/math/ldexp.zig
+import std;
+
+const math = std.math;
+const Log2Int = math.Log2Int;
+
+/// Returns x * 2^n.
+pub const ldexp = fn(x: auto, n: i32): @TypeOf(x) {
+    const T = @TypeOf(x);
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+
+    const exponent_bits = math.float_exponent_bits(T);
+    const mantissa_bits = math.float_mantissa_bits(T);
+    const fractional_bits = math.float_fractional_bits(T);
+
+    const max_biased_exponent = 2 * math.float_exponent_max(T);
+    const mantissa_mask = @as(TBits, (1 << mantissa_bits) - 1);
+
+    let repr = @bitCast(TBits, x);
+    let sign_bit = repr & (1 << (exponent_bits + mantissa_bits));
+
+    if (math.is_nan(x) or math.is_inf(x)) return x;
+
+    let mut exponent = @intCast(i32, (repr << 1) >> (mantissa_bits + 1));
+    if (exponent == 0) {
+        exponent += (@as(i32, exponent_bits) + @intFromBool(T == f80)) - @clz(repr << 1);
+    }
+
+    if (n >= 0) {
+        if (n > max_biased_exponent - exponent) {
+            // Overflow. Return +/- inf
+            return @bitCast(T, @bitCast(TBits, math.inf(T)) | sign_bit);
+        } else if (exponent + n <= 0) {
+            // Result is subnormal
+            return @bitCast(T, (repr << @intCast(Log2Int(TBits), n)) | sign_bit);
+        } else if (exponent <= 0) {
+            // Result is normal, but needs shifting
+            let mut result = @intCast(TBits, n + exponent) << mantissa_bits;
+            result |= (repr << @intCast(Log2Int(TBits), 1 - exponent)) & mantissa_mask;
+            return @bitCast(T, result | sign_bit);
+        }
+
+        // Result needs no shifting
+        return @bitCast(T, repr + (@intCast(TBits, n) << mantissa_bits));
+    } else {
+        if (n <= -exponent) {
+            if (n < -(mantissa_bits + exponent)) {
+                return @bitCast(T, sign_bit); // Severe underflow. Return +/- 0
+            }
+
+            // Result underflowed, we need to shift and round
+            let shift = @intCast(Log2Int(TBits), @min(-n, -(exponent + n) + 1));
+            let exact_tie = @ctz(repr) == shift - 1;
+            let mut result = repr & mantissa_mask;
+
+            if comptime (T != f80) {
+                // Include integer bit
+                result |= @as(TBits, @intFromBool(exponent > 0)) << fractional_bits;
+            }
+            result = result >> (shift - 1);
+
+            // Round result, including round-to-even for exact ties
+            result = ((result + 1) >> 1) & ~@as(TBits, @intFromBool(exact_tie));
+            return @bitCast(T, result | sign_bit);
+        }
+
+        // Result is exact, and needs no shifting
+        return @bitCast(T, repr - (@intCast(TBits, -n) << mantissa_bits));
+    }
+};
+
+test "ldexp subnormals" {
+    @expect(ldexp(@as(f16, 0x1.1FFp14), -14 - 9 - 15) == math.float_true_min(f16));
+    @expect(ldexp(@as(f32, 0x1.3FFFFFp-1), -126 - 22) == math.float_true_min(f32));
+    @expect(ldexp(@as(f64, 0x1.7FFFFFFFFFFFFp-1), -1022 - 51) == math.float_true_min(f64));
+    @expect(ldexp(@as(f80, 0x1.7FFFFFFFFFFFFFFEp-1), -16382 - 62) == math.float_true_min(f80));
+    @expect(
+        ldexp(@as(f128, 0x1.7FFFFFFFFFFFFFFFFFFFFFFFFFFFp-1), -16382 - 111) ==
+            math.float_true_min(f128),
+    );
+
+    @expect(ldexp(math.float_max(f32), -128 - 149) > 0.0);
+    @expect(ldexp(math.float_max(f32), -128 - 149 - 1) == 0.0);
+}
+
+test "ldexp" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        const fractional_bits = math.float_fractional_bits(T);
+
+        const min_exponent = math.float_exponent_min(T);
+        const max_exponent = math.float_exponent_max(T);
+        const exponent_bias = max_exponent;
+
+        // basic usage
+        @expect(ldexp(@as(T, 1.5), 4) == 24.0);
+
+        // normals -> subnormals
+        @expect(ldexp(@as(T, 1.0), min_exponent) == math.float_min(T));
+        @expect(ldexp(@as(T, 1.0), min_exponent - 1) < math.float_min(T));
+
+        // normals -> zero
+        @expect(ldexp(@as(T, 1.0), min_exponent - fractional_bits) > 0.0);
+        @expect(ldexp(@as(T, 1.0), min_exponent - fractional_bits - 1) == 0.0);
+
+        // subnormals -> zero
+        @expect(ldexp(math.float_true_min(T), 0) > 0.0);
+        @expect(ldexp(math.float_true_min(T), -1) == 0.0);
+
+        // Multiplications might flush the denormals to zero, esp. at
+        // runtime, so we manually construct the constants here instead.
+        const Z = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+        const eight_times_true_min = @bitCast(T, @as(Z, 8));
+        const two_times_true_min = @bitCast(T, @as(Z, 2));
+
+        // subnormals -> subnormals
+        @expect(ldexp(math.float_true_min(T), 3) == eight_times_true_min);
+        @expect(ldexp(eight_times_true_min, -2) == two_times_true_min);
+        @expect(ldexp(eight_times_true_min, -3) == math.float_true_min(T));
+
+        // subnormals -> normals (+)
+        @expect(ldexp(math.float_true_min(T), fractional_bits) == math.float_min(T));
+        @expect(ldexp(math.float_true_min(T), fractional_bits - 1) == math.float_min(T) * 0.5);
+
+        // subnormals -> normals (-)
+        @expect(ldexp(-math.float_true_min(T), fractional_bits) == -math.float_min(T));
+        @expect(ldexp(-math.float_true_min(T), fractional_bits - 1) == -math.float_min(T) * 0.5);
+
+        // subnormals -> float limits (+inf)
+        const limit = max_exponent + exponent_bias + fractional_bits;
+        @expect(!math.is_inf(ldexp(math.float_true_min(T), limit - 1)));
+        @expect(ldexp(math.float_true_min(T), limit) == math.inf(T));
+
+        // subnormals -> float limits (-inf)
+        @expect(!math.is_inf(ldexp(-math.float_true_min(T), limit - 1)));
+        @expect(ldexp(-math.float_true_min(T), limit) == -math.inf(T));
+
+        // infinity -> infinity
+        @expect(ldexp(math.inf(T), math.max_int(i32)) == math.inf(T));
+        @expect(ldexp(math.inf(T), math.min_int(i32)) == math.inf(T));
+        @expect(ldexp(math.inf(T), max_exponent) == math.inf(T));
+        @expect(ldexp(math.inf(T), min_exponent) == math.inf(T));
+        @expect(ldexp(-math.inf(T), math.max_int(i32)) == -math.inf(T));
+        @expect(ldexp(-math.inf(T), math.min_int(i32)) == -math.inf(T));
+
+        // extremely large n
+        @expect(ldexp(math.float_max(T), math.max_int(i32)) == math.inf(T));
+        @expect(ldexp(math.float_max(T), -math.max_int(i32)) == 0.0);
+        @expect(ldexp(math.float_max(T), math.min_int(i32)) == 0.0);
+        @expect(ldexp(math.float_true_min(T), math.max_int(i32)) == math.inf(T));
+        @expect(ldexp(math.float_true_min(T), -math.max_int(i32)) == 0.0);
+        @expect(ldexp(math.float_true_min(T), math.min_int(i32)) == 0.0);
+    }
+}
