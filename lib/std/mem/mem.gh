@@ -85,3 +85,112 @@ test "starts_with" {
     @expect(!starts_with(u8, "haystack", "aystack"));
     @expect(!starts_with(u8, "Needle in haystack", "haystack"));
 }
+
+/// Reads an integer from the leading bytes of `bytes` in the given byte order.
+/// Asserts that `bytes` holds at least `(@bitSizeOf(T) + 7) / 8` bytes.
+pub const read_int = fn(comptime T: type, bytes: []u8, endian: builtin.Endian): T {
+    const bits = @typeInfo(T).int.bits;
+    const U = @Int(.{ .signedness = .unsigned, .bits = bits });
+    const byte_count = (bits + 7) / 8;
+    @assert(bytes.len >= byte_count);
+
+    if comptime (bits == 0) return 0;
+
+    let mut result: U = 0;
+    for (0..byte_count) |i| {
+        let byte = match (endian) {
+            .little => bytes[byte_count - 1 - i],
+            .big => bytes[i],
+        };
+        if comptime (bits > 8) {
+            result = (result << 8) | byte;
+        } else {
+            result = @truncate(byte);
+        }
+    }
+    return @bitCast(T, result);
+};
+
+test "read_int" {
+    @expect(read_int(u0, "", .little) == 0);
+    @expect(read_int(u8, "\x12", .big) == 0x12);
+    @expect(read_int(u16, "\x12\x34", .big) == 0x1234);
+    @expect(read_int(u16, "\x12\x34", .little) == 0x3412);
+    @expect(read_int(u32, "\x12\x34\x56\x78", .big) == 0x12345678);
+    @expect(read_int(u32, "\x12\x34\x56\x78", .little) == 0x78563412);
+    @expect(read_int(i16, "\xff\xfe", .big) == -2);
+    @expect(read_int(i16, "\xfe\xff", .little) == -2);
+    @expect(read_int(u24, "\x12\x34\x56", .big) == 0x123456);
+}
+
+/// Loads an integer from packed memory starting `bit_offset` bits in, in the given byte order.
+/// Asserts that `bytes` holds at least `bit_offset + @bitSizeOf(T)` bits.
+pub const read_packed_int = fn(
+    comptime T: type,
+    bytes: []u8,
+    bit_offset: usize,
+    endian: builtin.Endian,
+): T {
+    const bit_count = @typeInfo(T).int.bits;
+    const UN = @Int(.{ .signedness = .unsigned, .bits = bit_count });
+    const Log2N = std.math.Log2Int(UN);
+
+    const load_size = (bit_count + 7) / 8;
+    const load_tail_bits = load_size * 8 - bit_count;
+    const LoadInt = @Int(.{ .signedness = .unsigned, .bits = load_size * 8 });
+
+    if comptime (bit_count == 0) return 0;
+
+    let bit_shift = @truncate(u3, bit_offset);
+    let byte_offset = bit_offset / 8;
+
+    // Read by loading a LoadInt, and then follow it up with a 1-byte read
+    // of the tail if bit_offset pushed us over a byte boundary.
+    let mut val: UN = undefined;
+    let mut tail_byte: u8 = 0;
+    match (endian) {
+        .little => {
+            let read_bytes = bytes[byte_offset..];
+            val = @truncate(read_int(LoadInt, read_bytes, .little) >> bit_shift);
+            if (bit_shift > load_tail_bits) tail_byte = read_bytes[load_size];
+        },
+        .big => {
+            let byte_count = (@as(usize, bit_shift) + bit_count + 7) / 8;
+            let end = bytes.len - byte_offset;
+            val = @truncate(read_int(LoadInt, bytes[end - load_size..end], .big) >> bit_shift);
+            if (bit_shift > load_tail_bits) tail_byte = bytes[end - byte_count];
+        },
+    }
+
+    if (bit_shift > load_tail_bits) {
+        let tail_bits = @intCast(Log2N, bit_shift - load_tail_bits);
+        let tail: UN = if comptime (bit_count < 8) @truncate(tail_byte) else tail_byte;
+        val |= tail << (@truncate(Log2N, bit_count) -% tail_bits);
+    }
+    return @bitCast(T, val);
+};
+
+test "read_packed_int" {
+    // 0b1010_0110_1100_0011 little-endian, read at assorted offsets
+    const le = "\xc3\xa6";
+    @expect(read_packed_int(u3, le, 0, .little) == 0b011);
+    @expect(read_packed_int(u7, le, 3, .little) == 0b1011000);
+    @expect(read_packed_int(u6, le, 10, .little) == 0b101001);
+    @expect(read_packed_int(u16, le, 0, .little) == 0xa6c3);
+    @expect(read_packed_int(u8, le, 4, .little) == 0x6c);
+    @expect(read_packed_int(i4, le, 12, .little) == -6);
+
+    // The same integer stored big-endian packs from the end of the buffer
+    const be = "\xa6\xc3";
+    @expect(read_packed_int(u3, be, 0, .big) == 0b011);
+    @expect(read_packed_int(u7, be, 3, .big) == 0b1011000);
+    @expect(read_packed_int(u6, be, 10, .big) == 0b101001);
+    @expect(read_packed_int(u16, be, 0, .big) == 0xa6c3);
+    @expect(read_packed_int(u8, be, 4, .big) == 0x6c);
+    @expect(read_packed_int(i4, be, 12, .big) == -6);
+
+    // Wider than a byte and straddling a byte boundary on both ends
+    const wide = "\x78\x56\x34\x12\x00";
+    @expect(read_packed_int(u32, wide, 4, .little) == 0x01234567);
+    @expect(read_packed_int(u24, wide, 8, .little) == 0x123456);
+}
