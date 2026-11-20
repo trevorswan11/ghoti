@@ -48,7 +48,7 @@ const nan_rep_f32: u32 = @bitCast(math.nan(f32));
 };
 
 test "__mulsf3" {
-    import "cases/mulsf3.gh" as mulsf3_cases;
+    import "cases/mulf3/mulsf3.gh" as mulsf3_cases;
     for (mulsf3_cases.cases) |case| {
         @expect(test__mulsf3(case[0], case[1], case[2]));
     }
@@ -77,7 +77,7 @@ const nan_rep_f64: u64 = @bitCast(math.nan(f64));
 };
 
 test "__muldf3" {
-    import "cases/muldf3.gh" as muldf3_cases;
+    import "cases/mulf3/muldf3.gh" as muldf3_cases;
     for (muldf3_cases.cases) |case| {
         @expect(test__muldf3(case[0], case[1], case[2]));
     }

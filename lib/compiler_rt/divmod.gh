@@ -64,7 +64,7 @@ const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u1
 };
 
 test "__udivmodti4" {
-    import "cases/udivmodti4.gh" as udivmodti4_cases;
+    import "cases/divmod/udivmodti4.gh" as udivmodti4_cases;
     for (udivmodti4_cases.cases) |case| {
         test__udivmodti4(case[0], case[1], case[2], case[3]);
     }
@@ -84,7 +84,7 @@ const __udivmodsi4 = fn(a: u32, b: u32, rem: ^mut u32) callconv(.c): u32 {
 };
 
 test "__udivmodsi4" {
-    import "cases/udivmodsi4.gh" as udivmodsi4_cases;
+    import "cases/divmod/udivmodsi4.gh" as udivmodsi4_cases;
     for (udivmodsi4_cases.cases) |case| {
         test__udivmodsi4(case[0], case[1], case[2], case[3]);
     }
@@ -102,7 +102,7 @@ const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u64 {
 };
 
 test "__udivmoddi4" {
-    import "cases/udivmoddi4.gh" as udivmoddi4_cases;
+    import "cases/divmod/udivmoddi4.gh" as udivmoddi4_cases;
     for (udivmoddi4_cases.cases) |case| {
         test__udivmoddi4(case[0], case[1], case[2], case[3]);
     }
@@ -313,7 +313,7 @@ const __udivsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
 };
 
 test "__udivsi3" {
-    import "cases/udivsi3.gh" as udivsi3_cases;
+    import "cases/divmod/udivsi3.gh" as udivsi3_cases;
     for (udivsi3_cases.cases) |case| {
         test__udivsi3(case[0], case[1], case[2]);
     }
@@ -453,7 +453,7 @@ const __umodsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
 };
 
 test "__umodsi3" {
-    import "cases/umodsi3.gh" as umodsi3_cases;
+    import "cases/divmod/umodsi3.gh" as umodsi3_cases;
     for (umodsi3_cases.cases) |case| {
         test__umodsi3(case[0], case[1], case[2]);
     }
