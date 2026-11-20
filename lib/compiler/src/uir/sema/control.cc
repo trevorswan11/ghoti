@@ -14,7 +14,6 @@
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
-#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -180,8 +179,8 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
     if (const auto index{comptime_value(cond)}) {
         if (const auto b{comp_.constants().value_at(*index).data.as_opt<bool>()}) { known = *b; }
     }
-    // A statement `if` whose condition folds through immutable bindings takes one arm, as the old
-    // emitter does
+
+    // A statement `if` whose condition folds through immutable bindings takes one arm
     if (!known && yields_nothing(then_body) && yields_nothing(else_body)) {
         known = TRY(folded_condition(cond_ref, cond_src.value_or(src)));
         if (known) { c = constant(comp_.constants().intern(*known, type_of(cond)), type_of(cond)); }
@@ -324,8 +323,7 @@ auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {
 }
 
 auto analyzer::folded_condition(ref cond, const source& src) -> result<stdx::option<bool>> {
-    // A failure only means the condition stays at runtime, so nothing it records is kept. One
-    // this phase can't analyze may be a fold the old pipeline makes, so that stop stays
+    // A failure only means the condition stays at runtime, so nothing it records is kept
     const auto before{comp_.speculate()};
     const auto folded{[&] {
         const auto scope{comptime_scope()};

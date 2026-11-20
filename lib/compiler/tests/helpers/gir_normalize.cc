@@ -363,10 +363,9 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
     }
 }
 
-// An instruction that only computes its result, which nothing needs once nothing reads it. A
-// checked operation can still trap, but the pipelines differ only in whether they compute it
+// An instruction that only computes its result
 [[nodiscard]] auto is_pure(std::string_view body) -> bool {
-    constexpr std::array prefixes{
+    static constexpr std::array prefixes{
         "load ",        "get_element_ptr ",
         "global_addr ", "address_of ",
         "not ",         "eq ",
@@ -382,8 +381,7 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
     return std::ranges::any_of(prefixes, [&](std::string_view p) { return body.starts_with(p); });
 }
 
-// A load, address or computation nothing reads, and then a slot only ever stored to, as an
-// expression statement's unused result slot leaves behind
+// A load, address or computation nothing reads, and then a slot only ever stored to
 auto drop_dead_slots(function_dump& fn) -> void {
     bool changed{true};
     while (changed) {
@@ -408,8 +406,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
                 }
             }
         }
-        // Each slot and the field addresses computed from it, by the slot, and the slots nothing
-        // reads, whose address only ever names where a store writes
+        // Each slot and the field addresses computed from it, by the slot
         ankerl::unordered_dense::map<std::string, std::string> roots;
         for (const auto& seg : fn.segments) {
             for (const auto& inst : seg.instructions) {
@@ -426,6 +423,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
                 }
             }
         }
+
         ankerl::unordered_dense::set<std::string> read_roots;
         for (const auto& seg : fn.segments) {
             for (const auto& inst : seg.instructions) {
@@ -625,8 +623,7 @@ auto fold_constants(function_dump& fn) -> void {
            body.starts_with("unreachable");
 }
 
-// Whether an instruction may write memory or leave the segment, which nothing reading memory may
-// move past
+// Whether an instruction may write memory or leave the segment
 [[nodiscard]] auto may_write(std::string_view body) -> bool {
     return body.starts_with("store ") || body.starts_with("call ") ||
            body.starts_with("builtin_call ") || body.starts_with("inline_asm") ||
@@ -660,8 +657,7 @@ auto fold_constants(function_dump& fn) -> void {
     return slots;
 }
 
-// Slots whose address only reaches field addresses, loads, and store destinations, mapping the
-// slot and each field address computed from it to the slot
+// Slots whose address only reaches field addresses, loads, and store destinations
 [[nodiscard]] auto private_aggregates(const function_dump& fn)
     -> ankerl::unordered_dense::map<std::string, std::string> {
     ankerl::unordered_dense::map<std::string, std::string> root;
@@ -705,11 +701,8 @@ auto fold_constants(function_dump& fn) -> void {
     return root;
 }
 
-// Places each address computation, and each load with no write before its use, just before the
-// first instruction of its segment that uses it, ordered by how that instruction lists its
-// operands. A constant store to a private slot, and any store into a field of a private
-// aggregate, waits for the slot's next use. So where a pipeline happened to compute an address,
-// read a value, or fill in a temporary doesn't show
+// Places each address computation and loads with no write before its use, just before the
+// first instruction of its segment that uses it
 auto sink_address_computations(function_dump& fn) -> void {
     const auto slots{private_slots(fn)};
     const auto aggregates{private_aggregates(fn)};
@@ -754,7 +747,7 @@ auto sink_address_computations(function_dump& fn) -> void {
         }};
 
         // Whether nothing strictly between a load at `from` and its use at `to` stores into the
-        // private slot the load reads. No other write reaches it, since its address never escapes
+        // private slot the load reads
         const auto only_other_writes{[&](usize from, usize to) {
             const auto address{reads[from].empty() ? stdx::none : slot_of(reads[from].front())};
             if (!address) { return false; }
@@ -784,8 +777,7 @@ auto sink_address_computations(function_dump& fn) -> void {
             if (defs[i].empty() || (!is_address_computation(body) && !is_load)) { continue; }
             const auto use{next_read(defs[i], i)};
             if (!use) { continue; }
-            // A read may not move past a write, though only a store into a private slot can change
-            // what a read of that slot sees
+            // A read may not move past a write
             if (is_load && writes_before[*use] != writes_before[i + 1] &&
                 !only_other_writes(i, *use)) {
                 continue;
@@ -801,6 +793,7 @@ auto sink_address_computations(function_dump& fn) -> void {
         for (const auto& [slot, at] : stores) {
             for (const auto i : at) { waiting[i] = true; }
         }
+
         // Started before it is emitted, so a store waiting on a slot isn't placed twice
         std::vector<bool> started(n, false);
         const auto        emit{[&](usize at) {
@@ -813,8 +806,7 @@ auto sink_address_computations(function_dump& fn) -> void {
                 const auto found{deferred.find(temp)};
                 if (found != deferred.end() && !started[found->second]) { self(found->second); }
             }
-            // A use of a slot lets the stores waiting on it go first, in their order. Computing an
-            // address only names the slot
+            // A use of a slot lets the stores waiting on it go first
             const auto body{split_definition(insts[at]).second};
             if (!waiting[at] && !is_address_computation(body)) {
                 for (const auto& temp : reads[at]) {
@@ -979,8 +971,7 @@ auto canonicalize(function_dump& fn) -> void {
         segments.emplace_back(std::move(seg));
     }
 
-    // Slots come first, numbered by their first use so the order they were created in doesn't
-    // show, then every other temporary in order of first appearance
+    // Slots come first numbered by their first use
     ankerl::unordered_dense::map<std::string, std::string> temps;
     const auto                                             number{[&](std::string_view t) {
         const auto [it,

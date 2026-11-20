@@ -488,7 +488,6 @@ TEST_CASE("`unroll for` over a range past the unroll limit is an error, not a ha
 }
 
 TEST_CASE("`unroll for` over types binds each iteration's type where a type is expected") {
-    // Regression for #419: the capture named `type` itself, so `@as(T, ...)` produced a type
     CHECK(helpers::compile_and_run(R"(
         const is_zero = fn(x: auto): bool {
             const T = @TypeOf(x);

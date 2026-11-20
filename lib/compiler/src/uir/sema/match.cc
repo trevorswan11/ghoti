@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -14,6 +15,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/pattern.hh"
@@ -21,6 +23,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -241,6 +244,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
             patterns[a].emplace_back(std::move(node));
         }
     }
+
     // The catch-all arm is tried last, whatever its place
     std::vector<pattern::row_input> rows;
     const auto                      add_arm{[&](usize a) {
@@ -272,8 +276,7 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
                           const std::vector<gs::pattern::row_input>& rows,
                           ref                                        operand_ref,
                           const source& src) -> result<stdx::option<operand>> {
-    // A failure only means the match runs at runtime, so nothing it records is kept, except a
-    // stop at something this phase can't analyze, which the old pipeline may fold
+    // A failure only means the match runs at runtime, so nothing it records is kept
     const auto before{comp_.speculate()};
     const auto folded{[&] -> result<operand> {
         const auto scope{comptime_scope()};
@@ -282,11 +285,13 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
     }()};
     const bool unsupported{!folded && folded.error() == stop::UNSUPPORTED};
     comp_.abandon(before, unsupported);
+
     // An arm that leaves the match, like a `return`, stays for runtime
     const bool jumped{jump_.has_value()};
     jump_.reset();
     if (unsupported) { return stdx::err{stop::UNSUPPORTED}; }
     if (jumped || !folded) { return stdx::option<operand>{}; }
+
     // The old emitter folds a match whose value is a number or `bool`
     const auto index{comptime_value(*folded)};
     if (!index) { return stdx::option<operand>{}; }

@@ -64,6 +64,7 @@ auto analyzer::store_comptime(comptime_place p, const operand& value, const sour
         return comp_.report(
             u_, src, gs::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE, std::string{STORE_UNDER_RUNTIME});
     }
+
     // An untyped `.{...}` or `.name` is known once it takes the slot's type
     if (is_untyped_literal(value)) {
         if (!alloc.type) {
@@ -116,10 +117,10 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     }
     if (is_comptime()) { return value; }
 
-    // An aggregate binding keeps one address for every use, so it gets a slot of its own, typed
-    // as declared even when the value is a more mutable view
+    // An aggregate binding keeps one address for every use, so it gets a slot of its own
     auto& type{declared && gs::is_structural(declared->get_kind()) ? *declared : type_of(value)};
     if (!gs::is_structural(type.get_kind()) || value.is<merge_ref>()) { return value; }
+
     // An `undefined` initializer leaves the fresh slot as it is
     const auto slot{builder_.emit_alloca(type)};
     const auto init_index{comptime_value(init)};
@@ -154,6 +155,7 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, init_src, gs::error::COMPTIME_MUT_NOT_FOLDABLE, std::string{CONST_CONSTANT});
     }
+
     // A type declared here is named for the local, `Local` rather than `struct`
     if (comp_.constants().is_type(*known) && !body.empty() &&
         mod().tag_of(body.back()) == tag::yield) {
@@ -196,6 +198,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
         return void_value();
     }
     TRY(require_runtime(src));
+
     // A reference binding written through is spilled first, as the old emitter takes its place
     auto through{target};
     if (const auto lhs{as_inst(d.bin.lhs)};
@@ -217,6 +220,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     }
     const auto stored{
         TRY(coerce_to(value, *destination.pointee, src, {.what = use_site::kind::STORE}))};
+
     // Storing `undefined` leaves the slot as it is, so nothing is emitted
     const auto known{comptime_value(value)};
     if (!known || !comp_.constants().value_at(*known).data.is<ip::undefined_value>()) {

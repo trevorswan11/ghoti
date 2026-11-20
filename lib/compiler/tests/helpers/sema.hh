@@ -132,10 +132,9 @@ struct sema_test_context {
                                          usize                        table_idx,
                                          stdx::option<mod::module_t&> module = stdx::none,
                                          Proj                         proj   = {}) {
-        auto        info{get_symbol<SymbolData>(name, table_idx)};
-        auto&       enclosing{module.value_or(root_mod)};
-        const auto& type =
-            UNWRAP(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
+        auto  info{get_symbol<SymbolData>(name, table_idx)};
+        auto& enclosing{module.value_or(root_mod)};
+        auto& type = UNWRAP(enclosing.get_sema_type_opt(std::invoke(proj, std::get<1>(info))));
         return std::tuple_cat(info, std::forward_as_tuple(type));
     }
 

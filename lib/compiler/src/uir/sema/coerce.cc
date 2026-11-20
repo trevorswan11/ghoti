@@ -88,6 +88,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             return array_as_slice(base.address, from, target);
         }
     }
+
     // A reference to an array views it as a slice
     if (from.get_kind() == gs::type_kind::REFERENCE && target.get_kind() == gs::type_kind::SLICE) {
         auto& referent{from.get_data().as<gs::types::reference>().underlying};
@@ -106,6 +107,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         if (v.data.is<ip::nullptr_value>() && target.get_kind() == gs::type_kind::POINTER) {
             return operand{pool.intern(ip::nullptr_value{}, target)};
         }
+
         // A known typed integer is exactly a `comptime_int`
         if (const auto value{int_of(v)}; value &&
                                          target.get_kind() == gs::type_kind::COMPTIME_INT &&
@@ -123,7 +125,8 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             }
             return operand{intern_int(pool, *value, target)};
         }
-        // A known integer converts to any float, as the old emitter's `int_as_float` does
+
+        // A known integer converts to any float
         const bool to_float{gs::is_float(target.get_kind()) ||
                             target.get_kind() == gs::type_kind::COMPTIME_FLOAT};
         if (to_float && int_of(v)) {
@@ -142,6 +145,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
              gs::is_implicit_widenable(from, target))) {
             return operand{gir::value::constant(pool, *f, target).constant_index()};
         }
+
         // A string's bytes view as a byte slice, a sentinel one only from a sentinel string
         if (const auto text{v.data.as_opt<std::string>()};
             text && target.get_kind() == gs::type_kind::SLICE) {
@@ -163,7 +167,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             return operand{gir::value{
                 builder_.emit_cast(gir::instruction_kind::WIDEN_CAST, *value, target), target}};
         }
-        // A view that only loses mutability is the same value, as the old emitter passes it on
+        // A view that only loses mutability is the same value
         const auto is_view{[](const gs::type& t) {
             const auto kind{t.get_kind()};
             return kind == gs::type_kind::POINTER || kind == gs::type_kind::REFERENCE ||
@@ -181,13 +185,12 @@ auto analyzer::array_as_slice(const gir::value& address, gs::type& from, gs::typ
     -> result<stdx::option<operand>> {
     const auto& arr{from.get_data().as<gs::types::array>()};
     const auto& slice{target.get_data().as<gs::types::slice>()};
-    // The elements match, a sentinel slice needs a sentinel array, and a mutable one a mutable
-    // array
     if (!gs::is_same_unqualified(arr.underlying, slice.underlying) ||
         (slice.null_terminated && !arr.null_terminated) ||
         (!target.is_constant() && from.is_constant())) {
         return stdx::none;
     }
+
     auto&      ctx{comp_.ctx()};
     const auto mut{from.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
     auto&      ptr_type{ctx.get_pointer(mut, arr.underlying)};

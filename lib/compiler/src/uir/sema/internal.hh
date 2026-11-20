@@ -15,6 +15,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -27,6 +28,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/pattern.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
 #include "support/big_int.hh"
@@ -67,8 +69,7 @@ struct function_ref {
     gsl::not_null<instance*> fn;
 };
 
-// A tagged union's field whose payload address isn't computed yet, since a read checks the tag
-// before it
+// A tagged union's field whose payload address isn't computed yet (read checks tag before it)
 struct union_field {
     gir::value       union_address;
     u64              index;
@@ -77,9 +78,9 @@ struct union_field {
 
 // An addressable slot that loads read and stores write
 struct place {
-    gir::value               address;
-    gsl::not_null<gs::type*> pointee;
-    bool                     is_mutable;
+    gir::value                address;
+    gsl::not_null<gs::type*>  pointee;
+    bool                      is_mutable;
     stdx::option<union_field> pending{};
 };
 
@@ -240,7 +241,7 @@ struct nominal {
     std::vector<i64> enum_values{};
 };
 
-// A nominal type's identity: its instruction, and the comptime call it was created in
+// A nominal type's instruction and the comptime call it was created in
 struct nominal_key {
     u32                    unit;
     inst_id                inst;
@@ -255,6 +256,14 @@ struct nominal_key_hash {
 };
 
 class compilation {
+  public:
+    // What a speculative compile-time evaluation could leave behind, so it can be undone
+    struct speculation {
+        usize diagnostics;
+        bool  stopped;
+        bool  runtime_site;
+    };
+
   public:
     compilation(gs::context& ctx, const program& prog, const options& opts);
     ~compilation() = default;
@@ -292,8 +301,7 @@ class compilation {
     [[nodiscard]] auto location_of(const unit& u, const source& src) const -> source_location;
     [[nodiscard]] auto span_of(const unit& u, const source& src) const -> source_span;
 
-    // The GIR symbol and linkage of a module-level declaration. Two declarations claiming one
-    // name stop, as qualifying them arrives with multi-module programs
+    // The GIR symbol and linkage of a module-level declaration
     [[nodiscard]] auto symbol_for(const unit& u, decl_id decl, const source& src)
         -> result<std::string>;
     [[nodiscard]] static auto linkage_of(const decl& d) noexcept -> gir::linkage;
@@ -329,8 +337,7 @@ class compilation {
     [[nodiscard]] auto existing_nominal(const unit& u, inst_id inst) -> stdx::option<nominal&>;
     // Names an anonymous nominal type for the declaration that declared it
     auto name_nominal(gs::type& t, std::string_view name) -> void;
-    // Resolves `t`'s fields the first time something needs them. A use while they resolve is a
-    // cycle, reported at `use`
+    // Resolves `t`'s fields the first time something needs them, detecting cycles
     [[nodiscard]] auto require_fields(const unit& u, const source& use, gs::type& t)
         -> result<void>;
 
@@ -342,12 +349,6 @@ class compilation {
     [[nodiscard]] auto prelude_type(std::string_view name, const unit& user, const source& use)
         -> result<gsl::not_null<gs::type*>>;
 
-    // What a speculative compile-time evaluation could leave behind, so it can be undone
-    struct speculation {
-        usize diagnostics;
-        bool  stopped;
-        bool  runtime_site;
-    };
     [[nodiscard]] auto speculate() const -> speculation;
     // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
     auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
@@ -376,10 +377,10 @@ class compilation {
     using memo_entry = stdx::option<operand>;
 
   private:
-    auto               analyze_roots() -> void;
+    auto analyze_roots() -> void;
     // Analyzes the member declarations of a type a module-level declaration declared
     auto analyze_members(const unit& u, gs::type& owner) -> void;
-    // The type a declaration's value body declares directly, as `const P = struct { ... }` does
+    // The type a declaration's value body declares directly
     [[nodiscard]] auto declared_type(const unit&                   u,
                                      const stdx::option<body_ref>& body,
                                      const operand& value) -> stdx::option<gs::type&>;
@@ -570,6 +571,7 @@ class analyzer {
         std::string_view callee{};
     };
 
+  private:
     // Instructions
     [[nodiscard]] auto analyze_body(gsl::span<const inst_id> body) -> result<flow>;
     [[nodiscard]] auto analyze_inst(inst_id inst) -> result<operand>;
@@ -920,8 +922,8 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, operand> values_;
     // Result slots an inner `and` / `or` already made for the ones it is the left side of
     ankerl::unordered_dense::map<inst_id, gir::value> bool_slots_;
-    std::vector<target>                            targets_;
-    std::vector<pending_merge>                     merges_;
+    std::vector<target>                               targets_;
+    std::vector<pending_merge>                        merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // The runtime branches enclosing the instruction being analyzed
@@ -938,7 +940,6 @@ constexpr std::string_view MUTABLE_TYPE_BINDING{
     "a 'type' value cannot be stored in a 'let' or 'let mut' binding; use 'const' instead"};
 constexpr std::string_view MUTABLE_ADDRESS_OF_IMMUTABLE{
     "Cannot take a mutable address of an immutable value"};
-// UIR's own: the old pipeline accepts it (docs/uir/known_legacy_bugs.md)
 constexpr std::string_view MUTABLE_ADDRESS_OF_ELEMENT{
     "Cannot take a mutable address of an element of a non-mutable array or slice"};
 

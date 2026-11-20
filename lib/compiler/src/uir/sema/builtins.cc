@@ -9,6 +9,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
@@ -108,6 +109,7 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
                             fmt::format("the layout of '{}' depends on itself", type.to_string()));
     }
     TRY(comp_.require_fields(u_, src, type));
+
     // Every by-value part of an aggregate must be sized too
     if (const auto st{type.get_data().as_opt<gs::types::struct_t>()}) {
         for (const auto field : st->fields) { TRY(layout_ready(*field, src)); }
@@ -128,8 +130,8 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
     if (!gs::is_numeric(from.get_kind()) || !gs::is_numeric(target.get_kind())) {
         return comp_.unsupported(u_, src, "an `@as` between non-numeric types");
     }
-    // A negative untyped integer that the same-width signed type holds wraps into an unsigned
-    // target, so `@as(u8, -1)` is its maximum
+
+    // A negative untyped integer that the same-width signed type holds wraps into unsigned
     if (const auto index{comptime_value(value)};
         index && from.get_kind() == gs::type_kind::COMPTIME_INT &&
         gs::is_unsigned_integer(target) && domain_of(target).bits < 127) {
@@ -140,6 +142,7 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
             return operand{intern_int(comp_.constants(), big_int{*small + span}, target)};
         }
     }
+
     // A known typed number widens exactly into an untyped one
     if (const auto index{comptime_value(value)}; index &&
                                                  gs::is_comptime_numeric(target.get_kind()) &&
@@ -155,6 +158,7 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
             }
         }
     }
+
     // A known operand converts as a value, which also checks it fits
     if (gs::is_comptime_numeric(from.get_kind()) || is_comptime()) {
         return coerce_to(value, target, src, {.what = use_site::kind::STORE});
@@ -162,7 +166,8 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
     if (!gs::is_same_unqualified(from, target) && !gs::is_implicit_widenable(from, target)) {
         return comp_.unsupported(u_, src, "an `@as` that narrows");
     }
-    // The old emitter casts even a value already of the target type
+
+    // Emit the cast even the value is already of the target type
     const auto operand{TRY(as_runtime(value, src))};
     return gir::value{builder_.emit_cast(gir::instruction_kind::WIDEN_CAST, operand, target),
                       target};
@@ -183,6 +188,7 @@ auto analyzer::builtin_this(const source& src) -> result<operand> {
     if (mod().tag_of(*owner) == tag::interface_decl || mod().tag_of(*owner) == tag::impl_decl) {
         return comp_.unsupported(u_, src, "`@This` in an interface or impl");
     }
+
     // A member runs inside a comptime call of its own, but its type was declared outside it
     if (const auto existing{comp_.existing_nominal(u_, *owner)}) {
         return interned_type(*existing->type);

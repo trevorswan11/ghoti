@@ -130,6 +130,7 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     const auto& src{src_of(inst)};
     auto        lhs{TRY(resolve_value(d.bin.lhs, src))};
     auto        rhs{TRY(resolve_value(d.bin.rhs, src))};
+
     // An enum literal names a variant of the other side's enum
     if (lhs.is<enum_literal>() && type_of(rhs).get_kind() == gs::type_kind::ENUM) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
@@ -141,6 +142,7 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         if (const auto compared{TRY(compare_tag(info, lhs, rhs, src))}) { return *compared; }
         if (const auto compared{TRY(compare_pointers(info, lhs, rhs, src))}) { return *compared; }
     }
+
     // A range capture takes the other side's integer type when that holds every value it takes
     const auto narrows_to{[&](const operand& capture, const operand& other) {
         const auto slot{capture.as_opt<slot_value>()};
@@ -158,6 +160,7 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     auto& lhs_type{type_of(lhs)};
     auto& rhs_type{type_of(rhs)};
     if (lhs_type.is_poison() || rhs_type.is_poison()) { return stdx::err{stop::POISON}; }
+
     // Operators on strings, arrays and other aggregates arrive with their own phases
     const auto plain{[](const gs::type& type) {
         return gs::is_numeric(type.get_kind()) || type.get_kind() == gs::type_kind::BOOL ||
@@ -177,7 +180,7 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
 
     const std::array operands{lhs, rhs};
     auto&            peer{*TRY(peer_type(operands, src))};
-    // Untyped operands only stay untyped when both are known, and fold
+    // Untyped operands only stay untyped when both are known
     const bool     both_known{comptime_value(lhs) && comptime_value(rhs)};
     auto&          work{both_known || !gs::is_comptime_numeric(peer.get_kind())
                             ? peer
@@ -231,6 +234,7 @@ auto analyzer::compare_tag(const binary_info& info,
         return operand{pool.intern(info.kind == instruction_kind::EQ ? equal : !equal, bool_type)};
     }
     TRY(require_runtime(src));
+
     // A reference already is the union's address
     gir::value base;
     if (&union_type == &tagged_type) {
@@ -263,7 +267,7 @@ auto analyzer::compare_pointers(const binary_info& info,
     }};
     if (!pointer_like(lhs) || !pointer_like(rhs)) { return stdx::none; }
     if (is_comptime()) { return comp_.unsupported(u_, src, "comparing pointers at compile time"); }
-    // Even two known pointers compare at runtime, as the old emitter leaves them
+    // Even two known pointers compare at runtime
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
     const auto l{TRY(as_runtime(lhs, src))};
     const auto r{TRY(as_runtime(rhs, src))};
@@ -436,7 +440,7 @@ auto analyzer::analyze_shift(inst_id            inst,
                                                         comp_.ctx().type_display_name(shifted)));
             }
         }
-        // An amount the shifted type holds stays as written, as the old emitter keeps it
+        // An amount the shifted type holds stays as written
         const u16  value_bits{static_cast<u16>(domain.is_signed ? domain.bits - 1 : domain.bits)};
         const bool in_range{*small >= 0 &&
                             (value_bits >= 127 || *small <= (i128{1} << value_bits) - 1)};
@@ -604,8 +608,7 @@ auto analyzer::bool_slot(inst_id inst, bool is_and) -> gir::value {
         builder_.emit_store(slot, constant(pool.intern(!for_and, bool_type), bool_type));
         return gir::value{slot, bool_type};
     }};
-    // The old emitter sets up each enclosing `and` / `or` before the one on its left, outermost
-    // first, so this one makes their slots too
+
     std::vector<inst_id> enclosing;
     for (auto at{comp_.bool_parent(u_, inst)}; at; at = comp_.bool_parent(u_, *at)) {
         enclosing.emplace_back(*at);

@@ -18,7 +18,6 @@
 #include "compiler/sema/error.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "helpers/uir_diff.hh"
-#include "support/big_int.hh"
 #include "support/int128.hh"
 #include "support/test.hh"
 
@@ -235,7 +234,6 @@ TEST_CASE("A range capture converts to a narrower integer that holds every value
 }
 
 TEST_CASE("A mutable address of an immutable array element is an error", "[uir]") {
-    // The old pipeline accepts this while rejecting `buf[0] = 3` (known_legacy_bugs.md)
     const auto run{rejected(R"(
         const touch = fn(p: ^mut u8): void { *p = 3; };
         const f = fn(): void {

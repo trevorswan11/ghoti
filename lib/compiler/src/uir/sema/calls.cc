@@ -6,6 +6,7 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
@@ -50,8 +51,7 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
         if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion"); }
     }
 
-    // Only a type's own function is called through it here. A method call on a value needs its
-    // `self` parameter
+    // Only a type's own function is called through it here
     const auto object{TRY(resolve_value(object_ref, src))};
     const auto index{comptime_value(object)};
     if (!index || !comp_.constants().is_type(*index)) {
@@ -75,6 +75,7 @@ auto analyzer::call_function(instance&            target,
             gs::error::ARITY_MISMATCH,
             fmt::format("Expected {} arguments, found {}", target.params.size(), args.size()));
     }
+
     // A call returning `type` always runs at compile time
     if (is_comptime()) { return call_at_comptime(target, args, src); }
     if (target.comptime_only) {
@@ -102,7 +103,8 @@ auto analyzer::call_function(instance&            target,
     if (ret.get_kind() == gs::type_kind::NORETURN) {
         return comp_.unsupported(u_, src, "a call to a `noreturn` function");
     }
-    // The old emitter calls a type's member function through its name as a constant
+
+    // Call a type's member function through its name as a constant
     const auto result{
         through_member
             ? builder_.emit_indirect_call(

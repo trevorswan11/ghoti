@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <gsl/util>
 #include <stdx/option.hh>
@@ -11,12 +12,14 @@
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -161,6 +164,7 @@ auto analyzer::counter_type(const range_operands& r) -> gs::type& {
     if (r.lo && r.hi && r.lo_is_literal && gs::is_integer(type_of(*r.hi).get_kind())) {
         elem = &type_of(*r.hi);
     }
+
     // Untyped bounds count in `usize`, or in `isize` once one is negative
     if (elem->get_kind() == gs::type_kind::COMPTIME_INT &&
         (!r.hi || type_of(*r.hi).get_kind() == gs::type_kind::COMPTIME_INT)) {
@@ -340,16 +344,18 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                 descending.emplace(
                     builder_.emit_binary(instruction_kind::GT, start, end, bool_type), bool_type);
             }
-            infos.emplace_back<iterable>({.is_range   = true,
-                                          .inclusive  = bounds.inclusive,
-                                          .open_upper = !r.hi,
-                                          .counter    = gir::value{slot, elem},
-                                          .elem       = &elem,
-                                          .end        = end,
-                                          .descending = descending,
-                                          .container  = {},
-                                          .is_slice   = false,
-                                          .values     = known_range(r, bounds.inclusive)});
+            infos.emplace_back<iterable>({
+                .is_range   = true,
+                .inclusive  = bounds.inclusive,
+                .open_upper = !r.hi,
+                .counter    = gir::value{slot, elem},
+                .elem       = &elem,
+                .end        = end,
+                .descending = descending,
+                .container  = {},
+                .is_slice   = false,
+                .values     = known_range(r, bounds.inclusive),
+            });
             continue;
         }
 
@@ -361,30 +367,32 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
         auto& ctx{comp_.ctx()};
         if (const auto arr{container_type.get_data().as_opt<gs::types::array>()}) {
             array_len.emplace(arr->len);
-            infos.emplace_back<iterable>(
-                {.is_range   = false,
-                 .inclusive  = false,
-                 .open_upper = false,
-                 .counter    = gir::value{index_slot, usize_type},
-                 .elem       = &*ctx.pool.with_const(arr->underlying, container_type.is_constant()),
-                 .end        = usize_constant(arr->len),
-                 .descending = stdx::none,
-                 .container  = container.address,
-                 .is_slice   = false});
+            infos.emplace_back<iterable>({
+                .is_range   = false,
+                .inclusive  = false,
+                .open_upper = false,
+                .counter    = gir::value{index_slot, usize_type},
+                .elem       = &*ctx.pool.with_const(arr->underlying, container_type.is_constant()),
+                .end        = usize_constant(arr->len),
+                .descending = stdx::none,
+                .container  = container.address,
+                .is_slice   = false,
+            });
         } else if (const auto s{container_type.get_data().as_opt<gs::types::slice>()}) {
             const auto len_slot{builder_.emit_get_element_ptr(
                 container.address, {usize_constant(SLICE_LEN_FIELD)}, usize_type)};
             const auto len{builder_.emit_load(gir::value{len_slot, usize_type}, usize_type)};
-            infos.emplace_back<iterable>(
-                {.is_range   = false,
-                 .inclusive  = false,
-                 .open_upper = false,
-                 .counter    = gir::value{index_slot, usize_type},
-                 .elem       = &*ctx.pool.with_const(s->underlying, container_type.is_constant()),
-                 .end        = gir::value{len, usize_type},
-                 .descending = stdx::none,
-                 .container  = container.address,
-                 .is_slice   = true});
+            infos.emplace_back<iterable>({
+                .is_range   = false,
+                .inclusive  = false,
+                .open_upper = false,
+                .counter    = gir::value{index_slot, usize_type},
+                .elem       = &*ctx.pool.with_const(s->underlying, container_type.is_constant()),
+                .end        = gir::value{len, usize_type},
+                .descending = stdx::none,
+                .container  = container.address,
+                .is_slice   = true,
+            });
         } else {
             return comp_.unsupported(u_, src, "a `for` over this type");
         }

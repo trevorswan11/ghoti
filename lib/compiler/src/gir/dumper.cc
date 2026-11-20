@@ -113,7 +113,6 @@ auto format_instruction(const ip::pool& constants, const instruction& inst, bool
             return fmt::format(
                 "store {}, {}", format_value(inst.operands[0]), format_value(inst.operands[1]));
         } else if (inst.operands.size() == 1 && inst.result) {
-            // The destination may be a parameter, which prints as one
             return fmt::format(
                 "store {}, {}", format_value(inst.operands[0]), format_local(*inst.result));
         }

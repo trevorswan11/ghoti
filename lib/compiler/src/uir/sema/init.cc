@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,17 +14,17 @@
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::uir::sema {
 
 namespace {
-
-[[nodiscard]] auto plural(usize n) -> std::string_view { return n == 1 ? "" : "s"; }
 
 // One `.name = value` entry of a struct initializer
 struct named_value {
@@ -114,7 +115,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
                             src,
                             gs::error::DUPLICATE_FIELD,
                             fmt::format("Struct initializer contains duplicate field{}: {}",
-                                        plural(duplicates.size()),
+                                        string_utils::plural_suffix(duplicates.size()),
                                         fmt::join(duplicates, ", ")));
     }
     const auto                    defaults{TRY(field_defaults(type, src))};
@@ -129,7 +130,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
                             src,
                             gs::error::MISSING_FIELD,
                             fmt::format("Struct initializer missing required field{}: {}",
-                                        plural(missing.size()),
+                                        string_utils::plural_suffix(missing.size()),
                                         fmt::join(missing, ", ")));
     }
     if (!unknown.empty()) {
@@ -137,7 +138,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
                             src,
                             gs::error::UNKNOWN_FIELD,
                             fmt::format("Struct initializer contains unknown field{}: {}",
-                                        plural(unknown.size()),
+                                        string_utils::plural_suffix(unknown.size()),
                                         fmt::join(unknown, ", ")));
     }
 
@@ -280,12 +281,13 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
     const auto& arr{type.get_data().as<gs::types::array>()};
     auto&       elem{arr.underlying};
     if (values->size() != arr.len) {
-        return comp_.report(
-            u_,
-            src,
-            gs::error::TYPE_MISMATCH,
-            fmt::format(
-                "Expected {} array element{}, found {}", arr.len, plural(arr.len), values->size()));
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("Expected {} array element{}, found {}",
+                                        arr.len,
+                                        string_utils::plural_suffix(arr.len),
+                                        values->size()));
     }
 
     if (is_comptime()) {

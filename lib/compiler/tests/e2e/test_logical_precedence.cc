@@ -49,8 +49,7 @@ TEST_CASE("`and` binds tighter than `or`") {
 }
 
 TEST_CASE("shifts and bitwise operators follow C's precedence") {
-    // Regression for #421: shifts used to share the precedence of `*`
-    const auto* program{R"(
+    CHECK(helpers::compile_and_run(R"(
         const check = fn(u: u32, bits: u32): i32 {
             // u >> (bits - 1)
             if (u >> bits - 1 != 1) { return 1; }
@@ -71,8 +70,7 @@ TEST_CASE("shifts and bitwise operators follow C's precedence") {
             if (FOLDED != 0) { return 10 + FOLDED; }
             return check(0x8000_0000, 32);
         };
-    )"};
-    CHECK(helpers::compile_and_run(program) == 0);
+    )") == 0);
 }
 
 } // namespace ghoti::tests

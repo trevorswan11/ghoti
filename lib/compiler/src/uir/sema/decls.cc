@@ -301,8 +301,8 @@ auto analyzer::analyze_global(decl_id                 decl,
         if (declared && declared->get_kind() != gs::type_kind::TYPE) {
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
-        // Only a module-level alias is listed, and a declaration that declares its type is
-        // listed by nothing, as the old emitter does
+
+        // Only a module-level alias is listed
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
         if (!declared && !declares_type(d) && module_level) {
             comp_.gir().add_type(TRY(comp_.symbol_for(u_, decl, src)),

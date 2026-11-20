@@ -1,23 +1,25 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -53,7 +55,10 @@ auto analyzer::settle(const place& p) -> place {
     const auto at{builder_.emit_get_element_ptr(
         p.pending->union_address, {usize_constant(UNION_PAYLOAD_FIELD)}, *p.pointee)};
     return place{
-        .address = gir::value{at, *p.pointee}, .pointee = p.pointee, .is_mutable = p.is_mutable};
+        .address    = gir::value{at, *p.pointee},
+        .pointee    = p.pointee,
+        .is_mutable = p.is_mutable,
+    };
 }
 
 auto analyzer::read(const place& p, const source& src) -> result<gir::value> {
@@ -94,12 +99,11 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
         return comp_.unsupported(u_, src, "the address of a value with no runtime storage");
     }
 
-    // A value with no storage is spilled into a slot. A binding keeps its slot for every later use,
-    // and a parameter's or constant's slot is filled at the function's entry
+    // A value with no storage is spilled into a slot
     const auto inst{as_inst(r)};
     const bool binding{inst && is_binding(mod().tag_of(*inst))};
     const bool to_entry{binding && (op.is<ip::index>() || mod().tag_of(*inst) == tag::param)};
-    // The old emitter points at an untyped constant as `^comptime_int`, which waits on a decision
+
     if (const auto kind{type_of(op).get_kind()};
         kind == gs::type_kind::COMPTIME_INT || kind == gs::type_kind::COMPTIME_FLOAT) {
         return comp_.unsupported(u_, src, "the address of an untyped constant");
@@ -114,7 +118,6 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
 }
 
 auto analyzer::binding_view(ref r, gs::type& type) -> gs::type& {
-    // The old emitter views an aggregate or slice through its binding's own mutability
     const auto kind{type.get_kind()};
     if (kind != gs::type_kind::SLICE && kind != gs::type_kind::STRUCT &&
         kind != gs::type_kind::UNION) {
@@ -195,9 +198,11 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
             base.address,
             {usize_constant(is_len ? SLICE_LEN_FIELD : SLICE_PTR_FIELD)},
             field_type)};
-        return place{.address    = gir::value{at, field_type},
-                     .pointee    = &field_type,
-                     .is_mutable = base.is_mutable};
+        return place{
+            .address    = gir::value{at, field_type},
+            .pointee    = &field_type,
+            .is_mutable = base.is_mutable,
+        };
     }
     if (type.get_kind() != gs::type_kind::STRUCT && type.get_kind() != gs::type_kind::UNION) {
         return comp_.unsupported(u_, src, fmt::format("a field of a `{}`", type.to_string()));
@@ -212,19 +217,23 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
                          .is_mutable = base.is_mutable};
         }
         // The payload's address waits, since a read checks the tag first
-        return place{.address    = {},
-                     .pointee    = &field_type,
-                     .is_mutable = base.is_mutable,
-                     .pending    = union_field{.union_address = base.address,
-                                               .index         = index,
-                                               .name          = ut->field_names[index]}};
+        return place{
+            .address    = {},
+            .pointee    = &field_type,
+            .is_mutable = base.is_mutable,
+            .pending    = union_field{.union_address = base.address,
+                                      .index         = index,
+                                      .name          = ut->field_names[index]},
+        };
     }
     auto& field_type{
         mutable_view(type.get_data().as<gs::types::struct_t>().type_at(index), base.is_mutable)};
     const auto at{builder_.emit_get_element_ptr(base.address, {usize_constant(index)}, field_type)};
-    return place{.address    = gir::value{at, field_type},
-                 .pointee    = &field_type,
-                 .is_mutable = base.is_mutable};
+    return place{
+        .address    = gir::value{at, field_type},
+        .pointee    = &field_type,
+        .is_mutable = base.is_mutable,
+    };
 }
 
 auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
@@ -290,14 +299,15 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
     if (is_comptime() || object.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a field of comptime memory");
     }
+
     // A field of a compile-time value is known, so reading it needs no storage
     if (const auto known{comptime_value(object)}; known && !assigned) {
         return comptime_field(*known, name, src);
     }
     const auto base{TRY(address_of(object_ref, src))};
     const auto field{TRY(field_place(base, name, src))};
-    // Assigning a tagged union's field makes it the active one before the value is computed, as
-    // the old emitter does
+
+    // Assigning a tagged union's field makes it the active one before the value is computed
     if (assigned && field.pending) {
         auto&      i32_type{comp_.ctx().get_int(32, true)};
         const auto tag_ptr{builder_.emit_get_element_ptr(
@@ -370,10 +380,13 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
         }
         auto&      elem{*ctx.pool.with_const(arr->underlying, type.is_constant())};
         const auto at{builder_.emit_get_element_ptr(base.address, {index}, elem)};
-        return place{.address    = gir::value{at, elem},
-                     .pointee    = &elem,
-                     .is_mutable = base.is_mutable && !type.is_constant()};
+        return place{
+            .address    = gir::value{at, elem},
+            .pointee    = &elem,
+            .is_mutable = base.is_mutable && !type.is_constant(),
+        };
     }
+
     if (const auto s{type.get_data().as_opt<gs::types::slice>()}) {
         auto& ptr_type{
             ctx.get_pointer(type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE,
@@ -382,7 +395,7 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
             base.address, {usize_constant(SLICE_PTR_FIELD)}, ptr_type)};
         const auto ptr{builder_.emit_load(gir::value{ptr_slot, ptr_type}, ptr_type)};
         if (safety) {
-            // The index converts before the length is read, as the old emitter orders them
+            // The index converts before the length is read
             const auto checked{compared()};
             auto&      usize_type{builtin(gs::type_kind::USIZE)};
             const auto len_slot{builder_.emit_get_element_ptr(
@@ -519,8 +532,8 @@ auto analyzer::operand_address(const operand& op, const source& src) -> result<p
     if (const auto g{op.as_opt<global_const>()}) {
         return global_place(*g->symbol, *g->type, false);
     }
-    // A named value keeps the slot it is spilled to, and a variable's read is addressed where the
-    // variable lives, as `address_of` gives them
+
+    // A named value keeps the slot it is spilled to
     if (const auto v{op.as_opt<gir::value>()}) {
         stdx::option<inst_id> binding;
         for (const auto& [inst, value] : values_) {
@@ -586,8 +599,7 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
     }
     const auto element{agg->elements[static_cast<usize>(*small)]};
     auto&      elem_type{value.type->get_data().as<gs::types::array>().underlying};
-    if (!element) { return pool.intern(ip::undefined_value{}, elem_type); }
-    return *element;
+    return element.value_or(pool.intern(ip::undefined_value{}, elem_type));
 }
 
 } // namespace ghoti::uir::sema

@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -17,6 +19,7 @@
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
@@ -111,8 +114,7 @@ auto compilation::run() -> outcome {
 }
 
 auto compilation::analyze_roots() -> void {
-    // Every non-generic declaration of every module is a root until lazy builds land. The
-    // `builtin` module's declarations are analyzed only when used
+    // TODO: Every non-generic declaration of every module is a root until lazy builds land
     for (const auto& u : units_) {
         if (prelude_unit_ && u.index == *prelude_unit_) { continue; }
         for (const auto decl : u.uir->root_namespace().decls) {
@@ -234,7 +236,7 @@ auto compilation::report(const unit&                          u,
 auto compilation::unsupported(const unit& u, const source& src, std::string what)
     -> stdx::err<stop> {
     if (!stopped_at_) {
-        stopped_at_.emplace(sema::unsupported{
+        stopped_at_.emplace<sema::unsupported>({
             .what  = std::move(what),
             .path  = u.source->path,
             .where = location_of(u, src),

@@ -7,6 +7,7 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
@@ -33,7 +34,8 @@ auto analyzer::string_slice(std::string_view text, gs::type& slice_type) -> gir:
     const std::string owned{text};
     auto&             ctx{comp_.ctx()};
     const auto&       slice{slice_type.get_data().as<gs::types::slice>()};
-    // The field address is mutable whatever the slice's own mutability, as the old emitter types it
+
+    // The field address is mutable whatever the slice's own mutability
     auto&      elem_ptr_type{ctx.get_pointer(gs::types::mut::MUTABLE, slice.underlying)};
     const auto slot{builder_.emit_alloca(slice_type)};
     const auto ptr_field{builder_.emit_get_element_ptr(
@@ -127,7 +129,7 @@ auto analyzer::check_not_null(const gir::value& ptr, const source& src) -> resul
         ptr,
         constant(comp_.constants().intern(ip::nullptr_value{}, null_type), null_type),
         bool_type)};
-    // The failing edge comes first here, as the old emitter orders it
+    // The failing edge comes first here
     const auto fail{new_segment()};
     const auto pass{new_segment()};
     builder_.emit_cond_goto(gir::value{is_null, bool_type}, fail, pass);

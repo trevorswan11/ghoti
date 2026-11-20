@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -16,21 +17,22 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
+#include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
 namespace {
 
 // Keeps UIR's nominal keys apart from the old pipeline's, which key on a symbol table index
-constexpr u64 NOMINAL_MARKER{0x7569725f6e6f6d69};
-// UIR's nominal types take symbol table indices no registry hands out, so identity checks that
-// compare them see each nominal as its own type
+constexpr u64   NOMINAL_MARKER{0x7569725f6e6f6d69};
 constexpr usize NOMINAL_TABLE_BASE{usize{1} << 48};
 
 [[nodiscard]] auto default_name(gs::type_kind kind) -> std::string_view {
@@ -61,7 +63,7 @@ template <typename Expr>
 
 // The old type payloads take the declaring module mutably, but nothing writes through it
 [[nodiscard]] auto enclosing_of(const unit& u) -> mod::module_t& {
-    return const_cast<mod::module_t&>(*u.source); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+    return const_cast<mod::module_t&>(*u.source);
 }
 
 } // namespace
