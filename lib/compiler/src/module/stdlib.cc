@@ -13,9 +13,8 @@
 namespace ghoti::mod {
 
 auto find_stdlib() -> stdx::option<std::filesystem::path> {
-    if (const auto env_var{get_env(GHOTI_STDLIB_ENV)}) {
-        std::filesystem::path env_path{*env_var};
-        if (path_utils::is_file(env_path)) { return env_path; }
+    if (const auto env_path{get_env_path(GHOTI_STDLIB_ENV)}) {
+        if (path_utils::is_file(*env_path)) { return env_path; }
     }
 
     const auto found{find_lib_path("std/std.gh")};
@@ -24,19 +23,17 @@ auto find_stdlib() -> stdx::option<std::filesystem::path> {
 }
 
 auto find_start() -> stdx::option<std::filesystem::path> {
-    if (const auto env_var{get_env("GHOTI_START")}) {
-        std::filesystem::path env_path{*env_var};
-        if (path_utils::is_file(env_path)) { return env_path; }
+    if (const auto env_path{get_env_path("GHOTI_START")}) {
+        if (path_utils::is_file(*env_path)) { return env_path; }
     }
     return find_lib_path("std/start.gh");
 }
 
 auto find_lib_path(const std::filesystem::path& relative) -> stdx::option<std::filesystem::path> {
     // An overridden stdlib sits at `<lib>/std/std.gh`, so its `lib` holds the other resources too
-    if (const auto env_var{get_env(GHOTI_STDLIB_ENV)}) {
-        const std::filesystem::path env_path{*env_var};
-        if (path_utils::is_file(env_path)) {
-            auto candidate{env_path.parent_path().parent_path() / relative};
+    if (const auto env_path{get_env_path(GHOTI_STDLIB_ENV)}) {
+        if (path_utils::is_file(*env_path)) {
+            auto candidate{env_path->parent_path().parent_path() / relative};
             if (path_utils::exists(candidate)) { return candidate; }
         }
     }
