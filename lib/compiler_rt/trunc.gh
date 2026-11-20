@@ -1,0 +1,11 @@
+//! Ported from musl, which is MIT licensed.
+//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+//!
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/truncf.c
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/trunc.c
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const mem = std.mem;
+const symbol = compiler_rt.symbol;
