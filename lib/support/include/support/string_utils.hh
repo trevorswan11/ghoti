@@ -93,8 +93,7 @@ template <usize Cap = 64>
     return prev[b.size()];
 }
 
-// The pieces of `text` between each `delimiter`. Empty text has no pieces, and a trailing
-// delimiter doesn't end one more empty piece
+// The pieces of `text` between each `delimiter`
 [[nodiscard]] auto split(std::string_view text, std::string_view delimiter)
     -> std::vector<std::string_view>;
 

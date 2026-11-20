@@ -27,8 +27,9 @@ class big_int {
     // Digits in `base` (2, 8, 10, or 16) with no prefix, sign, or separators
     [[nodiscard]] static auto parse(std::string_view digits, u32 base) -> stdx::option<big_int>;
 
-    // The smallest and largest values of a `bits`-wide two's complement integer
+    // The smallest values of a `bits`-wide two's complement integer
     [[nodiscard]] static auto min_of(u64 bits, bool is_signed) -> big_int;
+    // The largest values of a `bits`-wide two's complement integer
     [[nodiscard]] static auto max_of(u64 bits, bool is_signed) -> big_int;
 
     [[nodiscard]] auto is_zero() const noexcept -> bool { return magnitude_.is_zero(); }
