@@ -23,6 +23,7 @@ reason_suffix(const gs::context& ctx, const gs::type& from, const gs::type& to, 
     if (const auto reason{gs::cast_rejection_reason(from, to, ptr_bits, ctx.user_type_names)}) {
         return fmt::format(" ({})", *reason);
     }
+
     return {};
 }
 

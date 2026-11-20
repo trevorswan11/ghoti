@@ -47,8 +47,7 @@ namespace {
             const uir::inst_id inst{i};
             if (m.tag_of(inst) != uir::tag::let_value) { continue; }
             uir::record_reader rec{m, m.data_of(inst).pl.extra};
-            DISCARD(rec.str_field());
-            DISCARD(rec.ref_field());
+            rec.skip_str().skip_ref();
             const auto init{rec.ref_field().and_then(uir::as_inst)};
             if (init && m.tag_of(*init) == uir::tag::call) { return true; }
         }

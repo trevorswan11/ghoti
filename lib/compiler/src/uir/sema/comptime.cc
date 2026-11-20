@@ -47,6 +47,7 @@ auto compilation::call_comptime(const unit&            caller,
         if (!found->second) { return stdx::err{stop::POISON}; }
         return *found->second;
     }
+
     if (calls_.size() >= limits_.recursion) {
         return report(caller,
                       src,
@@ -74,6 +75,7 @@ auto compilation::call_comptime(const unit&            caller,
     if (!impure && (value || value.error() == stop::POISON)) {
         memo_.emplace(std::move(key), value ? memo_entry{*value} : memo_entry{});
     }
+
     return value;
 }
 
@@ -121,6 +123,7 @@ auto compilation::bool_parent(const unit& u, inst_id inst) -> stdx::option<inst_
             }
         }
     }
+
     const auto found{parents->find(inst)};
     if (found == parents->end()) { return stdx::none; }
     return found->second;
@@ -157,6 +160,7 @@ auto compilation::add_call_notes(gs::diagnostic& d) const -> void {
             d.with_note(fmt::format("... {} more", calls_.size() - MAX_CALL_NOTES));
             return;
         }
+
         d.with_note(
             fmt::format("in the compile-time call to '{}'", frame.callee),
             located_span{frame.caller->source->path, span_of(*frame.caller, frame.call_src)});
@@ -171,7 +175,7 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
     PROFILE_FUNCTION();
     record_reader rec{record(fn_->func)};
     const auto    params{rec.body_field()};
-    DISCARD(rec.body_field());
+    rec.skip_body();
     const auto body{rec.body_field()};
     for (usize i{0}; const auto param : params) {
         values_.insert_or_assign(param, operand{args[i++]});
@@ -189,6 +193,7 @@ auto analyzer::require_comptime(const operand& op, const source& src) -> result<
     if (op.is<function_ref>()) {
         return comp_.unsupported(u_, src, "a function used as a compile-time value");
     }
+
     return comp_.needs_runtime(u_, src);
 }
 
@@ -238,8 +243,7 @@ namespace {
     case tag::bit_not:   return std::vector{d.un.operand};
     case tag::let_value: {
         record_reader rec{m, d.pl.extra};
-        DISCARD(rec.str_field());
-        DISCARD(rec.ref_field());
+        rec.skip_str().skip_ref();
         return std::vector{*rec.ref_field()};
     }
     case tag::call: {
@@ -250,6 +254,7 @@ namespace {
         return refs;
     }
     case tag::elem_val: return std::vector{d.bin.lhs, d.bin.rhs};
+
     // The right side's body runs again at compile time with the rest of the instruction
     case tag::bool_and:
     case tag::bool_or:  {
@@ -263,25 +268,24 @@ namespace {
     case tag::init_struct: {
         record_reader    rec{m, d.pl.extra};
         std::vector<ref> refs;
-        DISCARD(rec.ref_field());
+        rec.skip_ref();
         const auto count{rec.count()};
         for (u32 i{0}; i < count; ++i) {
-            DISCARD(rec.str_field());
+            rec.skip_str();
             refs.emplace_back(*rec.ref_field());
         }
+
         return refs;
     }
     case tag::init_array: {
         record_reader rec{m, d.pl.extra};
-        DISCARD(rec.ref_field());
+        rec.skip_ref();
         const auto values{rec.refs_field()};
         return std::vector<ref>{values.begin(), values.end()};
     }
     case tag::array_lit: {
         record_reader rec{m, d.pl.extra};
-        DISCARD(rec.ref_field());
-        DISCARD(rec.ref_field());
-        DISCARD(rec.u32_field());
+        rec.skip_ref().skip_ref().skip_u32();
         const auto items{rec.refs_field()};
         return std::vector<ref>{items.begin(), items.end()};
     }
@@ -321,11 +325,14 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
                 record_reader rec{record(*inst)};
                 comp_.note_runtime_let(u_, rec.str_field(), src_of(*operand_inst));
             }
+
             return stdx::err{value.error()};
         }
+
         saved.emplace_back(*operand_inst, values_.at(*operand_inst));
         values_.insert_or_assign(*operand_inst, std::move(*value));
     }
+
     const auto scope{comptime_scope()};
     return analyze_inst(*inst);
 }

@@ -31,7 +31,7 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// Keeps UIR's nominal keys apart from the old pipeline's, which key on a symbol table index
+// Keeps nominal keys apart from the keys of types that carry a real symbol table index
 constexpr u64   NOMINAL_MARKER{0x7569725f6e6f6d69};
 constexpr usize NOMINAL_TABLE_BASE{usize{1} << 48};
 
@@ -46,11 +46,8 @@ constexpr usize NOMINAL_TABLE_BASE{usize{1} << 48};
 // The record's capture list, skipped. Captures make a type depend on the body it is written in
 [[nodiscard]] auto skip_captures(record_reader& rec) -> u32 {
     const auto count{rec.count()};
-    for (u32 i{0}; i < count; ++i) {
-        DISCARD(rec.ref_field());
-        DISCARD(rec.u32_field());
-        DISCARD(rec.str_field());
-    }
+    for (u32 i{0}; i < count; ++i) { rec.skip_ref().skip_u32().skip_str(); }
+
     return count;
 }
 
@@ -59,11 +56,6 @@ template <typename Expr>
 [[nodiscard]] auto ast_of(const unit& u, const source& src) -> const Expr& {
     return src.visit(
         [&](const auto& id) -> const Expr& { return u.source->ast.template get_as<Expr>(id); });
-}
-
-// The old type payloads take the declaring module mutably, but nothing writes through it
-[[nodiscard]] auto enclosing_of(const unit& u) -> mod::module_t& {
-    return const_cast<mod::module_t&>(*u.source);
 }
 
 } // namespace
@@ -84,11 +76,12 @@ auto compilation::declare_nominal(const unit& u, inst_id inst, gs::type_kind kin
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {
         return *nominals_[found->second];
     }
+
     const auto             id{static_cast<u32>(nominals_.size())};
     const gs::types::key_t type_key{kind, gs::types::mut::CONSTANT, NOMINAL_MARKER, u64{id}};
     auto&                  type{*ctx_.pool[type_key]};
     type.set_symbol_table_idx(NOMINAL_TABLE_BASE + id);
-    auto& n{*nominals_.emplace_back(stdx::make_box<nominal>(nominal{
+    auto& n{*nominals_.emplace_back(arena_.make<nominal>(nominal{
         .owner       = &units_[u.index],
         .inst        = inst,
         .type        = &type,
@@ -114,6 +107,7 @@ auto compilation::existing_nominal(const unit& u, inst_id inst) -> stdx::option<
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {
         return *nominals_[found->second];
     }
+
     return stdx::none;
 }
 
@@ -122,6 +116,7 @@ auto compilation::nominal_of(const gs::type& t) -> stdx::option<nominal&> {
     if (!table || *table < NOMINAL_TABLE_BASE || *table - NOMINAL_TABLE_BASE >= nominals_.size()) {
         return stdx::none;
     }
+
     return *nominals_[*table - NOMINAL_TABLE_BASE];
 }
 
@@ -146,6 +141,7 @@ auto compilation::require_fields(const unit& u, const source& use, gs::type& t) 
                       fmt::format("'{}' is used during its own resolution", n->name));
     case nominal_state::DECLARED: break;
     }
+
     n->state = nominal_state::FIELDS_RESOLVING;
     analyzer   a{*this, *n->owner};
     const auto resolved{a.resolve_fields(*n)};
@@ -161,6 +157,7 @@ auto compilation::require_fields(const unit& u, const source& use, gs::type& t) 
         twin.resolve<gs::type::data_t>(n->type->get_data());
         twin.copy_identity_from(*n->type);
     }
+
     return {};
 }
 
@@ -168,6 +165,7 @@ auto analyzer::analyze_nominal_decl(inst_id inst, gs::type_kind kind) -> result<
     if (!is_comptime()) {
         return comp_.unsupported(u_, src_of(inst), "a type declared in a runtime body");
     }
+
     return interned_type(*comp_.declare_nominal(u_, inst, kind).type);
 }
 
@@ -186,6 +184,7 @@ auto analyzer::field_type_of(gsl::span<const inst_id> body,
     if (type.get_kind() == gs::type_kind::AUTO) {
         return comp_.unsupported(u_, src, "a field whose type is inferred");
     }
+
     // A by-value field of a type still resolving its own fields can never be sized
     if (type.get_kind() == gs::type_kind::STRUCT || type.get_kind() == gs::type_kind::UNION) {
         if (const auto inner{comp_.nominal_of(type)};
@@ -197,8 +196,10 @@ auto analyzer::field_type_of(gsl::span<const inst_id> body,
                 fmt::format("Field '{}' has an incomplete type; creates an infinite size cycle",
                             name));
         }
+
         TRY(comp_.require_fields(u_, src, type));
     }
+
     return &type;
 }
 
@@ -209,10 +210,13 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     if ((agg_flags & flags::AGG_PACKED) != 0) {
         return comp_.unsupported(u_, src, "a packed struct");
     }
+
     if (skip_captures(rec) != 0) {
         return comp_.unsupported(u_, src, "a type that captures locals");
     }
+
     const auto& expr{ast_of<ast::struct_expr>(u_, src)};
+
     // The type's AST lists every gated field, not only the ones the configuration selects
     if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
 
@@ -221,9 +225,9 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     auto       field_types{ctx.pool.get_many_pending(count)};
     for (u32 i{0}; i < count; ++i) {
         const auto name{rec.str_field()};
-        DISCARD(rec.u32_field());
+        rec.skip_u32();
         const auto type_body{rec.body_field()};
-        DISCARD(rec.body_field());
+        rec.skip_body();
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         if (!attrs.empty()) { return comp_.unsupported(u_, field_src, "field attributes"); }
@@ -234,7 +238,7 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     n.type->resolve<gs::types::struct_t>(field_types,
                                          fields,
                                          ctx.pool.get_many_pending(0),
-                                         enclosing_of(u_),
+                                         *u_.source,
                                          (agg_flags & flags::AGG_EXTERN) != 0,
                                          false,
                                          ctx.arena.make_span<u64>(count),
@@ -251,6 +255,7 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
     if ((agg_flags & flags::AGG_PACKED) != 0) {
         return comp_.unsupported(u_, src, "a packed union");
     }
+
     if (skip_captures(rec) != 0) {
         return comp_.unsupported(u_, src, "a type that captures locals");
     }
@@ -274,8 +279,10 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
                             comp_.ctx().type_display_name(tag)));
         }
     }
+
     if (tag_enum) { return comp_.unsupported(u_, src, "a union tagged by its own enum"); }
     const auto& expr{ast_of<ast::union_expr>(u_, src)};
+
     // The type's AST lists every gated field, not only the ones the configuration selects
     if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
 
@@ -296,7 +303,7 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
     n.type->resolve<gs::types::union_t>(field_types,
                                         fields,
                                         ctx.pool.get_many_pending(0),
-                                        enclosing_of(u_),
+                                        *u_.source,
                                         is_extern || void_tag,
                                         is_extern,
                                         false,
@@ -330,7 +337,7 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
     big_int    next{i128{0}};
     n.enum_values.clear();
     for (u32 i{0}; i < count; ++i) {
-        DISCARD(rec.str_field());
+        rec.skip_str();
         const auto value_body{rec.body_field()};
         if (!value_body.empty()) {
             const auto& value_src{src_of(value_body.back())};
@@ -344,15 +351,18 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
                                 gs::error::LITERAL_OUT_OF_RANGE,
                                 messages::value_out_of_range(ctx, next, underlying));
         }
+
         const auto small{next.to_i128()};
         if (!small || *small > INT64_MAX || *small < INT64_MIN) {
             return comp_.unsupported(u_, src, "an enum value past 64 bits");
         }
+
         n.enum_values.emplace_back(static_cast<i64>(*small));
         next = next + big_int{i128{1}};
     }
 
     const auto& expr{ast_of<ast::enum_expr>(u_, src)};
+
     // The type's AST lists every gated field, not only the ones the configuration selects
     if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
     const gsl::span<const ast::enum_expr::enumeration> values{expr.enumerations};
@@ -360,7 +370,7 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
                                        (enum_flags & flags::NON_EXHAUSTIVE) != 0,
                                        underlying,
                                        ctx.pool.get_many_pending(0),
-                                       enclosing_of(u_),
+                                       *u_.source,
                                        gsl::span<const gsl::not_null<gs::type*>>{},
                                        gs::declared_names(ctx.arena, *u_.source, values));
     return {};
@@ -376,6 +386,7 @@ auto analyzer::enum_constant(gs::type& enum_type, std::string_view name, const s
         if (!n) { return comp_.unsupported(u_, src, "a variant of an enum UIR didn't declare"); }
         return comp_.constants().intern(n->enum_values[i], enum_type);
     }
+
     return comp_.report(u_,
                         src,
                         gs::error::UNDECLARED_IDENTIFIER,
@@ -393,11 +404,13 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
             return enum_constant(owner, name, src);
         }
     }
+
     const auto n{comp_.nominal_of(owner)};
     if (!n) { return comp_.unsupported(u_, src, "a member of a type UIR didn't declare"); }
     if (n->in_call) {
         return comp_.unsupported(u_, src, "a member of a type a comptime call created");
     }
+
     const auto& owner_mod{*n->owner->uir};
     if (const auto ns{owner_mod.namespace_of(n->inst)}) {
         for (const auto decl : ns->decls) {
@@ -406,6 +419,7 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
             }
         }
     }
+
     return comp_.report(u_,
                         src,
                         gs::error::UNDECLARED_IDENTIFIER,

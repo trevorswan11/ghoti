@@ -61,6 +61,7 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::THIS:                     return builtin_this(src);
     default:                                  break;
     }
+
     return comp_.unsupported(u_, src, fmt::format("the `{}` builtin", syntax::builtin_name(which)));
 }
 
@@ -69,13 +70,14 @@ auto analyzer::builtin_compile_error(gsl::span<const ref> args, const source& sr
     if (!args.empty() && !string_literal(mod(), args, 0)) {
         return comp_.unsupported(u_, src, "a `@compileError` message that isn't a literal");
     }
+
     return comp_.report(
         u_, src, gs::error::COMPILE_ERROR_REACHED, compile_error_message(mod(), args));
 }
 
 auto analyzer::builtin_limit(gsl::span<const ref> args, const source& src, bool recursion)
     -> result<operand> {
-    // A limit that isn't a known positive integer leaves the current one, as the old pipeline does
+    // A limit that isn't a known positive integer leaves the current one
     if (!args.empty()) {
         const auto value{resolve_value(args.front(), src)};
         const auto index{value ? comptime_value(*value) : stdx::none};
@@ -86,6 +88,7 @@ auto analyzer::builtin_limit(gsl::span<const ref> args, const source& src, bool 
             (recursion ? limits.recursion : limits.unroll) = static_cast<usize>(*small);
         }
     }
+
     return void_value();
 }
 
@@ -108,6 +111,7 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
                             gs::error::CYCLIC_DEPENDENCY,
                             fmt::format("the layout of '{}' depends on itself", type.to_string()));
     }
+
     TRY(comp_.require_fields(u_, src, type));
 
     // Every by-value part of an aggregate must be sized too
@@ -118,6 +122,7 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
     } else if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         TRY(layout_ready(arr->underlying, src));
     }
+
     return {};
 }
 
@@ -152,6 +157,7 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
         if (target.get_kind() == gs::type_kind::COMPTIME_FLOAT && gs::is_float(from.get_kind())) {
             if (const auto f{data.as_opt<f128>()}) { return operand{pool.intern(*f, target)}; }
         }
+
         if (target.get_kind() == gs::type_kind::COMPTIME_INT && gs::is_integer(from.get_kind())) {
             if (const auto exact{int_of(pool.value_at(*index))}) {
                 return operand{intern_int(pool, *exact, target)};
@@ -163,6 +169,7 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
     if (gs::is_comptime_numeric(from.get_kind()) || is_comptime()) {
         return coerce_to(value, target, src, {.what = use_site::kind::STORE});
     }
+
     if (!gs::is_same_unqualified(from, target) && !gs::is_implicit_widenable(from, target)) {
         return comp_.unsupported(u_, src, "an `@as` that narrows");
     }
@@ -193,6 +200,7 @@ auto analyzer::builtin_this(const source& src) -> result<operand> {
     if (const auto existing{comp_.existing_nominal(u_, *owner)}) {
         return interned_type(*existing->type);
     }
+
     return interned_type(*comp_.declare_nominal(u_, *owner, kind).type);
 }
 
@@ -215,6 +223,7 @@ auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src) -> r
             gs::error::COMPTIME_EVALUATION_FAILED,
             std::string{string_literal(mod(), args, 1).value_or(DEFAULT_ASSERT_FAILURE)});
     }
+
     return void_value();
 }
 

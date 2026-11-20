@@ -78,9 +78,11 @@ auto analyzer::eval_comptime(gsl::span<const inst_id> body) -> result<operand> {
     if (jump_) {
         return comp_.unsupported(u_, src_of(body.back()), "a jump out of a comptime body");
     }
+
     if (!out.yielded) {
         return comp_.unsupported(u_, src_of(body.back()), "a comptime body that doesn't yield");
     }
+
     return *out.yielded;
 }
 
@@ -98,18 +100,18 @@ auto analyzer::analyze_function() -> result<void> {
 
     record_reader rec{record(fn_->func)};
     const auto    params{rec.body_field()};
-    DISCARD(rec.body_field());
+    rec.skip_body();
     const auto body{rec.body_field()};
     for (usize i{0}; const auto param : params) {
         record_reader p{record(param)};
         const auto    name{p.str_field()};
-        DISCARD(p.body_field());
-        DISCARD(p.body_field());
+        p.skip_body().skip_body();
         const auto  param_flags{p.u32_field()};
         auto&       type{*fn_->params[i++]};
         const bool  discarded{(param_flags & flags::PARAM_DISCARDED) != 0 || name == "_"};
         const auto& slot{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
         const gir::value value{slot.id, type};
+
         // A slice parameter is passed in a slot of its own, and a written one is spilled to one
         if (type.get_kind() == gs::type_kind::SLICE) {
             values_.insert_or_assign(param, slot_value{.address = value, .type = &type});
@@ -135,6 +137,7 @@ auto analyzer::analyze_function() -> result<void> {
     } else {
         builder_.emit_return(constant(comp_.constants().intern(ip::undefined_value{}, ret), ret));
     }
+
     return {};
 }
 
@@ -145,18 +148,22 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             const auto& d{mod().data_of(inst)};
             return flow{.yielded = TRY(resolve(d.un.operand, src_of(inst)))};
         }
+
         auto value{analyze_inst(inst)};
         if (!value) {
             // A failed instruction poisons only what uses it, so later root causes still report
             if (value.error() == stop::UNSUPPORTED || is_comptime()) {
                 return stdx::err{value.error()};
             }
+
             continue;
         }
+
         values_.insert_or_assign(inst, std::move(*value));
         if (jump_) { return flow{}; }
         if (!is_comptime() && terminated()) { return flow{}; }
     }
+
     return flow{};
 }
 
@@ -253,6 +260,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
 
     default:                   break;
     }
+
     return comp_.unsupported(u_, src_of(inst), fmt::format("the `{}` instruction", tag_name(t)));
 }
 
@@ -260,6 +268,7 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
     if (const auto w{as_well_known(r)}) { return well_known_operand(*w, src); }
     const auto inst{*as_inst(r)};
     const auto found{values_.find(inst)};
+
     // A string literal is a constant `[N:0]u8`
     if (found == values_.end() && std::to_underlying(inst) < mod().instruction_count() &&
         mod().tag_of(inst) == tag::str) {
@@ -269,18 +278,22 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
             ctx.get_array(gs::types::mut::CONSTANT, true, text.size(), ctx.get_int(8, false))};
         return comp_.constants().intern(std::string{text}, type);
     }
+
     if (found == values_.end()) {
         // A failed instruction left no value, and its failure was already reported
         if (std::to_underlying(inst) < mod().instruction_count() && !is_comptime()) {
             return stdx::err{stop::POISON};
         }
+
         return comp_.unsupported(u_, src, "a value from another body");
     }
+
     // A comptime read of a runtime value runs what computed it again, at compile time
     if (is_comptime() && (found->second.is<gir::value>() || found->second.is<merge_ref>() ||
                           found->second.is<slot_value>())) {
         return reevaluate(r, src);
     }
+
     // An aggregate global is its value at compile time
     if (const auto g{found->second.as_opt<global_const>()}; g && is_comptime()) { return g->value; }
     return found->second;
@@ -291,6 +304,7 @@ auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
     if (op.is<place>() || op.is<global_ref>() || op.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a place used as a value");
     }
+
     return op;
 }
 
@@ -314,6 +328,7 @@ auto analyzer::well_known_operand(well_known w, const source& src) -> result<ope
         return pool.intern(ip::nullptr_value{}, builtin(gs::type_kind::NULLPTR));
     default: break;
     }
+
     return comp_.unsupported(u_, src, fmt::format("`{}`", well_known_name(w)));
 }
 
@@ -349,6 +364,7 @@ auto analyzer::denoted_type(const operand& op, const source& src)
     if (!index || !comp_.constants().is_type(*index)) {
         return comp_.unsupported(u_, src, "a type position holding a value");
     }
+
     return &comp_.constants().type_at(*index);
 }
 

@@ -19,12 +19,13 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// Two's-complement `u32` limbs, least significant first, as one `u128`
+// Two's-complement `u32` limbs, least significant first, packed into one `u128`
 [[nodiscard]] auto limbs_value(gsl::span<const u32> limbs) noexcept -> u128 {
     u128 value{0};
     for (usize i{0}; i < limbs.size() && i < 4; ++i) {
         value |= static_cast<u128>(limbs[i]) << (32U * i);
     }
+
     return value;
 }
 
@@ -35,11 +36,14 @@ auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::ind
         if (*small >= static_cast<i128>(INT64_MIN) && *small <= static_cast<i128>(INT64_MAX)) {
             return pool.intern(static_cast<i64>(*small), type);
         }
+
         if (*small >= 0 && *small <= static_cast<i128>(UINT64_MAX)) {
             return pool.intern(static_cast<u64>(*small), type);
         }
+
         return pool.intern(*small, type);
     }
+
     if (const auto wide{value.to_u128()}) { return pool.intern(*wide, type); }
     return pool.intern(value, type);
 }
@@ -55,6 +59,7 @@ auto analyzer::negated_to_fit(inst_id inst, const big_int& value, const gs::type
     if (std::to_underlying(next) >= mod().instruction_count() || mod().tag_of(next) != tag::neg) {
         return false;
     }
+
     return mod().data_of(next).un.operand == inst_ref(inst) &&
            gs::comptime_int_fits(-value, type, comp_.ptr_bits());
 }
@@ -68,6 +73,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
     if ((bits & (flags::INT_BIG | flags::INT_CHAR)) != 0) {
         return comp_.unsupported(u_, src, "a character or wider-than-128-bit literal");
     }
+
     const big_int value{limbs_value(limbs)};
     const bool    is_signed{(bits & flags::INT_SIGNED) != 0};
     auto&         ctx{comp_.ctx()};
@@ -75,6 +81,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
     if (!sized && width == 0) {
         return intern_int(comp_.constants(), value, builtin(gs::type_kind::COMPTIME_INT));
     }
+
     auto& type{sized ? builtin(is_signed ? gs::type_kind::ISIZE : gs::type_kind::USIZE)
                      : ctx.get_int(static_cast<u16>(width), is_signed)};
     if (!gs::comptime_int_fits(value, type, comp_.ptr_bits()) &&
@@ -82,6 +89,7 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, src, gs::error::LITERAL_OUT_OF_RANGE, messages::literal_out_of_range(ctx, type));
     }
+
     return intern_int(comp_.constants(), value, type);
 }
 
@@ -131,6 +139,7 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
     if (elem.get_kind() == gs::type_kind::DYN || elem.get_kind() == gs::type_kind::INTERFACE) {
         return comp_.unsupported(u_, src, "a pointer to a `dyn` or interface type");
     }
+
     auto&      ctx{comp_.ctx()};
     const auto mut{container_mutability(bits)};
     switch (t) {
@@ -165,6 +174,7 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
             gs::error::COMPTIME_EVALUATION_FAILED,
             "An array's length must be known at compile time; this one reads a runtime value");
     }
+
     const auto len{TRY(known)};
     auto&      usize_type{builtin(gs::type_kind::USIZE)};
     const auto coerced{TRY(coerce_to(len, usize_type, src, {.what = use_site::kind::STORE}))};
@@ -173,6 +183,7 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     if (!small || *small > static_cast<u128>(UINT32_MAX)) {
         return comp_.unsupported(u_, src, "an array length past 32 bits");
     }
+
     return static_cast<usize>(*small);
 }
 
@@ -180,6 +191,7 @@ auto analyzer::analyze_func(inst_id inst) -> result<operand> {
     if (!declaring_ || !is_comptime()) {
         return comp_.unsupported(u_, src_of(inst), "a function literal used as a value");
     }
+
     return comp_.declare_function(u_, *std::exchange(declaring_, stdx::none), inst);
 }
 

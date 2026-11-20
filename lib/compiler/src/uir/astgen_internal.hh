@@ -260,7 +260,7 @@ class astgen {
     [[nodiscard]] auto capture_slot_of(scope& boundary, std::string_view name, bool by_ref) -> u32;
     [[nodiscard]] auto in_function() const noexcept -> bool;
     [[nodiscard]] auto in_test() const noexcept -> bool;
-    // The captures `boundary` collected, as its enclosing scope sees each one
+    // The captures `boundary` collected, each resolved in its enclosing scope
     [[nodiscard]] auto outer_captures(const scope& boundary, source src) -> std::vector<ref>;
 
     // astgen_expr.cc
@@ -322,7 +322,7 @@ class astgen {
                                    const stdx::option<ast::identifier_handle>& label,
                                    bool                                        loops_only,
                                    std::string_view stmt_name) -> stdx::option<jump_target>;
-    // A body of statements in its own scope, as a block construct runs it
+    // A block construct's body of statements in its own scope
     [[nodiscard]] auto scoped_block(ast::block_handle h, scope_kind kind = scope_kind::BLOCK)
         -> std::vector<inst_id>;
     // A block's statements declared into the innermost scope, which the caller owns

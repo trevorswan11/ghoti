@@ -42,7 +42,7 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object_ref{*rec.ref_field()};
     const auto  name{rec.str_field()};
-    DISCARD(rec.u32_field());
+    rec.skip_u32();
     const auto modifier{rec.ref_field()};
     const auto args{rec.refs_field()};
     const auto pack_mask{rec.words_field()};
@@ -57,6 +57,7 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     if (!index || !comp_.constants().is_type(*index)) {
         return comp_.unsupported(u_, src, "a method call");
     }
+
     const auto member{TRY(member_of(comp_.constants().type_at(*index), name, src))};
     const auto fn{member.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a member value"); }
@@ -97,6 +98,7 @@ auto analyzer::call_function(instance&            target,
             {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
         values.emplace_back(TRY(as_runtime(coerced, src)));
     }
+
     TRY(require_runtime(src));
 
     auto& ret{*target.return_type};
@@ -129,6 +131,7 @@ auto analyzer::call_at_comptime(instance& target, gsl::span<const ref> args, con
             {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
         values.emplace_back(TRY(require_comptime(coerced, src)));
     }
+
     return comp_.call_comptime(u_, src, target, std::move(values));
 }
 

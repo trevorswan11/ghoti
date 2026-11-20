@@ -664,11 +664,10 @@ auto lower_module(const mod::module_t& mod, const astgen_context& cx) -> lowered
     return gen.run();
 }
 
-auto lower_reachable(const mod::module_t& root, const astgen_context& cx)
-    -> std::vector<lowered_module> {
+auto lower_reachable(mod::module_t& root, const astgen_context& cx) -> std::vector<lowered_module> {
     std::vector<lowered_module>                                       out;
     ankerl::unordered_dense::set<gsl::not_null<const mod::module_t*>> seen{&root};
-    std::vector<gsl::not_null<const mod::module_t*>>                  pending{&root};
+    std::vector<gsl::not_null<mod::module_t*>>                        pending{&root};
     while (!pending.empty()) {
         const auto next{pending.back()};
         pending.pop_back();

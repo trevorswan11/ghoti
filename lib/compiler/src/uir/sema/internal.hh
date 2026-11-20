@@ -15,6 +15,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/function.hh"
@@ -57,9 +58,9 @@ inline constexpr u64 UNION_PAYLOAD_FIELD{1};
 
 // One lowered module and the source it came from
 struct unit {
-    gsl::not_null<const mod::module_t*> source;
-    gsl::not_null<const module_t*>      uir;
-    u32                                 index;
+    gsl::not_null<mod::module_t*>  source; // mutable since type payloads hold their module
+    gsl::not_null<const module_t*> uir;
+    u32                            index;
 };
 
 struct instance;
@@ -133,19 +134,18 @@ struct global_const {
     ip::index                         value;
 };
 
-// A comptime value, a runtime value, a function, a place, a pending untyped merge, a global, a
-// comptime allocation, a value in a slot, an untyped literal, or an aggregate global
-using operand = stdx::variant<ip::index,
-                              gir::value,
-                              function_ref,
-                              place,
-                              merge_ref,
-                              global_ref,
-                              comptime_place,
-                              slot_value,
-                              anon_init,
-                              enum_literal,
-                              global_const>;
+// What analyzing an instruction yields
+using operand = stdx::variant<ip::index,      // a comptime value
+                              gir::value,     // a runtime value
+                              function_ref,   // a function
+                              place,          // an addressable place
+                              merge_ref,      // a pending merge of untyped branch values
+                              global_ref,     // a module-level `let mut`
+                              comptime_place, // a place in a comptime allocation
+                              slot_value,     // a value held in a slot
+                              anon_init,      // an untyped `.{ ... }` literal
+                              enum_literal,   // an untyped `.name` literal
+                              global_const>;  // a module-level aggregate `const`
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -399,7 +399,9 @@ class compilation {
     options                                                           opts_;
     std::vector<unit>                                                 units_;
     std::vector<std::vector<decl_state>>                              decls_;
-    std::vector<stdx::box<instance>>                                  instances_;
+    // Instances and nominals are referenced by address, so the arena keeps them in place
+    ghoti::arena                                                      arena_;
+    std::vector<gsl::not_null<instance*>>                             instances_;
     std::vector<gsl::not_null<instance*>>                             queue_;
     gir::module_t                                                     gir_;
     gs::diagnostics                                                   diagnostics_;
@@ -411,7 +413,7 @@ class compilation {
     eval_limits                                                       limits_;
     stdx::option<runtime_site>                                        runtime_site_;
     u32                                                               next_frame_{0};
-    std::vector<stdx::box<nominal>>                                   nominals_;
+    std::vector<gsl::not_null<nominal*>>                              nominals_;
     ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>  nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     stdx::option<lowered> prelude_;
@@ -718,13 +720,13 @@ class analyzer {
     [[nodiscard]] auto
     field_default(gs::type& type, usize index, gsl::span<const inst_id> body, const source& src)
         -> result<operand>;
-    // Builds a folded aggregate at runtime, as the old emitter materializes a constant
+    // Builds a folded aggregate constant into runtime storage
     [[nodiscard]] auto materialize(ip::index index, const source& src) -> result<gir::value>;
 
     // Runtime safety (safety.cc)
     [[nodiscard]] auto usize_constant(u64 value) -> gir::value;
     [[nodiscard]] auto string_slice(std::string_view text, gs::type& slice_type) -> gir::value;
-    // A string constant viewed as a slice of `slice_type`, as the old emitter builds it
+    // A string constant viewed as a slice of `slice_type`, copied when the slice is mutable
     [[nodiscard]] auto string_as_slice(std::string_view text, gs::type& slice_type) -> gir::value;
     [[nodiscard]] auto emit_panic(std::string_view message, const source& src) -> result<void>;
     // Continues where `ok` holds, panicking with `message` where it doesn't
@@ -766,7 +768,7 @@ class analyzer {
     [[nodiscard]] auto domain_of(const gs::type& t) const -> gir::semantics::int_domain;
     // Whether `gir::semantics` folds `t`'s values, which it does up to 128 bits
     [[nodiscard]] auto folds_exactly(const gs::type& t) const -> bool;
-    // Whether the runtime instruction checks `op` on `t`, as the old emitter decides it
+    // Whether the runtime instruction for `op` on `t` checks for overflow
     [[nodiscard]] auto checks_overflow(gir::semantics::int_op op, const gs::type& t) const -> bool;
 
     // Coercion (coerce.cc)
@@ -778,8 +780,7 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto peer_type(gsl::span<const operand> ops, const source& src)
         -> result<gsl::not_null<gs::type*>>;
-    // The array of type `from` at `address` viewed as a slice of its elements, as the old emitter
-    // decays it
+    // The array of type `from` at `address` viewed as a slice of its elements
     [[nodiscard]] auto array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
         -> result<stdx::option<operand>>;
     [[nodiscard]] auto as_runtime(const operand& op, const source& src) -> result<gir::value>;
@@ -834,7 +835,7 @@ class analyzer {
     [[nodiscard]] auto known_bool(const operand& op, const source& src) -> result<bool>;
     // The result slot of a runtime `and` / `or`, holding the value its left side decides alone
     [[nodiscard]] auto bool_slot(inst_id inst, bool is_and) -> gir::value;
-    // Whether a branch body ends yielding nothing, as a statement `if`'s arms do
+    // Whether a branch body ends yielding nothing, like a statement `if`'s arms
     [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
     // A runtime condition's value when running it again at compile time knows it
     [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
@@ -849,7 +850,7 @@ class analyzer {
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
-    // A call of `target`. `through_member` calls a type's function by its name, as `T.f(x)` does
+    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     [[nodiscard]] auto call_function(instance&            target,
                                      gsl::span<const ref> args,
                                      const source&        src,
@@ -882,7 +883,7 @@ class analyzer {
     [[nodiscard]] auto reevaluate(ref r, const source& src) -> result<operand>;
 
     // Declarations (decls.cc)
-    // Whether the declaration's value is a type it declares, as `const P = struct { ... }` is
+    // Whether the declaration's value is a type it declares: `const P = struct { ... }`
     [[nodiscard]] auto declares_type(const decl& d) const -> bool;
     [[nodiscard]] auto analyze_global(decl_id                 decl,
                                       const operand&          value,
@@ -933,7 +934,7 @@ class analyzer {
     stdx::option<jump> jump_;
 };
 
-// Messages shared with the old pipeline's checks (messages.cc)
+// Diagnostic messages shared across checks (messages.cc)
 namespace messages {
 
 constexpr std::string_view MUTABLE_TYPE_BINDING{

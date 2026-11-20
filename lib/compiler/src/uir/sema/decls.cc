@@ -52,6 +52,7 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
                       fmt::format("'{}' is used during its own resolution", u.uir->string(d.name)));
     case decl_status::UNRESOLVED: break;
     }
+
     if (is_deferred_error(u, d)) {
         decls_[u.index][std::to_underlying(decl)].status = decl_status::FAILED;
         return report(u, use, gs::error::COMPILE_ERROR_REACHED, deferred_error_message(u, d));
@@ -65,6 +66,7 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
         state.status = decl_status::FAILED;
         return stdx::err{value.error()};
     }
+
     state.status = decl_status::RESOLVED;
     state.value.emplace(*value);
 
@@ -74,6 +76,7 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
         name_nominal(*type, u.uir->string(d.name));
         DISCARD(require_fields(u, use, *type));
     }
+
     return *value;
 }
 
@@ -90,6 +93,7 @@ auto compilation::declared_type(const unit&                   u,
         as_inst(u.uir->data_of(insts.back()).un.operand) != n->inst) {
         return stdx::none;
     }
+
     return type;
 }
 
@@ -124,6 +128,7 @@ auto compilation::symbol_for(const unit& u, decl_id decl, const source& src)
     if (!fresh && it->second != std::pair{u.index, decl}) {
         return unsupported(u, src, "two declarations with one name in different scopes");
     }
+
     return name;
 }
 
@@ -132,11 +137,13 @@ auto holds_types(const gs::type& type) -> bool {
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         return holds_types(arr->underlying);
     }
+
     if (const auto st{type.get_data().as_opt<gs::types::struct_t>()}) {
         for (const auto field : st->fields) {
             if (field && holds_types(*field)) { return true; }
         }
     }
+
     return false;
 }
 
@@ -155,7 +162,7 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     record_reader rec{m, m.data_of(func).pl.extra};
     const auto    params{rec.body_field()};
     const auto    ret{rec.body_field()};
-    DISCARD(rec.body_field());
+    rec.skip_body();
     const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
     const auto fn_flags{rec.u32_field()};
     const auto attrs{rec.body_field()};
@@ -164,9 +171,11 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     if ((fn_flags & flags::BODYLESS) != 0) {
         return unsupported(u, src, "a function without a body");
     }
+
     if ((fn_flags & ~flags::EXPLICIT_CONV) != 0) {
         return unsupported(u, src, "a variadic, extern, erased or `impl` function");
     }
+
     if (!attrs.empty()) { return unsupported(u, src, "function attributes"); }
     if (bound_count != 0) { return unsupported(u, src, "`impl` parameter bounds"); }
 
@@ -174,7 +183,7 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     std::vector<gsl::not_null<gs::type*>> param_types;
     for (const auto param : params) {
         record_reader p{m, m.data_of(param).pl.extra};
-        DISCARD(p.str_field());
+        p.skip_str();
         const auto  type_body{p.body_field()};
         const auto  default_body{p.body_field()};
         const auto  param_flags{p.u32_field()};
@@ -184,13 +193,16 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
         if ((param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK | flags::PARAM_SELF)) != 0) {
             return unsupported(u, param_src, "a comptime, pack or self parameter");
         }
+
         if (modifier != 0) { return unsupported(u, param_src, "a parameter modifier"); }
         auto& type{*TRY(sig.eval_type(type_body, param_src))};
         if (!gs::is_value_type(type.get_kind()) || gs::is_comptime_numeric(type.get_kind())) {
             return unsupported(u, param_src, "a parameter of a comptime-only or generic type");
         }
+
         param_types.emplace_back(&type);
     }
+
     auto&      return_type{*TRY(sig.eval_type(ret, src))};
     const bool comptime_only{is_comptime_only(return_type)};
     const bool no_value{return_type.get_kind() == gs::type_kind::VOID_ ||
@@ -206,7 +218,7 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
 
     auto  symbol{TRY(symbol_for(u, decl, src))};
-    auto& fn{*instances_.emplace_back(stdx::make_box<instance>(instance{
+    auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
         .owner         = &units_[u.index],
         .decl          = decl,
         .func          = func,
@@ -233,9 +245,11 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         d.extern_target.len != 0 || d.link_name.len != 0) {
         return comp_.unsupported(u_, src, "an extern, export, weak or comptime declaration");
     }
+
     if (!mod().body(d.attrs_body).empty()) {
         return comp_.unsupported(u_, src, "declaration attributes");
     }
+
     if (!d.value_body) { return comp_.unsupported(u_, src, "a declaration without a value"); }
 
     stdx::option<gs::type&> declared;
@@ -245,13 +259,16 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         return comp_.report_runtime_need(
             u_, src, gs::error::COMPTIME_EVALUATION_FAILED, std::string{GLOBAL_CONSTANT});
     }
+
     if (!value) { return stdx::err{value.error()}; }
     if (value->is<function_ref>()) {
         if (declared) {
             return comp_.unsupported(u_, src, "a function declaration with an explicit type");
         }
+
         return *value;
     }
+
     return analyze_global(decl, *value, declared, src);
 }
 
@@ -280,16 +297,19 @@ auto analyzer::analyze_global(decl_id                 decl,
             if (!declared) {
                 return comp_.unsupported(u_, src, "an untyped literal as a global's value");
             }
+
             return analyze_global(
                 decl,
                 TRY(coerce_to(value, *declared, src, {.what = use_site::kind::STORE})),
                 declared,
                 src);
         }
+
         return comp_.unsupported(u_, src, "a global of this kind of value");
     }
 
     auto& pool{comp_.constants()};
+
     // An untyped type alias is listed by name, with no storage of its own
     if (pool.is_type(*constant_index)) {
         if (d.has(decl_flags::LET) || d.has(decl_flags::MUT)) {
@@ -298,6 +318,7 @@ auto analyzer::analyze_global(decl_id                 decl,
                                 gs::error::MUTABLE_TYPE_BINDING,
                                 std::string{messages::MUTABLE_TYPE_BINDING});
         }
+
         if (declared && declared->get_kind() != gs::type_kind::TYPE) {
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
@@ -308,6 +329,7 @@ auto analyzer::analyze_global(decl_id                 decl,
             comp_.gir().add_type(TRY(comp_.symbol_for(u_, decl, src)),
                                  pool.type_at(*constant_index));
         }
+
         return value;
     }
 
@@ -319,8 +341,10 @@ auto analyzer::analyze_global(decl_id                 decl,
     auto&       type{type_of(stored)};
     const bool  is_mutable{d.has(decl_flags::MUT)};
     const auto& data{pool.value_at(index).data};
+
     // An aggregate has no operand form, so the global holds it apart
     const bool is_aggregate{data.is<ip::aggregate_value>() || data.is<ip::union_value>()};
+
     // One holding types only exists at compile time, so it has no storage
     if (is_aggregate && !is_mutable && holds_types(type)) { return stored; }
     auto  symbol_name{TRY(comp_.symbol_for(u_, decl, src))};

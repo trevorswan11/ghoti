@@ -122,6 +122,7 @@ auto analyzer::check_not_null(const gir::value& ptr, const source& src) -> resul
         ptr.type->get_kind() != gs::type_kind::POINTER) {
         return {};
     }
+
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
     auto&      null_type{builtin(gs::type_kind::NULLPTR)};
     const auto is_null{builder_.emit_binary(

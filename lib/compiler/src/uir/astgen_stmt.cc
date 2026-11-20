@@ -65,7 +65,7 @@ auto astgen::stmt(ast::stmt_handle h) -> bool {
                "Tests must be at the topmost level of a file");
         return false;
     case node_kind::IMPL_STATEMENT: {
-        // An impl is a module-level item wherever it's written; the old pipeline accepts it here
+        // An impl is a module-level item wherever it's written
         decl_info  d{.kind = decl_kind::IMPL, .node = id};
         const auto index{out_.add_decl(d)};
         out_.root_namespace_mut().decls.emplace_back(index);

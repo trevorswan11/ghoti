@@ -434,7 +434,16 @@ class record_reader {
     [[nodiscard]] auto count() noexcept -> u32 { return word(); }
     [[nodiscard]] auto position() const noexcept -> u32 { return at_; }
 
+    // Reads past a field the caller doesn't need, since fields are only reachable in order
+    auto skip_ref() noexcept -> record_reader& { return skip(ref_field()); }
+    auto skip_u32() noexcept -> record_reader& { return skip(u32_field()); }
+    auto skip_index() noexcept -> record_reader& { return skip(index_field()); }
+    auto skip_str() noexcept -> record_reader& { return skip(str_field()); }
+    auto skip_body() noexcept -> record_reader& { return skip(body_field()); }
+    auto skip_refs() noexcept -> record_reader& { return skip(refs_field()); }
+
   private:
+    template <typename T> auto skip(const T&) noexcept -> record_reader& { return *this; }
     [[nodiscard]] auto word() noexcept -> u32 { return mod_.extra()[at_++]; }
 
   private:

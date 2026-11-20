@@ -42,10 +42,12 @@ auto analyzer::condition(const operand& op, const source& src) -> result<gir::va
                 bool_type),
             bool_type};
     }
+
     if (type.get_kind() != gs::type_kind::BOOL) {
         return comp_.report(
             u_, src, gs::error::TYPE_MISMATCH, messages::condition_not_bool(comp_.ctx(), type));
     }
+
     return as_runtime(op, src);
 }
 
@@ -54,6 +56,7 @@ auto analyzer::target_of(ref r) -> target& {
     for (auto& t : targets_ | std::views::reverse) {
         if (t.inst == inst) { return t; }
     }
+
     UNREACHABLE("AstGen only breaks to an enclosing block or loop");
 }
 
@@ -80,6 +83,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     bool all_untyped_literals{true};
     for (const auto& arrival : arrivals) {
         values.emplace_back(arrival.value);
+
         // An untyped literal has no type of its own to check here
         const bool literal{is_untyped_literal(arrival.value)};
         all_untyped_literals = all_untyped_literals && literal;
@@ -88,17 +92,20 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
             all_untyped_constants = false;
             continue;
         }
+
         auto& type{type_of(arrival.value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
         all_void              = all_void && type.get_kind() == gs::type_kind::VOID_;
         all_untyped_constants = all_untyped_constants && comptime_value(arrival.value) &&
                                 gs::is_comptime_numeric(type.get_kind());
     }
+
     if (all_void) { return void_value(); }
     if (!all_untyped_literals &&
         std::ranges::any_of(values, [&](const operand& v) { return is_untyped_literal(v); })) {
         return comp_.unsupported(u_, src, "a merge of untyped literals and typed values");
     }
+
     // Every path carrying the same constant makes the merge that constant
     if (const auto first{comptime_value(arrivals.front().value)};
         first && std::ranges::all_of(arrivals, [&](const incoming& a) {
@@ -106,6 +113,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
         })) {
         return arrivals.front().value;
     }
+
     // The arms take a type where the merge is used
     if (all_untyped_constants || all_untyped_literals) {
         merges_.emplace_back<pending_merge>(
@@ -130,6 +138,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
             return stdx::err{value.error()};
         }
     }
+
     switch_to(merge);
     return gir::value{builder_.emit_load(slot, slot_type), slot_type};
 }
@@ -137,7 +146,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
 auto analyzer::analyze_block(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
-    DISCARD(rec.str_field());
+    rec.skip_str();
     const auto body{rec.body_field()};
     if (is_comptime()) { return run_block(inst, body); }
 
@@ -185,6 +194,7 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
         known = TRY(folded_condition(cond_ref, cond_src.value_or(src)));
         if (known) { c = constant(comp_.constants().intern(*known, type_of(cond)), type_of(cond)); }
     }
+
     builder_.emit_cond_goto(c, then_seg, else_seg);
     std::vector<incoming> arrivals;
     const auto            branch{runtime_branch()};
@@ -198,16 +208,18 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
                 arrivals.emplace_back<incoming>(
                     {.seg = builder_.get_segment()->get_id(), .value = *out.yielded, .src = src});
             }
+
             emit_goto(merge);
         }
     }
+
     return finish_merge(arrivals, merge, src);
 }
 
 auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
-    DISCARD(rec.str_field());
+    rec.skip_str();
     const auto loop_flags{rec.u32_field()};
     const auto cond_body{rec.body_field()};
     const auto body{rec.body_field()};
@@ -216,6 +228,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     if ((loop_flags & (flags::UNROLL | flags::UNWRAPS)) != 0) {
         return comp_.unsupported(u_, src, "an unrolled or unwrapping loop");
     }
+
     if (is_comptime()) { return run_loop(inst); }
     const auto branch{runtime_branch()};
 
@@ -240,6 +253,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
         if (!out.yielded || terminated()) {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
         }
+
         const auto c{TRY(condition(*out.yielded, src))};
         normal_exit = builder_.get_segment()->get_id();
         builder_.emit_cond_goto(c, body_seg, else_seg.value_or(exit));
@@ -257,6 +271,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
         DISCARD(TRY(analyze_body(cont_body)));
         if (!terminated()) { emit_goto(cond_seg.value_or(body_seg)); }
     }
+
     if (has_cond && do_while) { TRY(analyze_cond()); }
 
     stdx::option<incoming> normal;
@@ -270,6 +285,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     } else if (normal_exit) {
         normal.emplace(*normal_exit, void_value(), src);
     }
+
     auto arrivals{targets_.back().arrivals};
     if (normal) { arrivals.emplace_back<incoming>(std::move(*normal)); }
     return finish_merge(arrivals, exit, src);
@@ -283,6 +299,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
         jump_.emplace(jump::kind::BREAK, *as_inst(d.bin.lhs), value);
         return void_value();
     }
+
     arrive(target_of(d.bin.lhs), value, src);
     return void_value();
 }
@@ -293,6 +310,7 @@ auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
         jump_.emplace(jump::kind::REPEAT, *as_inst(operand_ref), stdx::none);
         return void_value();
     }
+
     const auto& t{target_of(operand_ref)};
     emit_goto(*t.repeat);
     return void_value();
@@ -309,11 +327,13 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
         jump_.emplace(jump::kind::RETURN, stdx::none, returned);
         return void_value();
     }
+
     if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
         builder_.emit_return(TRY(as_runtime(returned, src)));
     }
+
     return void_value();
 }
 
@@ -346,6 +366,7 @@ auto analyzer::known_bool(const operand& op, const source& src) -> result<bool> 
         return comp_.report(
             u_, src, gs::error::TYPE_MISMATCH, messages::condition_not_bool(comp_.ctx(), type));
     }
+
     const auto index{TRY(require_comptime(op, src))};
     return *comp_.constants().value_at(index).data.as_opt<bool>();
 }
@@ -362,7 +383,7 @@ auto analyzer::run_block(inst_id inst, gsl::span<const inst_id> body) -> result<
 auto analyzer::run_loop(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
-    DISCARD(rec.str_field());
+    rec.skip_str();
     const auto loop_flags{rec.u32_field()};
     const auto cond_body{rec.body_field()};
     const auto body{rec.body_field()};
@@ -378,6 +399,7 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
         if (jump_ || !out.yielded) {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
         }
+
         return known_bool(*out.yielded, src);
     }};
 
@@ -392,6 +414,7 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
                                             "raise it with `@setEvalUnrollLimit`",
                                             limit));
         }
+
         for (const auto part : {body, cont_body}) {
             DISCARD(TRY(analyze_body(part)));
             if (owns(jump::kind::REPEAT)) {
@@ -405,12 +428,13 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
             }
         }
     }
+
     return run_block(inst, else_body);
 }
 
 auto analyzer::analyze_block_comptime(inst_id inst) -> result<operand> {
     auto rec{record(inst)};
-    DISCARD(rec.str_field());
+    rec.skip_str();
     const auto body{rec.body_field()};
     if (is_comptime()) { return run_block(inst, body); }
 
@@ -422,6 +446,7 @@ auto analyzer::analyze_block_comptime(inst_id inst) -> result<operand> {
         jump_.reset();
         return comp_.unsupported(u_, src_of(inst), "a jump out of a comptime block");
     }
+
     return at_comptime_boundary(std::move(value));
 }
 
@@ -444,6 +469,7 @@ auto analyzer::analyze_condbr_comptime(inst_id inst) -> result<operand> {
             gs::error::COMPTIME_EVALUATION_FAILED,
             "Comptime if condition could not be evaluated at compile time");
     }
+
     // Only the arm the condition picks is analyzed
     if (!cond) { return stdx::err{cond.error()}; }
     const bool taken{TRY(known_bool(*cond, cond_src.value_or(src)))};
@@ -467,9 +493,11 @@ auto analyzer::analyze_unreachable(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, src, gs::error::UNREACHABLE_CODE_REACHED, "reached unreachable code");
     }
+
     if (comp_.ctx().runtime_safety) {
         return comp_.unsupported(u_, src, "a runtime `unreachable` with safety checks");
     }
+
     builder_.emit_unreachable();
     return comp_.constants().intern(ip::undefined_value{}, builtin(gs::type_kind::NORETURN));
 }

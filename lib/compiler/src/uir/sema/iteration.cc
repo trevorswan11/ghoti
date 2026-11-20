@@ -80,14 +80,17 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     if (const auto r{base.pointee->get_data().as_opt<gs::types::reference>()}) {
         base = place{.address = load(base), .pointee = &r->underlying, .is_mutable = false};
     }
+
     auto&      source_type{*base.pointee};
     const auto elem{[&] -> stdx::option<gs::type&> {
         if (const auto arr{source_type.get_data().as_opt<gs::types::array>()}) {
             return arr->underlying;
         }
+
         if (const auto s{source_type.get_data().as_opt<gs::types::slice>()}) {
             return s->underlying;
         }
+
         return stdx::none;
     }()};
     if (!elem) { return comp_.unsupported(u_, src, "slicing this type"); }
@@ -118,6 +121,7 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
             builder_.emit_binary(instruction_kind::ADD, hi, usize_constant(1), usize_type),
             usize_type};
     }
+
     if (ctx.runtime_safety) {
         const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
         const auto hi_le_len{builder_.emit_binary(instruction_kind::LE, hi, length, bool_type)};
@@ -159,6 +163,7 @@ auto analyzer::known_range(const range_operands& r, bool inclusive) -> stdx::opt
 
 auto analyzer::counter_type(const range_operands& r) -> gs::type& {
     auto& usize_type{builtin(gs::type_kind::USIZE)};
+
     // A bare literal bound counts in the other bound's type
     gs::type* elem{r.lo ? &type_of(*r.lo) : &usize_type};
     if (r.lo && r.hi && r.lo_is_literal && gs::is_integer(type_of(*r.hi).get_kind())) {
@@ -176,6 +181,7 @@ auto analyzer::counter_type(const range_operands& r) -> gs::type& {
         elem = &builtin(negative(r.lo) || negative(r.hi) ? gs::type_kind::ISIZE
                                                          : gs::type_kind::USIZE);
     }
+
     return comp_.ctx().default_concrete(*elem);
 }
 
@@ -210,6 +216,7 @@ auto analyzer::run_for(inst_id                                   inst,
                 const auto lo_inst{as_inst(*bounds.lo)};
                 r.lo_is_literal = lo_inst && mod().tag_of(*lo_inst) == tag::int_value;
             }
+
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
             auto&         elem{counter_type(r)};
             const auto    start{r.lo ? TRY(known_int(*r.lo)) : big_int{i128{0}}};
@@ -222,9 +229,11 @@ auto analyzer::run_for(inst_id                                   inst,
                 if (bounds.inclusive) { span = span + big_int{i128{1}}; }
                 bound_by(static_cast<usize>(*span.to_u128()));
             }
+
             sources.emplace_back(std::move(values));
             continue;
         }
+
         const auto  given{TRY(resolve_value(iterable_ref, src))};
         const auto  container{TRY(require_comptime(given, src))};
         const auto& value{pool.value_at(container)};
@@ -237,9 +246,11 @@ auto analyzer::run_for(inst_id                                   inst,
             values.elements.emplace_back(
                 element.value_or(pool.intern(ip::undefined_value{}, arr->underlying)));
         }
+
         bound_by(values.elements.size());
         sources.emplace_back(std::move(values));
     }
+
     if (!length) { return comp_.unsupported(u_, src, "a comptime `for` with no end"); }
 
     const auto owns{
@@ -254,6 +265,7 @@ auto analyzer::run_for(inst_id                                   inst,
                                             "raise it with `@setEvalUnrollLimit`",
                                             limit));
         }
+
         for (usize s{0}; s < sources.size(); ++s) {
             if (!binds[s]) { continue; }
             const auto& source{sources[s]};
@@ -265,6 +277,7 @@ auto analyzer::run_for(inst_id                                   inst,
                 values_.insert_or_assign(*binds[s], source.elements[i]);
             }
         }
+
         DISCARD(TRY(analyze_body(body)));
         if (owns(jump::kind::REPEAT)) {
             jump_.reset();
@@ -276,13 +289,14 @@ auto analyzer::run_for(inst_id                                   inst,
             return void_value();
         }
     }
+
     return run_block(inst, else_body);
 }
 
 auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
-    DISCARD(rec.str_field());
+    rec.skip_str();
     const auto loop_flags{rec.u32_field()};
     const auto iterables{rec.refs_field()};
     const auto body{rec.body_field()};
@@ -294,14 +308,17 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     for (const auto i : body) {
         if (mod().tag_of(i) != tag::bind) { continue; }
         record_reader b{record(i)};
+
         // `|_|` binds nothing
         if (b.str_field() == "_") { continue; }
         const auto slot{b.u32_field()};
         if (b.u32_field() != 0) {
             return comp_.unsupported(u_, src, "a `for` capture by reference");
         }
+
         if (slot < binds.size()) { binds[slot] = i; }
     }
+
     if (is_comptime()) { return run_for(inst, iterables, binds, body, else_body); }
     const auto branch{runtime_branch()};
 
@@ -309,6 +326,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     auto&                 bool_type{builtin(gs::type_kind::BOOL)};
     auto&                 pool{comp_.constants()};
     std::vector<iterable> infos;
+
     // Open ranges' known starts, and the length of an array they run alongside
     std::vector<std::pair<usize, big_int>> open_starts;
     stdx::option<usize>                    array_len;
@@ -322,6 +340,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                 const auto lo_inst{as_inst(*bounds.lo)};
                 r.lo_is_literal = lo_inst && mod().tag_of(*lo_inst) == tag::int_value;
             }
+
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
             auto&      elem{counter_type(r)};
             const auto convert{[&](const operand& bound) -> result<gir::value> {
@@ -339,11 +358,13 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                                        : stdx::option<big_int>{big_int{i128{0}}}};
                 if (lo) { open_starts.emplace_back(infos.size(), *lo); }
             }
+
             stdx::option<gir::value> descending;
             if (r.hi) {
                 descending.emplace(
                     builder_.emit_binary(instruction_kind::GT, start, end, bool_type), bool_type);
             }
+
             infos.emplace_back<iterable>({
                 .is_range   = true,
                 .inclusive  = bounds.inclusive,
@@ -434,6 +455,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                                  bool_type}
                     : gir::value{within, bool_type};
     }
+
     const auto done{else_seg.value_or(exit)};
     builder_.emit_cond_goto(
         cond.value_or(constant(pool.intern(true, bool_type), bool_type)), body_seg, done);
@@ -455,6 +477,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                                                 .range      = info.values});
             continue;
         }
+
         const auto index{builder_.emit_load(info.counter, usize_type)};
         gir::value base{info.container};
         if (info.is_slice) {
@@ -468,11 +491,13 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             base =
                 gir::value{builder_.emit_load(gir::value{ptr_slot, ptr_type}, ptr_type), ptr_type};
         }
+
         const auto at{
             builder_.emit_get_element_ptr(base, {gir::value{index, usize_type}}, read_only)};
         values_.insert_or_assign(
             *binds[i], slot_value{.address = gir::value{at, read_only}, .type = &read_only});
     }
+
     DISCARD(TRY(analyze_body(body)));
     if (!terminated()) { emit_goto(step_seg); }
 
@@ -487,8 +512,10 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             builder_.emit_store(info.counter, gir::value{next, usize_type});
             continue;
         }
+
         auto&      elem{*info.elem};
         const auto current{builder_.emit_load(info.counter, elem)};
+
         // `lo..=hi` ends on `hi` itself, which may be its type's largest value
         if (info.inclusive) {
             const auto at_end{builder_.emit_binary(
@@ -497,6 +524,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             builder_.emit_cond_goto(gir::value{at_end, bool_type}, done, step_on);
             switch_to(step_on);
         }
+
         const auto one{constant(pool.intern(i64{1}, elem), elem)};
         const auto advance{[&](instruction_kind kind) {
             const auto next{builder_.emit_binary(kind, gir::value{current, elem}, one, elem)};
@@ -506,6 +534,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             advance(instruction_kind::ADD);
             continue;
         }
+
         const auto down{new_segment()};
         const auto up{new_segment()};
         const auto stepped{new_segment()};
@@ -518,6 +547,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
         emit_goto(stepped);
         switch_to(stepped);
     }
+
     if (!terminated()) { emit_goto(cond_seg); }
 
     stdx::option<incoming> normal;
@@ -529,12 +559,14 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             emit_goto(exit);
         }
     }
+
     auto arrivals{targets_.back().arrivals};
     if (normal) { arrivals.emplace_back<incoming>(std::move(*normal)); }
     if (arrivals.empty() && !else_seg) {
         switch_to(exit);
         return void_value();
     }
+
     return finish_merge(arrivals, exit, src);
 }
 
