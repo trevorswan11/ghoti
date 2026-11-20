@@ -25,13 +25,19 @@ constexpr std::string_view ASSIGN_NOT_FOLDABLE{
 constexpr std::string_view STORE_UNDER_RUNTIME{
     "`comptime let mut` assignment depends on a runtime condition"};
 
+// A binding's written type, none when it is `auto` and takes its initializer's
+[[nodiscard]] auto written_type_of(stdx::option<ref> type) -> stdx::option<ref> {
+    if (type && as_well_known(*type) == well_known::auto_type) { return stdx::none; }
+    return type;
+}
+
 } // namespace
 
 auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     rec.skip_str();
-    const auto              type_ref{rec.ref_field()};
+    const auto              type_ref{written_type_of(rec.ref_field())};
     stdx::option<gs::type&> type;
     if (type_ref) { type.emplace(*TRY(resolve_type(*type_ref, src))); }
 
@@ -104,7 +110,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     rec.skip_str();
-    const auto type_ref{rec.ref_field()};
+    const auto type_ref{written_type_of(rec.ref_field())};
     const auto init{TRY(resolve_value(*rec.ref_field(), src))};
     if (init.is<function_ref>()) {
         return comp_.unsupported(u_, src, "a function bound to a `let`");
@@ -146,7 +152,7 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     const auto  name{rec.str_field()};
-    const auto  type_ref{rec.ref_field()};
+    const auto  type_ref{written_type_of(rec.ref_field())};
     const auto  body{rec.body_field()};
     const auto& init_src{body.empty() ? src : src_of(body.back())};
 
@@ -163,7 +169,22 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     if (jump_) { return comp_.unsupported(u_, src, "a jump out of a `const` initializer"); }
     if (!out.yielded) { return comp_.unsupported(u_, src, "a `const` body that doesn't yield"); }
     if (out.yielded->is<function_ref>()) { return comp_.unsupported(u_, src, "a local function"); }
-    const auto known{comptime_value(*out.yielded)};
+
+    // An untyped literal takes the declared type before it can be known
+    auto yielded{*out.yielded};
+    if (type_ref && is_untyped_literal(yielded)) {
+        auto&      type{*TRY(resolve_type(*type_ref, src))};
+        const auto scope{comptime_scope()};
+        auto       typed{coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE})};
+        if (!typed && typed.error() == stop::RUNTIME) {
+            return comp_.report_runtime_need(
+                u_, init_src, gs::error::COMPTIME_MUT_NOT_FOLDABLE, std::string{CONST_CONSTANT});
+        }
+
+        yielded = TRY(std::move(typed));
+    }
+
+    const auto known{comptime_value(yielded)};
     if (!known) {
         return comp_.report(
             u_, init_src, gs::error::COMPTIME_MUT_NOT_FOLDABLE, std::string{CONST_CONSTANT});
@@ -180,9 +201,9 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         }
     }
 
-    if (!type_ref) { return *out.yielded; }
+    if (!type_ref) { return yielded; }
     auto& type{*TRY(resolve_type(*type_ref, src))};
-    return coerce_to(*out.yielded, type, init_src, {.what = use_site::kind::STORE});
+    return coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE});
 }
 
 auto analyzer::analyze_store(inst_id inst) -> result<operand> {
@@ -297,7 +318,10 @@ auto analyzer::analyze_decl_val(inst_id inst, bool as_place) -> result<operand> 
         return comp_.unsupported(u_, src, "a use of an import or other non-value declaration");
     }
 
-    const auto value{TRY(comp_.analyze_decl(u_, decl, src))};
+    // A sibling member of a ctor instance's type is that instance's
+    const bool in_scope{scope_ && d.owner == scope_->inst};
+    const auto value{TRY(in_scope ? comp_.analyze_member(*scope_, decl, src)
+                                  : comp_.analyze_decl(u_, decl, src))};
     const auto global{value.as_opt<global_ref>()};
     if (!global) {
         if (as_place) {
@@ -307,7 +331,9 @@ auto analyzer::analyze_decl_val(inst_id inst, bool as_place) -> result<operand> 
         return value;
     }
 
-    // Reading a `let mut` at compile time is an error, or only reads its type for `@TypeOf`
+    // A runtime body folding a condition keeps a `let mut` global's read at runtime, while a
+    // compile-time evaluation may only read its type, which `@TypeOf` would need
+    if (is_comptime() && gir_fn_ && !as_place) { return comp_.needs_runtime(u_, src); }
     if (is_comptime()) {
         return comp_.unsupported(u_, src, "a compile-time use of a `let mut` global");
     }

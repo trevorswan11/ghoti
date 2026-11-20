@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -66,6 +67,102 @@ struct module_dump {
     }
 
     return out;
+}
+
+[[nodiscard]] constexpr auto is_digit(char c) noexcept -> bool { return c >= '0' && c <= '9'; }
+
+[[nodiscard]] constexpr auto is_mangle_char(char c) noexcept -> bool {
+    return is_digit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$';
+}
+
+// The length of a nominal type's discriminator in a monomorph's symbol starting at `at`, which
+// each pipeline numbers its own way: `struct12`, or a ctor instance's `struct$Box__u8_65`
+[[nodiscard]] auto discriminator_length(std::string_view text, usize at) -> usize {
+    if (at >= text.size()) { return 0; }
+    usize end{at};
+    if (text[at] == '$') {
+        while (end < text.size() && is_mangle_char(text[end])) { ++end; }
+        return end - at;
+    }
+
+    while (end < text.size() && is_digit(text[end])) { ++end; }
+    return end - at;
+}
+
+// A dump with every nominal type in a monomorph's symbol spelled `struct#`, every
+// parameterized impl's method prefix spelled `pimpl#`, and every vtable `__vtable.#`
+[[nodiscard]] auto erase_nominal_discriminators(std::string_view dump) -> std::string {
+    constexpr std::array KINDS{
+        std::string_view{"_struct"}, std::string_view{"_union"}, std::string_view{"_enum"}};
+    std::string out;
+    out.reserve(dump.size());
+    constexpr std::string_view IMPL_PREFIX{"pimpl"};
+    constexpr std::string_view VTABLE_PREFIX{"__vtable."};
+    for (usize i{0}; i < dump.size();) {
+        // A vtable is numbered by each pipeline's own count
+        if (dump.substr(i).starts_with(VTABLE_PREFIX)) {
+            usize end{i + VTABLE_PREFIX.size()};
+            while (end < dump.size() && is_digit(dump[end])) { ++end; }
+            if (end > i + VTABLE_PREFIX.size()) {
+                out += VTABLE_PREFIX;
+                out += '#';
+                i = end;
+                continue;
+            }
+        }
+
+        // A parameterized impl's methods carry the number of the impl they come from
+        if (dump.substr(i).starts_with(IMPL_PREFIX)) {
+            usize end{i + IMPL_PREFIX.size()};
+            while (end < dump.size() && is_digit(dump[end])) { ++end; }
+            if (end > i + IMPL_PREFIX.size() && end < dump.size() && dump[end] == '#') {
+                out += IMPL_PREFIX;
+                i = end;
+                continue;
+            }
+        }
+
+        bool erased{false};
+        for (const auto kind : KINDS) {
+            if (!dump.substr(i).starts_with(kind)) { continue; }
+            const auto length{discriminator_length(dump, i + kind.size())};
+            if (length == 0) { continue; }
+            out += kind;
+            out += '#';
+            i += kind.size() + length;
+            erased = true;
+            break;
+        }
+
+        if (!erased) { out += dump[i++]; }
+    }
+
+    return out;
+}
+
+// A field or element address with no mutability in its type, which only Sema reads
+[[nodiscard]] auto without_address_mutability(std::string_view inst) -> std::string {
+    const auto at{inst.find("get_element_ptr ")};
+    if (at == std::string_view::npos) { return std::string{inst}; }
+    const auto type_start{at + std::string_view{"get_element_ptr "}.size()};
+    // The type ends where the base operand starts: a temporary or a parameter
+    const auto temp{inst.find(" %", type_start)};
+    const auto param{inst.find(" param.", type_start)};
+    const auto type_end{std::min(temp, param)};
+    if (type_end == std::string_view::npos) { return std::string{inst}; }
+
+    std::string type{stdx::string::substr(inst, type_start, type_end - type_start)};
+    for (const auto qualifier : {std::string_view{"mut? "}, std::string_view{"mut "}}) {
+        for (auto found{type.find(qualifier)}; found != std::string::npos;
+             found = type.find(qualifier)) {
+            type.erase(found, qualifier.size());
+        }
+    }
+
+    return fmt::format("{}{}{}",
+                       stdx::string::substr(inst, 0, type_start),
+                       type,
+                       stdx::string::substr(inst, type_end));
 }
 
 // Calls `f` on each `%N` token in `text`, rewriting it to whatever `f` returns
@@ -642,6 +739,12 @@ auto fold_constants(function_dump& fn) -> void {
            body.starts_with("address_of ");
 }
 
+// A widening conversion, which reads no memory and can't fail, so it may sit anywhere before its
+// use
+[[nodiscard]] auto is_pure_cast(std::string_view body) -> bool {
+    return body.starts_with("widen_cast ");
+}
+
 [[nodiscard]] auto is_terminator_text(std::string_view body) -> bool {
     return body.starts_with("ret") || body.starts_with("goto ") || body.starts_with("cond_goto ") ||
            body.starts_with("unreachable");
@@ -732,6 +835,39 @@ auto fold_constants(function_dump& fn) -> void {
     return root;
 }
 
+// Moves a field address into the one other segment that uses it, where the address sinking
+// places it. What it reads dominates that use too, so it is still available there
+auto move_addresses_to_their_users(function_dump& fn) -> void {
+    for (bool moved{true}; moved;) {
+        moved = false;
+        ankerl::unordered_dense::map<std::string, ankerl::unordered_dense::set<usize>> used_in;
+        for (usize s{0}; s < fn.segments.size(); ++s) {
+            for (const auto& inst : fn.segments[s].instructions) {
+                const auto body{split_definition(inst).second};
+                for (const auto& temp : mentioned_temps(body)) { used_in[temp].emplace(s); }
+            }
+        }
+
+        for (usize s{0}; s < fn.segments.size() && !moved; ++s) {
+            auto& insts{fn.segments[s].instructions};
+            for (usize i{0}; i < insts.size(); ++i) {
+                const auto [def, body]{split_definition(insts[i])};
+                const auto users{used_in.find(std::string{def})};
+                const bool movable{!def.empty() && body.starts_with("get_element_ptr ") &&
+                                   users != used_in.end() && users->second.size() == 1 &&
+                                   !users->second.contains(s)};
+                if (!movable) { continue; }
+
+                auto& target{fn.segments[*users->second.begin()].instructions};
+                target.insert(target.begin(), std::move(insts[i]));
+                insts.erase(insts.begin() + static_cast<std::ptrdiff_t>(i));
+                moved = true;
+                break;
+            }
+        }
+    }
+}
+
 // Places each address computation and loads with no write before its use, just before the
 // first instruction of its segment that uses it
 auto sink_address_computations(function_dump& fn) -> void {
@@ -744,9 +880,15 @@ auto sink_address_computations(function_dump& fn) -> void {
         const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
         if (args.size() != 2) { return stdx::none; }
         const std::string dest{args[1]};
-        if (is_constant_token(args[0]) && slots.contains(dest)) { return dest; }
+
+        // A parameter never changes, so its spill may wait for the slot's use like a constant's
+        const bool fixed_value{is_constant_token(args[0]) || args[0].starts_with("param.")};
+        if (fixed_value && slots.contains(dest)) { return dest; }
         const auto found{aggregates.find(dest)};
-        if (found != aggregates.end() && found->second != dest) { return found->second; }
+        if (found != aggregates.end() && (found->second != dest || fixed_value)) {
+            return found->second;
+        }
+
         return stdx::none;
     }};
     const auto slot_of{[&](const std::string& temp) -> stdx::option<std::string> {
@@ -780,17 +922,17 @@ auto sink_address_computations(function_dump& fn) -> void {
             return *at;
         }};
 
-        // Whether nothing strictly between a load at `from` and its use at `to` stores into the
-        // private slot the load reads
+        // Whether every store between a load at `from` and its use at `to` writes another private
+        // slot, whose address never escapes, so it can't change what the load reads
         const auto only_other_writes{[&](usize from, usize to) {
             const auto address{reads[from].empty() ? stdx::none : slot_of(reads[from].front())};
-            if (!address) { return false; }
             for (usize k{from + 1}; k < to; ++k) {
                 const auto body{split_definition(insts[k]).second};
                 if (!body.starts_with("store ")) { continue; }
                 const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
                 if (args.size() != 2) { return false; }
-                if (slot_of(std::string{args[1]}) == address) { return false; }
+                const auto written{slot_of(std::string{args[1]})};
+                if (!written || written == address) { return false; }
             }
 
             return true;
@@ -812,7 +954,11 @@ auto sink_address_computations(function_dump& fn) -> void {
             }
 
             const bool is_load{body.starts_with("load ")};
-            if (defs[i].empty() || (!is_address_computation(body) && !is_load)) { continue; }
+            if (defs[i].empty() ||
+                (!is_address_computation(body) && !is_load && !is_pure_cast(body))) {
+                continue;
+            }
+
             const auto use{next_read(defs[i], i)};
             if (!use) { continue; }
             // A read may not move past a write
@@ -1062,12 +1208,17 @@ auto canonicalize(function_dump& fn) -> void {
 } // namespace
 
 auto normalize_gir(std::string_view dump) -> std::string {
-    auto mod{parse(dump)};
+    auto mod{parse(erase_nominal_discriminators(dump))};
     for (auto& fn : mod.functions) {
+        for (auto& seg : fn.segments) {
+            for (auto& inst : seg.instructions) { inst = without_address_mutability(inst); }
+        }
+
         // Merging segments exposes more to fold, so both passes run again on the merged form
         for (usize round{0}; round < 2; ++round) {
             fold_constants(fn);
             drop_dead_slots(fn);
+            move_addresses_to_their_users(fn);
             sink_address_computations(fn);
             canonicalize(fn);
         }

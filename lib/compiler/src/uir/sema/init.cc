@@ -281,7 +281,7 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
         switch (mod().tag_of(inst)) {
         case tag::init_array: rec.skip_ref(); return rec.refs_field();
         case tag::array_lit:  rec.skip_ref().skip_ref().skip_u32(); return rec.refs_field();
-        default: return stdx::none;
+        default:              return stdx::none;
         }
     }()};
     if (!values) { return comp_.unsupported(u_, src, "an array initialized by field names"); }

@@ -169,16 +169,26 @@ auto compilation::add_call_notes(gs::diagnostic& d) const -> void {
 }
 
 analyzer::analyzer(compilation& comp, const unit& u, instance& fn) noexcept
-    : comp_{comp}, u_{u}, fn_{fn}, frame_{comp.next_frame()}, alloc_base_{comp.alloc_count()} {}
+    : comp_{comp}, u_{u}, fn_{fn}, captures_{fn.captures}, scope_{fn.scope},
+      self_type_{fn.self_type}, frame_{comp.next_frame()}, alloc_base_{comp.alloc_count()} {}
 
 auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
     PROFILE_FUNCTION();
     record_reader rec{record(fn_->func)};
-    const auto    params{rec.body_field()};
+    const auto    params{params_of(mod(), rec.body_field())};
     rec.skip_body();
     const auto body{rec.body_field()};
-    for (usize i{0}; const auto param : params) {
-        values_.insert_or_assign(param, operand{args[i++]});
+    for (usize i{0}, arg{0}; const auto param : params) {
+        const auto binding{fn_->bindings.empty() ? stdx::option<param_binding>{}
+                                                 : stdx::option<param_binding>{fn_->bindings[i]}};
+        ++i;
+        if (binding && binding->value) {
+            values_.insert_or_assign(param, operand{*binding->value});
+            if (binding->has_slot) { ++arg; }
+            continue;
+        }
+
+        values_.insert_or_assign(param, operand{args[arg++]});
     }
 
     DISCARD(TRY(analyze_body(body)));
@@ -253,7 +263,24 @@ namespace {
         for (const auto arg : rec.refs_field()) { refs.emplace_back(arg); }
         return refs;
     }
+    case tag::field_call: {
+        record_reader rec{m, d.pl.extra};
+        std::vector   refs{*rec.ref_field()};
+        rec.skip_str().skip_u32();
+        if (rec.ref_field()) { return stdx::none; }
+        for (const auto arg : rec.refs_field()) { refs.emplace_back(arg); }
+        return refs;
+    }
     case tag::elem_val: return std::vector{d.bin.lhs, d.bin.rhs};
+    case tag::slice:    {
+        record_reader    rec{m, d.pl.extra};
+        std::vector<ref> refs{*rec.ref_field()};
+        for (const auto bound : {rec.ref_field(), rec.ref_field()}) {
+            if (bound) { refs.emplace_back(*bound); }
+        }
+
+        return refs;
+    }
 
     // The right side's body runs again at compile time with the rest of the instruction
     case tag::bool_and:
@@ -300,8 +327,10 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     if (!inst) { return resolve(r, src); }
     const auto found{values_.find(*inst)};
     if (found == values_.end()) { return resolve(r, src); }
-    // An aggregate global is its value at compile time
+
+    // An aggregate global is its value at compile time, as is a comptime parameter's slot
     if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
+    if (const auto s{found->second.as_opt<slot_value>()}; s && s->known) { return *s->known; }
     if (!found->second.is<gir::value>() && !found->second.is<merge_ref>() &&
         !found->second.is<slot_value>()) {
         return found->second;

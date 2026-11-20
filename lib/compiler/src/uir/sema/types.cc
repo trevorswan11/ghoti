@@ -123,6 +123,9 @@ namespace {
 [[nodiscard]] auto container_mutability(u32 bits) noexcept -> gs::types::mutability_modifiers {
     if ((bits & flags::POLY) != 0) { return gs::types::mut::POLY; }
     auto mut{(bits & flags::MUT) != 0 ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT};
+
+    // `mut?` is the enclosing function's mutability, which each call supplies
+    if ((bits & flags::POLY) != 0) { mut = gs::types::mut::POLY; }
     if ((bits & flags::VOLATILE) != 0) { mut = mut | gs::types::mut::VOLATILE; }
     return mut;
 }
@@ -134,10 +137,9 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
     const auto& src{src_of(inst)};
     auto&       elem{*TRY(resolve_type(*rec.ref_field(), src))};
     const auto  bits{rec.u32_field()};
-    if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
     if ((bits & flags::VOLATILE) != 0) { return comp_.unsupported(u_, src, "a volatile type"); }
-    if (elem.get_kind() == gs::type_kind::DYN || elem.get_kind() == gs::type_kind::INTERFACE) {
-        return comp_.unsupported(u_, src, "a pointer to a `dyn` or interface type");
+    if (elem.get_kind() == gs::type_kind::INTERFACE) {
+        return comp_.unsupported(u_, src, "a pointer to an interface type");
     }
 
     auto&      ctx{comp_.ctx()};
@@ -192,7 +194,10 @@ auto analyzer::analyze_func(inst_id inst) -> result<operand> {
         return comp_.unsupported(u_, src_of(inst), "a function literal used as a value");
     }
 
-    return comp_.declare_function(u_, *std::exchange(declaring_, stdx::none), inst);
+    // A closure's own instruction declares it, with what it captures
+    if (closure_declares(inst)) { return void_value(); }
+    return comp_.declare_function(
+        u_, *std::exchange(declaring_, stdx::none), inst, member_context_here());
 }
 
 } // namespace ghoti::uir::sema

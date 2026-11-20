@@ -39,6 +39,20 @@ auto int_of(const ip::value& v) -> stdx::option<big_int> {
         [](const auto&) -> stdx::option<big_int> { return stdx::none; });
 }
 
+auto decays_to(const gs::type& from, const gs::type& to) -> bool {
+    const auto from_array{from.get_data().as_opt<gs::types::array>()};
+    const auto to_array{to.get_data().as_opt<gs::types::array>()};
+    if (!from_array || !to_array || from_array->len != to_array->len) { return false; }
+    const auto ref{from_array->underlying.get_data().as_opt<gs::types::reference>()};
+    const auto ptr{to_array->underlying.get_data().as_opt<gs::types::pointer>()};
+    if (!ref || !ptr) { return false; }
+
+    // A pointer may not grant a write its reference doesn't
+    const bool permitted{!from_array->underlying.is_constant() ||
+                         to_array->underlying.is_constant()};
+    return permitted && gs::is_same_unqualified(ref->underlying, ptr->underlying);
+}
+
 auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     -> result<stdx::option<operand>> {
     if (const auto m{op.as_opt<merge_ref>()}) {
@@ -69,6 +83,12 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     auto& from{type_of(op)};
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
     if (gs::is_same_unqualified(from, target)) { return op; }
+    if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
+
+    // An array of references is an array of pointers to the same values
+    if (const auto value{op.as_opt<gir::value>()}; value && decays_to(from, target)) {
+        return operand{gir::value{value->data, target}};
+    }
 
     auto& pool{comp_.constants()};
     auto& ctx{comp_.ctx()};
@@ -299,6 +319,7 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
     if (const auto value{typed.as_opt<gir::value>()}) { return *value; }
     if (const auto slot{typed.as_opt<slot_value>()}) {
         TRY(require_runtime(src));
+        if (slot->origin) { return *slot->origin; }
         return load(place{.address = slot->address, .pointee = slot->type, .is_mutable = false});
     }
 

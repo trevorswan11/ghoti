@@ -52,8 +52,8 @@ compilation::compilation(gs::context& ctx, const program& prog, const options& o
     }
 
     if (!ctx_.modules.has_builtin_module()) { return; }
-    auto&       builtin_mod{ctx_.modules.builtin_module()};
-    const auto  cfg{gs::cfg_context::from(ctx_)};
+    auto&      builtin_mod{ctx_.modules.builtin_module()};
+    const auto cfg{gs::cfg_context::from(ctx_)};
     prelude_.emplace(lower_module(builtin_mod, {.cfg = cfg, .modules = ctx_.modules}));
     if (!prelude_->diagnostics.empty()) { return; }
     prelude_unit_.emplace(static_cast<u32>(units_.size()));
@@ -119,6 +119,13 @@ auto compilation::run() -> outcome {
 }
 
 auto compilation::analyze_roots() -> void {
+    // Every impl is known before anything looks a member up
+    for (const auto& u : units_) {
+        for (const auto decl : u.uir->root_namespace().decls) {
+            if (u.uir->decl_at(decl).kind == decl_kind::IMPL) { register_impl(u, decl); }
+        }
+    }
+
     // TODO: Every non-generic declaration of every module is a root until lazy builds land
     for (const auto& u : units_) {
         if (prelude_unit_ && u.index == *prelude_unit_) { continue; }
@@ -140,7 +147,7 @@ auto compilation::analyze_roots() -> void {
             case decl_kind::TEST:
                 if (ctx_.testing) { DISCARD(unsupported(u, *d.node, "a `test` block")); }
                 break;
-            case decl_kind::IMPL:     DISCARD(unsupported(u, *d.node, "an `impl` block")); break;
+            case decl_kind::IMPL:     analyze_impl_roots(u, decl); break;
             case decl_kind::COMPTIME: DISCARD(unsupported(u, *d.node, "a `comptime` block")); break;
             }
 
@@ -154,6 +161,7 @@ auto compilation::drain_queue() -> void {
     while (!queue_.empty() && !stopped_at_) {
         const auto fn{queue_.back()};
         queue_.pop_back();
+        if (fn->analyzed) { continue; }
         DISCARD(analyze_body(*fn));
     }
 }
@@ -209,16 +217,41 @@ auto compilation::request_body(instance& fn) -> void {
     queue_.emplace_back(&fn);
 }
 
+auto compilation::infer_return(instance& fn, const unit& caller, const source& use)
+    -> result<void> {
+    if (!fn.infers_return || fn.return_type->get_kind() != gs::type_kind::AUTO) { return {}; }
+    if (fn.analyzed) {
+        return unsupported(
+            caller, use, "a recursive call of a function whose return type is inferred");
+    }
+
+    const auto analyzed{analyze_body(fn)};
+    if (!analyzed) { return stdx::err{analyzed.error()}; }
+    return {};
+}
+
 auto compilation::analyze_body(instance& fn) -> result<void> {
     PROFILE_FUNCTION();
+    fn.analyzed = true;
     auto& gir_fn{gir_.add_function(fn.symbol, *fn.type, false, false, false, fn.linkage)};
     if (const auto sig{fn.type->get_data().as_opt<gs::types::function>()}) {
         gir_fn.set_calling_conv(sig->conv);
     }
 
     gir_fn.set_weak(fn.weak);
-    analyzer a{*this, *fn.owner, fn, gir_fn};
-    return a.analyze_function();
+    if (!fn.source_name.empty()) { gir_fn.set_source_name(fn.source_name); }
+    analyzer   a{*this, *fn.owner, fn, gir_fn};
+    const auto analyzed{a.analyze_function()};
+    if (fn.infers_return) {
+        auto span{ctx_.pool.get_many_unsafe(fn.params.size())};
+        for (usize i{0}; i < fn.params.size(); ++i) { span[i] = fn.params[i]; }
+        fn.type =
+            &ctx_.get_function(span, *fn.return_type, false, ast::calling_convention::C, false);
+        gir_fn.set_type(*fn.type);
+    }
+
+    if (!analyzed) { return stdx::err{analyzed.error()}; }
+    return {};
 }
 
 auto compilation::report(const unit&                          u,
