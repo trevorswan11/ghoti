@@ -8,6 +8,7 @@
 #include <utility>
 
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 
 #include "ghoti/config.h"
 
@@ -36,14 +37,14 @@ auto get_env(const std::string& name) -> stdx::option<std::string_view> {
 namespace {
 
 auto trim_env_value(std::string_view value) -> std::string_view {
-    constexpr std::string_view whitespace{" \t\r\n"};
-    const auto                 first{value.find_first_not_of(whitespace)};
+    constexpr static std::string_view whitespace{" \t\r\n"};
+    const auto                        first{value.find_first_not_of(whitespace)};
     if (first == std::string_view::npos) { return {}; }
-    value = value.substr(first, value.find_last_not_of(whitespace) - first + 1);
+    value = stdx::string::substr(value, first, value.find_last_not_of(whitespace) - first + 1);
 
     const auto quoted{value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
                       value.back() == value.front()};
-    return quoted ? value.substr(1, value.size() - 2) : value;
+    return quoted ? stdx::string::substr(value, 1, value.size() - 2) : value;
 }
 
 } // namespace

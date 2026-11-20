@@ -41,7 +41,6 @@ TEST_CASE("Shipped lib resources resolve next to the stdlib") {
 }
 
 TEST_CASE("Quoted GHOTI_STDLIB overrides the shipped lib for std and compiler_rt") {
-    // Issue #420: cmd.exe's `set GHOTI_STDLIB="..."` keeps the quotes in the value
     const tempdir checkout{"stdlib_quoted"};
     checkout.write("lib/std/std.gh", "// Checkout stdlib");
     checkout.write("lib/compiler_rt/compiler_rt.gh", "// Checkout compiler_rt");
