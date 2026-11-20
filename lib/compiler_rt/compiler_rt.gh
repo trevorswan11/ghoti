@@ -41,6 +41,8 @@ pub const want_aeabi = @cfgValue((arch == .arm or arch == .thumb) and
 
 pub const is_os_darwin = @cfgValue(os == .macos);
 
+pub const want_float_exceptions = @cfgValue(family != .wasm);
+
 /// This governs whether to use these symbol names for f16/f32 conversions
 /// rather than the standard names:
 /// * __gnu_f2h_ieee
