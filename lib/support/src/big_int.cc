@@ -109,6 +109,17 @@ auto big_int::to_i128() const noexcept -> stdx::option<i128> {
     return negative_ ? static_cast<i128>(u128{0} - low) : static_cast<i128>(low);
 }
 
+auto big_int::min_of(u64 bits, bool is_signed) -> big_int {
+    if (!is_signed || bits == 0) { return big_int{}; }
+    return -big_int{i128{1}}.shl(bits - 1);
+}
+
+auto big_int::max_of(u64 bits, bool is_signed) -> big_int {
+    if (bits == 0) { return big_int{}; }
+    const big_int one{i128{1}};
+    return one.shl(is_signed ? bits - 1 : bits) - one;
+}
+
 auto big_int::to_u128() const noexcept -> stdx::option<u128> {
     if (!fits(128, false)) { return stdx::none; }
     return magnitude_.low_u128();

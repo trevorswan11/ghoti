@@ -6,6 +6,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <stdx/assert.hh>
 #include <stdx/fixed/hash_table.hh>
@@ -91,6 +92,11 @@ template <usize Cap = 64>
     }
     return prev[b.size()];
 }
+
+// The pieces of `text` between each `delimiter`. Empty text has no pieces, and a trailing
+// delimiter doesn't end one more empty piece
+[[nodiscard]] auto split(std::string_view text, std::string_view delimiter)
+    -> std::vector<std::string_view>;
 
 [[nodiscard]] auto is_alpha(char c) noexcept -> bool;
 [[nodiscard]] auto is_digit(char c) noexcept -> bool;

@@ -41,17 +41,8 @@ namespace {
 // The smallest and largest values of an integer type, for a range pattern with an open end
 [[nodiscard]] auto int_bounds(const gs::type& t, u32 ptr_bits) -> std::pair<big_int, big_int> {
     const u32  bits{t.get_kind() == gs::type_kind::INT ? gs::int_width(t) : ptr_bits};
-    const auto one{big_int{i128{1}}};
-    const auto power{[&](u32 n) {
-        auto out{one};
-        for (u32 i{0}; i < n; ++i) { out = out * big_int{i128{2}}; }
-        return out;
-    }};
-    if (gs::is_signed_integer(t)) {
-        const auto half{power(bits - 1)};
-        return {-half, half - one};
-    }
-    return {big_int{i128{0}}, power(bits) - one};
+    const bool is_signed{gs::is_signed_integer(t)};
+    return {big_int::min_of(bits, is_signed), big_int::max_of(bits, is_signed)};
 }
 
 // Whether the comptime `value` of `type` is one `node` matches
@@ -85,20 +76,19 @@ auto analyzer::capture_name(const ast::capture_t& capture) const -> std::string_
 
 auto analyzer::match_arms(inst_id inst) -> std::vector<match_arm> {
     auto rec{record(inst)};
-    DISCARD(rec.ref_field());
-    DISCARD(rec.u32_field());
-    DISCARD(rec.index_field());
+    rec.skip_ref().skip_u32().skip_index();
     std::vector<match_arm> arms;
     const auto             count{rec.count()};
     for (u32 i{0}; i < count; ++i) {
         const auto patterns{rec.refs_field()};
-        DISCARD(rec.body_field());
+        rec.skip_body();
         const auto capture{rec.ref_field()};
         const auto guard{rec.body_field()};
         const auto body{rec.body_field()};
         arms.emplace_back<match_arm>(
             {.patterns = patterns, .capture = capture, .guard = guard, .body = body});
     }
+
     return arms;
 }
 
@@ -113,6 +103,7 @@ auto analyzer::pattern_value(gsl::span<const inst_id> body, gs::type& type, cons
     if (!value && value.error() == stop::RUNTIME) {
         return comp_.unsupported(u_, src, "a pattern compared at runtime");
     }
+
     const auto known{TRY(value)};
     const auto typed{TRY(coerce_to(known, type, src, {.what = use_site::kind::STORE}))};
     return require_comptime(typed, src);
@@ -126,12 +117,14 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
     case tag::pat_value:    {
         auto       rec{record(pat)};
         const auto body{rec.body_field()};
+
         // `.name` against a tagged union names one of its fields
         if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}) {
             if (ut->is_untagged || body.empty() ||
                 mod().tag_of(body.front()) != tag::implicit_access) {
                 return comp_.unsupported(u_, src, "this union pattern");
             }
+
             const auto name{mod().string(mod().data_of(body.front()).str)};
             const auto index{TRY(field_index(type, name, src))};
             auto&      payload{ut->type_at(index)};
@@ -145,8 +138,10 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
                                            false,
                                            make_node(pattern::node_kind::WILDCARD, payload));
             }
+
             return out;
         }
+
         const auto  value{TRY(pattern_value(body, type, src))};
         const auto& data{pool.value_at(value).data};
         if (type.get_kind() == gs::type_kind::BOOL) {
@@ -154,6 +149,7 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
             out->boolean = *data.as_opt<bool>();
             return out;
         }
+
         const auto number{int_of(pool.value_at(value))};
         if (!number) { return comp_.unsupported(u_, src, "a pattern of this type"); }
         if (type.get_kind() == gs::type_kind::ENUM) {
@@ -161,6 +157,7 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
             if (!n) {
                 return comp_.unsupported(u_, src, "a variant of an enum UIR didn't declare");
             }
+
             const auto at{std::ranges::find(n->enum_values, static_cast<i64>(*number->to_i128()))};
             auto       out{make_node(pattern::node_kind::ENUM_VALUE, type)};
             out->index = static_cast<usize>(at - n->enum_values.begin());
@@ -169,9 +166,11 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
             out->hi    = *number;
             return out;
         }
+
         if (!gs::is_integer(type.get_kind())) {
             return comp_.unsupported(u_, src, "a pattern of this type");
         }
+
         auto out{make_node(pattern::node_kind::INT_RANGE, type)};
         out->lo = *number;
         out->hi = *number;
@@ -181,6 +180,7 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
         if (!gs::is_integer(type.get_kind())) {
             return comp_.unsupported(u_, src, "a range pattern of this type");
         }
+
         auto       rec{record(pat)};
         const auto lo_body{rec.body_field()};
         const auto hi_body{rec.body_field()};
@@ -192,14 +192,17 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type) -> result<pattern::node
         if (!lo_body.empty()) {
             out->lo = *int_of(pool.value_at(TRY(pattern_value(lo_body, type, src))));
         }
+
         if (!hi_body.empty()) {
             const auto hi{*int_of(pool.value_at(TRY(pattern_value(hi_body, type, src))))};
             out->hi = inclusive ? hi : hi - big_int{i128{1}};
         }
+
         return out;
     }
     default: break;
     }
+
     return comp_.unsupported(u_, src, fmt::format("the `{}` pattern", tag_name(mod().tag_of(pat))));
 }
 
@@ -212,6 +215,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     if ((match_flags & flags::MATCH_BINDING) != 0) {
         return comp_.unsupported(u_, src, "a destructuring");
     }
+
     const bool comptime_match{(match_flags & flags::MATCH_COMPTIME) != 0};
     const auto arms{match_arms(inst)};
 
@@ -225,10 +229,12 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     if (type.get_kind() == gs::type_kind::REFERENCE || type.get_kind() == gs::type_kind::POINTER) {
         return comp_.unsupported(u_, src, "a match through a reference");
     }
+
     if (!gs::is_value_type(type.get_kind()) || type.get_kind() == gs::type_kind::TYPE ||
         gs::is_comptime_numeric(type.get_kind())) {
         return comp_.unsupported(u_, src, "a match on a type or untyped value");
     }
+
     TRY(comp_.require_fields(u_, src, type));
 
     // The arms' patterns, with each arm's `|v|` attached to them
@@ -241,6 +247,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
             if (const auto& capture{ast_match.arms[a].capture}) {
                 pattern::attach_arm_capture(*capture, false, *node);
             }
+
             patterns[a].emplace_back(std::move(node));
         }
     }
@@ -256,6 +263,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     for (usize a{0}; a < arms.size(); ++a) {
         if (catch_all != a) { add_arm(a); }
     }
+
     if (catch_all) { add_arm(*catch_all); }
 
     if (comptime_match || is_comptime()) { return run_match(arms, rows, scrutinee, src); }
@@ -268,6 +276,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
                             fmt::format("Match expression is non-exhaustive; missing: {}",
                                         fmt::join(tree.missing, ", ")));
     }
+
     if (const auto folded{TRY(fold_match(arms, rows, operand_ref, src))}) { return *folded; }
     return emit_match(arms, rows, tree, operand_ref, scrutinee, src);
 }
@@ -292,7 +301,7 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
     if (unsupported) { return stdx::err{stop::UNSUPPORTED}; }
     if (jumped || !folded) { return stdx::option<operand>{}; }
 
-    // The old emitter folds a match whose value is a number or `bool`
+    // Only a match whose value is a number or `bool` folds
     const auto index{comptime_value(*folded)};
     if (!index) { return stdx::option<operand>{}; }
     const auto kind{type_of(*folded).get_kind()};
@@ -300,6 +309,7 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
         !gs::is_comptime_numeric(kind)) {
         return stdx::option<operand>{};
     }
+
     return stdx::option<operand>{*folded};
 }
 
@@ -319,12 +329,15 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
             if (payload) {
                 bound = un->payload.empty() ? void_value() : operand{un->payload.front()};
             }
+
             values_.insert_or_assign(*as_inst(*arm.capture), bound);
         }
+
         const auto out{TRY(analyze_body(arm.body))};
         if (jump_ || (!is_comptime() && terminated())) { return void_value(); }
         return out.yielded.value_or(void_value());
     }
+
     return comp_.report(
         u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "No match arm matched the value");
 }
@@ -350,8 +363,10 @@ auto analyzer::scrutinee_address(ref            operand_ref,
         if (inst && mod().tag_of(*inst) == tag::load) {
             return TRY(address_of(mod().data_of(*inst).un.operand, src)).address;
         }
+
         return comp_.unsupported(u_, src, "a match on an aggregate with no name");
     }
+
     const auto value{TRY(as_runtime(scrutinee, src))};
     return spill(value, *value.type, false).address;
 }
@@ -392,6 +407,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
             builder_.emit_store(slot->address, gir::value{loaded, *slot->type}).is_initializer =
                 true;
         }
+
         emit_goto(m.bodies[d.arm]);
         return {};
     }
@@ -409,6 +425,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
                 builder_.emit_load(gir::value{address.data, subject_type}, subject_type),
                 subject_type};
         }
+
         const auto tag_at{
             builder_.emit_get_element_ptr(address, {usize_constant(UNION_TAG_FIELD)}, i32_type)};
         return gir::value{builder_.emit_load(gir::value{tag_at, i32_type}, i32_type), i32_type};
@@ -416,6 +433,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
 
     for (usize i{0}; i < d.cases.size(); ++i) {
         const auto& test{d.cases[i]};
+
         // With no fallback, the last case is the only thing left
         if (i + 1 == d.cases.size() && !d.otherwise) { return emit_decision(m, test.target); }
         const auto matched{[&] {
@@ -437,6 +455,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
             }
             case pattern::test_kind::INTERVAL: break;
             }
+
             const auto bound{[&](const big_int& v) {
                 return constant(intern_int(pool, v, subject_type), subject_type);
             }};
@@ -458,6 +477,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
         TRY(emit_decision(m, test.target));
         switch_to(on_miss);
     }
+
     return emit_decision(m, *d.otherwise);
 }
 
@@ -488,9 +508,11 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
             if (std::ranges::any_of(slots, [&](const capture_slot& s) { return s.name == name; })) {
                 continue;
             }
+
             if (site.capture.modifier.is_ref() || site.capture.modifier.is_ptr()) {
                 return comp_.unsupported(u_, src, "a capture by reference");
             }
+
             auto&      cap_type{site.value_type};
             const bool is_void{cap_type.get_kind() == gs::type_kind::VOID_};
             const auto slot{is_void ? gir::value{}
@@ -506,6 +528,7 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
     for (usize i{0}; i < rows.size(); ++i) {
         if (tree.row_reached[i]) { reached[rows[i].arm] = true; }
     }
+
     std::vector<incoming> arrivals;
     for (usize a{0}; a < arms.size(); ++a) {
         if (!reached[a]) { continue; }
@@ -518,14 +541,17 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
                 slot.is_void ? void_value()
                              : operand{slot_value{.address = slot.address, .type = slot.type}});
         }
+
         const auto out{TRY(analyze_body(arms[a].body))};
         if (terminated()) { continue; }
         if (out.yielded) {
             arrivals.emplace_back<incoming>(
                 {.seg = builder_.get_segment()->get_id(), .value = *out.yielded, .src = src});
         }
+
         emit_goto(merge);
     }
+
     return finish_merge(arrivals, merge, src);
 }
 

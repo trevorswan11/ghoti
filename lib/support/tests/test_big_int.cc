@@ -89,4 +89,14 @@ TEST_CASE("big_int sizes and fixed-width views") {
     CHECK(big_int{std::numeric_limits<i128>::min()}.to_i128() == std::numeric_limits<i128>::min());
 }
 
+TEST_CASE("big_int gives the bounds of a fixed width integer") {
+    CHECK(big_int::min_of(8, true) == big("-128"));
+    CHECK(big_int::max_of(8, true) == big("127"));
+    CHECK(big_int::min_of(8, false) == big("0"));
+    CHECK(big_int::max_of(8, false) == big("255"));
+    CHECK(big_int::min_of(0, true) == big("0"));
+    CHECK(big_int::max_of(0, false) == big("0"));
+    CHECK(big_int::max_of(200, false) == big_int{i128{1}}.shl(200) - big("1"));
+}
+
 } // namespace ghoti::tests
