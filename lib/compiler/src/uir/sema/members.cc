@@ -1,4 +1,5 @@
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -10,7 +11,8 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/id.hh"
-#include "compiler/ip/index.hh"
+#include "compiler/gir/instruction.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
@@ -145,12 +147,10 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
                             .mut   = gs::types::mut::CONSTANT};
     }
 
-    // A compile-time evaluation would need comptime addresses, while a runtime body folding a
-    // condition just keeps the call at runtime
+    // A compile-time evaluation would need comptime addresses
     if (!gir_fn_) {
         return comp_.unsupported(u_, src, "a method taking its object's address at compile time");
     }
-
     TRY(require_runtime(src));
 
     // A pointer or reference value already is the address the method takes

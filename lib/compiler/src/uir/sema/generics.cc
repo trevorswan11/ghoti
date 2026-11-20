@@ -17,7 +17,10 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"

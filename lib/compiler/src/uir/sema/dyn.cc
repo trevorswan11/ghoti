@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/gir/instruction.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -21,7 +23,7 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// Where a `dyn` value keeps its object's address and its vtable's
+// Where a `dyn` value keeps its object's and its vtable's address
 constexpr u64 DYN_DATA_FIELD{0};
 constexpr u64 DYN_VTABLE_FIELD{1};
 

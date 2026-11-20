@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
-#include <cstddef>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -75,8 +74,7 @@ struct module_dump {
     return is_digit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$';
 }
 
-// The length of a nominal type's discriminator in a monomorph's symbol starting at `at`, which
-// each pipeline numbers its own way: `struct12`, or a ctor instance's `struct$Box__u8_65`
+// The length of a nominal type's discriminator in a monomorph's symbol starting at `at`
 [[nodiscard]] auto discriminator_length(std::string_view text, usize at) -> usize {
     if (at >= text.size()) { return 0; }
     usize end{at};
@@ -92,15 +90,15 @@ struct module_dump {
 // A dump with every nominal type in a monomorph's symbol spelled `struct#`, every
 // parameterized impl's method prefix spelled `pimpl#`, and every vtable `__vtable.#`
 [[nodiscard]] auto erase_nominal_discriminators(std::string_view dump) -> std::string {
-    constexpr std::array KINDS{
-        std::string_view{"_struct"}, std::string_view{"_union"}, std::string_view{"_enum"}};
+    static constexpr std::array       KINDS{"_struct", "_union", "_enum"};
+    static constexpr std::string_view IMPL_PREFIX{"pimpl"};
+    static constexpr std::string_view VTABLE_PREFIX{"__vtable."};
+
     std::string out;
     out.reserve(dump.size());
-    constexpr std::string_view IMPL_PREFIX{"pimpl"};
-    constexpr std::string_view VTABLE_PREFIX{"__vtable."};
     for (usize i{0}; i < dump.size();) {
         // A vtable is numbered by each pipeline's own count
-        if (dump.substr(i).starts_with(VTABLE_PREFIX)) {
+        if (stdx::string::substr(dump, i).starts_with(VTABLE_PREFIX)) {
             usize end{i + VTABLE_PREFIX.size()};
             while (end < dump.size() && is_digit(dump[end])) { ++end; }
             if (end > i + VTABLE_PREFIX.size()) {
@@ -112,7 +110,7 @@ struct module_dump {
         }
 
         // A parameterized impl's methods carry the number of the impl they come from
-        if (dump.substr(i).starts_with(IMPL_PREFIX)) {
+        if (stdx::string::substr(dump, i).starts_with(IMPL_PREFIX)) {
             usize end{i + IMPL_PREFIX.size()};
             while (end < dump.size() && is_digit(dump[end])) { ++end; }
             if (end > i + IMPL_PREFIX.size() && end < dump.size() && dump[end] == '#') {
@@ -123,8 +121,8 @@ struct module_dump {
         }
 
         bool erased{false};
-        for (const auto kind : KINDS) {
-            if (!dump.substr(i).starts_with(kind)) { continue; }
+        for (const std::string_view kind : KINDS) {
+            if (!stdx::string::substr(dump, i).starts_with(kind)) { continue; }
             const auto length{discriminator_length(dump, i + kind.size())};
             if (length == 0) { continue; }
             out += kind;
@@ -739,8 +737,7 @@ auto fold_constants(function_dump& fn) -> void {
            body.starts_with("address_of ");
 }
 
-// A widening conversion, which reads no memory and can't fail, so it may sit anywhere before its
-// use
+// A widening conversion, which reads no memory and can't fail
 [[nodiscard]] auto is_pure_cast(std::string_view body) -> bool {
     return body.starts_with("widen_cast ");
 }
@@ -835,8 +832,6 @@ auto fold_constants(function_dump& fn) -> void {
     return root;
 }
 
-// Moves a field address into the one other segment that uses it, where the address sinking
-// places it. What it reads dominates that use too, so it is still available there
 auto move_addresses_to_their_users(function_dump& fn) -> void {
     for (bool moved{true}; moved;) {
         moved = false;
@@ -860,7 +855,7 @@ auto move_addresses_to_their_users(function_dump& fn) -> void {
 
                 auto& target{fn.segments[*users->second.begin()].instructions};
                 target.insert(target.begin(), std::move(insts[i]));
-                insts.erase(insts.begin() + static_cast<std::ptrdiff_t>(i));
+                insts.erase(insts.begin() + static_cast<idiff>(i));
                 moved = true;
                 break;
             }

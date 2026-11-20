@@ -40,7 +40,6 @@ enum class uir_diff_status : u8 {
     FOLD_PLACEMENT,
     SEMANTICS_CHANGE,
     // Only parameterized impl methods nothing uses differ, which the old pipeline expands
-    // for every target and UIR analyzes on use (Q13)
     ON_USE_IMPL,
     GIR_DIFF,
     ASTGEN_FAILED,

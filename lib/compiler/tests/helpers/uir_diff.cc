@@ -56,8 +56,7 @@ namespace {
     return false;
 }
 
-// Whether UIR calls a function the old dump defines but never calls, which the old emitter
-// folded the whole call of, its runtime arguments included
+// Whether UIR calls a function the old dump defines but never calls
 [[nodiscard]] auto calls_folded_function(std::string_view uir_text, std::string_view legacy_text)
     -> bool {
     for (const auto prefix : {std::string_view{"call @"}, std::string_view{"call \""}}) {

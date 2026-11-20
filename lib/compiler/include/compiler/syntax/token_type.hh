@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -300,7 +299,7 @@ struct typed_identifier {
 };
 
 // Helper for ADL tuple get in stdx::fixed::hash_map
-template <std::size_t I>
+template <usize I>
 [[nodiscard]] constexpr auto get(const syntax::typed_identifier& typed) noexcept -> auto& {
     if constexpr (I == 0) {
         return typed.name;

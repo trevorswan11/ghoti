@@ -17,6 +17,7 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -473,8 +474,6 @@ class compilation {
                                        ast::type_modifier::modifier how) -> stdx::option<gs::type&>;
 
     // Generic functions (generics.cc)
-    // Whether each call binds `func`'s signature anew: a comptime, `auto` or `type` parameter,
-    // or an `auto` return
     [[nodiscard]] auto is_generic(const unit& u, inst_id func) const -> bool;
     [[nodiscard]] auto
     declare_generic(const unit& u, decl_id decl, inst_id func, const member_context& member)
@@ -1268,7 +1267,6 @@ class analyzer {
     std::vector<pending_merge>                        merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
-    // The runtime branches enclosing the instruction being analyzed
     // The values `capture` instructions read, and the type whose namespace holds the body
     std::vector<ip::index>  captures_;
     stdx::option<nominal&>  scope_;
