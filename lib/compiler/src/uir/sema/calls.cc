@@ -31,6 +31,15 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
 
     const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
     const auto callee{TRY(resolve_value(callee_ref, src))};
+    if (const auto generic{callee.as_opt<generic_ref>()}) {
+        std::vector<call_arg> values;
+        for (const auto arg : args) {
+            values.emplace_back(call_arg{.value = TRY(resolve_value(arg, src)), .written = arg});
+        }
+
+        return call_generic(*generic->fn, std::move(values), src, callee_src.value_or(src));
+    }
+
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a value"); }
 
@@ -51,17 +60,36 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
         if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion"); }
     }
 
-    // Only a type's own function is called through it here
-    const auto object{TRY(resolve_value(object_ref, src))};
+    const auto object{TRY(resolve(object_ref, src))};
     const auto index{comptime_value(object)};
     if (!index || !comp_.constants().is_type(*index)) {
-        return comp_.unsupported(u_, src, "a method call");
+        if (const auto through_vtable{TRY(call_dyn(object, name, args, src))}) {
+            return *through_vtable;
+        }
+
+        const auto owner{receiver_type(object)};
+        if (!owner) { return comp_.unsupported(u_, src, "a call through a field"); }
+        return call_method(*owner, object_ref, name, args, src);
     }
 
-    const auto member{TRY(member_of(comp_.constants().type_at(*index), name, src))};
+    auto&      owner{comp_.constants().type_at(*index)};
+    const auto member{TRY(member_of(owner, name, src))};
+    if (const auto generic{member.as_opt<generic_ref>()}) {
+        std::vector<call_arg> values;
+        for (const auto arg : args) {
+            values.emplace_back(call_arg{.value = TRY(resolve_value(arg, src)), .written = arg});
+        }
+
+        return call_generic(*generic->fn, std::move(values), src, src);
+    }
+
     const auto fn{member.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a member value"); }
-    return call_function(*fn->fn, args, src, src, true);
+
+    // A plain type's static function is called by name, a ctor instance's or a method directly
+    const auto n{comp_.nominal_of(owner)};
+    const bool by_name{!fn->fn->self_modifier && !(n && n->in_call)};
+    return call_function(*fn->fn, args, src, src, by_name);
 }
 
 auto analyzer::call_function(instance&            target,
@@ -77,23 +105,60 @@ auto analyzer::call_function(instance&            target,
             fmt::format("Expected {} arguments, found {}", target.params.size(), args.size()));
     }
 
+    std::vector<operand> values;
+    values.reserve(args.size());
+    for (const auto arg : args) { values.emplace_back(TRY(resolve_value(arg, src))); }
+    return call_with(target, std::move(values), src, through_member);
+}
+
+auto analyzer::call_with(instance&            target,
+                         std::vector<operand> args,
+                         const source&        src,
+                         bool                 through_member) -> result<operand> {
+    TRY(comp_.infer_return(target, u_, src));
+
     // A call returning `type` always runs at compile time
-    if (is_comptime()) { return call_at_comptime(target, args, src); }
-    if (target.comptime_only) {
-        auto value{[&] {
-            const auto scope{comptime_scope()};
-            return call_at_comptime(target, args, src);
+    if (is_comptime() || target.comptime_only) {
+        auto value{[&] -> result<operand> {
+            const auto             scope{comptime_scope()};
+            std::vector<ip::index> values;
+            values.reserve(args.size());
+            for (usize i{0}; i < args.size(); ++i) {
+                if (target.params[i]->get_kind() == gs::type_kind::TYPE &&
+                    !target.bindings.empty()) {
+                    values.emplace_back(*comptime_value(args[i]));
+                    continue;
+                }
+
+                const auto coerced{TRY(coerce_to(args[i],
+                                                 *target.params[i],
+                                                 src,
+                                                 {.what      = use_site::kind::ARGUMENT,
+                                                  .arg_index = i + 1,
+                                                  .callee    = target.symbol}))};
+                values.emplace_back(TRY(require_comptime(coerced, src)));
+            }
+
+            return comp_.call_comptime(u_, src, target, std::move(values));
         }()};
+        if (is_comptime()) { return value; }
         return at_comptime_boundary(std::move(value));
     }
 
     std::vector<gir::value> values;
     values.reserve(args.size());
     for (usize i{0}; i < args.size(); ++i) {
-        const auto arg{TRY(resolve_value(args[i], src))};
+        auto& param{*target.params[i]};
+
+        // A type parameter's slot is left undefined, since the instance already knows it
+        if (param.get_kind() == gs::type_kind::TYPE && !target.bindings.empty()) {
+            values.emplace_back(constant(*comptime_value(args[i]), param));
+            continue;
+        }
+
         const auto coerced{TRY(coerce_to(
-            arg,
-            *target.params[i],
+            args[i],
+            param,
             src,
             {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
         values.emplace_back(TRY(as_runtime(coerced, src)));
@@ -116,23 +181,6 @@ auto analyzer::call_function(instance&            target,
             : builder_.emit_call(target.symbol, std::move(values), ret)};
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
-}
-
-auto analyzer::call_at_comptime(instance& target, gsl::span<const ref> args, const source& src)
-    -> result<operand> {
-    std::vector<ip::index> values;
-    values.reserve(args.size());
-    for (usize i{0}; i < args.size(); ++i) {
-        const auto arg{TRY(resolve_value(args[i], src))};
-        const auto coerced{TRY(coerce_to(
-            arg,
-            *target.params[i],
-            src,
-            {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
-        values.emplace_back(TRY(require_comptime(coerced, src)));
-    }
-
-    return comp_.call_comptime(u_, src, target, std::move(values));
 }
 
 } // namespace ghoti::uir::sema

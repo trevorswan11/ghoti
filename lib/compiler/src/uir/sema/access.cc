@@ -94,7 +94,10 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
     }
 
     if (const auto s{op.as_opt<slot_value>()}) {
-        return place{.address = s->address, .pointee = s->type, .is_mutable = s->is_mutable};
+        return place{.address    = s->address,
+                     .pointee    = s->type,
+                     .is_mutable = s->is_mutable,
+                     .owned_copy = s->owned_copy};
     }
 
     if (const auto g{op.as_opt<global_ref>()}) { return global_place(*g->symbol, *g->type, true); }
@@ -119,9 +122,17 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
 
     const auto value{TRY(as_runtime(op, src))};
     auto&      type{*value.type};
-    const auto slot{spill(value, type, to_entry)};
+    auto       slot{spill(value, type, to_entry)};
     if (binding) {
-        values_.insert_or_assign(*inst, slot_value{.address = slot.address, .type = &type});
+        slot.owned_copy = mod().tag_of(*inst) == tag::param && op.is<gir::value>();
+        // An immutable pointer or reference binding never changes, so its reads keep the value
+        const bool unchanged{op.is<gir::value>() && gs::pointee_of(type)};
+        values_.insert_or_assign(
+            *inst,
+            slot_value{.address    = slot.address,
+                       .type       = &type,
+                       .origin     = unchanged ? stdx::option<gir::value>{value} : stdx::none,
+                       .owned_copy = slot.owned_copy});
     }
 
     return slot;
@@ -145,19 +156,33 @@ auto analyzer::binding_view(ref r, gs::type& type) -> gs::type& {
     }
 }
 
+namespace {
+
+// A pointer or reference whose pointee may be written: `mut?` isn't, since a call decides it
+[[nodiscard]] auto writable_through(const gs::type& type) -> bool {
+    return !type.is_constant() && !type.is_poly();
+}
+
+} // namespace
+
+auto element_view(gs::context& ctx, gs::type& elem, bool constant) -> gs::type& {
+    if (gs::pointee_of(elem) || elem.get_kind() == gs::type_kind::SLICE) { return elem; }
+    return *ctx.pool.with_const(elem, constant);
+}
+
 auto analyzer::through_pointer(const place& base, const source& src) -> result<place> {
     auto& type{*base.pointee};
     if (const auto r{type.get_data().as_opt<gs::types::reference>()}) {
         const auto loaded{load(base)};
         return place{
-            .address = loaded, .pointee = &r->underlying, .is_mutable = !type.is_constant()};
+            .address = loaded, .pointee = &r->underlying, .is_mutable = writable_through(type)};
     }
 
     if (const auto p{type.get_data().as_opt<gs::types::pointer>()}) {
         const auto loaded{load(base)};
         TRY(check_not_null(loaded, src));
         return place{
-            .address = loaded, .pointee = &p->underlying, .is_mutable = !type.is_constant()};
+            .address = loaded, .pointee = &p->underlying, .is_mutable = writable_through(type)};
     }
 
     return base;
@@ -189,6 +214,13 @@ auto analyzer::mutable_view(gs::type& field, bool through_mutable) -> gs::type& 
     if (!array || !through_mutable || !field.is_constant()) { return field; }
     return comp_.ctx().get_array(
         gs::types::mut::MUTABLE, array->null_terminated, array->len, array->underlying);
+}
+
+auto analyzer::immutable_view(gs::type& field) -> gs::type& {
+    const auto array{field.get_data().as_opt<gs::types::array>()};
+    if (!array || field.is_constant()) { return field; }
+    return comp_.ctx().get_array(
+        gs::types::mut::CONSTANT, array->null_terminated, array->len, array->underlying);
 }
 
 auto analyzer::field_place(const place& object, std::string_view name, const source& src)
@@ -227,7 +259,7 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     const auto index{TRY(field_index(type, name, src))};
     if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}) {
         auto& declared{ut->type_at(index)};
-        auto& field_type{mutable_view(declared, base.is_mutable)};
+        auto& field_type{mutable_view(declared, base.is_mutable || base.owned_copy)};
         if (ut->is_untagged) {
             return place{.address    = gir::value{base.address.data, field_type},
                          .pointee    = &field_type,
@@ -245,8 +277,11 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
         };
     }
 
-    auto& field_type{
-        mutable_view(type.get_data().as<gs::types::struct_t>().type_at(index), base.is_mutable)};
+    // Through a `mut?` pointer an array field's elements read as immutable
+    auto&      declared{type.get_data().as<gs::types::struct_t>().type_at(index)};
+    auto&      field_type{object.pointee->is_poly()
+                              ? immutable_view(declared)
+                              : mutable_view(declared, base.is_mutable || base.owned_copy)};
     const auto at{builder_.emit_get_element_ptr(base.address, {usize_constant(index)}, field_type)};
     return place{
         .address    = gir::value{at, field_type},
@@ -413,7 +448,7 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
             TRY(bounds_check(compared(), bound, arr->null_terminated, src));
         }
 
-        auto&      elem{*ctx.pool.with_const(arr->underlying, type.is_constant())};
+        auto&      elem{element_view(ctx, arr->underlying, type.is_constant())};
         const auto at{builder_.emit_get_element_ptr(base.address, {index}, elem)};
         return place{
             .address    = gir::value{at, elem},
@@ -446,10 +481,11 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
             TRY(bounds_check(checked, bound, false, src));
         }
 
-        auto&      elem{*ctx.pool.with_const(s->underlying, type.is_constant())};
+        auto&      elem{element_view(ctx, s->underlying, type.is_constant())};
         const auto at{builder_.emit_get_element_ptr(gir::value{ptr, ptr_type}, {index}, elem)};
-        return place{
-            .address = gir::value{at, elem}, .pointee = &elem, .is_mutable = !type.is_constant()};
+        return place{.address    = gir::value{at, elem},
+                     .pointee    = &elem,
+                     .is_mutable = writable_through(type)};
     }
 
     return comp_.unsupported(u_, src, fmt::format("indexing a `{}`", type.to_string()));
@@ -495,10 +531,14 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     const auto& src{src_of(inst)};
     const auto  operand_ref{*rec.ref_field()};
     const auto  bits{rec.u32_field()};
-    const bool  is_mut{(bits & flags::MUT) != 0};
-    const auto  target{TRY(resolve(operand_ref, src))};
-    auto&       ctx{comp_.ctx()};
-    const auto  mut{is_mut ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT};
+
+    // `&mut?` takes the mutability of what it refers to, so it never requires a mutable place
+    const bool is_mut{(bits & flags::MUT) != 0 && (bits & flags::POLY) == 0};
+    const auto target{TRY(resolve(operand_ref, src))};
+    auto&      ctx{comp_.ctx()};
+    const auto mut{(bits & flags::POLY) != 0 ? gs::types::mut::POLY
+                   : is_mut                  ? gs::types::mut::MUTABLE
+                                             : gs::types::mut::CONSTANT};
 
     // `^T` of a type is the pointer type
     if (const auto index{comptime_value(target)}; index && comp_.constants().is_type(*index)) {
@@ -546,7 +586,7 @@ auto analyzer::pointer_place(const operand& ptr, const source& src) -> result<pl
 
     const auto value{TRY(as_runtime(ptr, src))};
     TRY(check_not_null(value, src));
-    return place{.address = value, .pointee = &*referent, .is_mutable = !type.is_constant()};
+    return place{.address = value, .pointee = &*referent, .is_mutable = writable_through(type)};
 }
 
 auto analyzer::analyze_deref(inst_id inst) -> result<operand> {

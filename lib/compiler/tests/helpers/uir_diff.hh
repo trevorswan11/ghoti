@@ -39,6 +39,8 @@ enum class uir_diff_status : u8 {
     // An immutable `let` initialized by a call, which the old emitter folds and UIR doesn't
     FOLD_PLACEMENT,
     SEMANTICS_CHANGE,
+    // Only parameterized impl methods nothing uses differ, which the old pipeline expands
+    ON_USE_IMPL,
     GIR_DIFF,
     ASTGEN_FAILED,
     // The old pipeline rejected the program, so there is nothing to compare against

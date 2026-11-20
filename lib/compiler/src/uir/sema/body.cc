@@ -56,6 +56,7 @@ namespace {
     case well_known::comptime_float_type: return builtin(gs::type_kind::COMPTIME_FLOAT);
     case well_known::opaque_type:         return builtin(gs::type_kind::OPAQUE);
     case well_known::nullptr_type:        return builtin(gs::type_kind::NULLPTR);
+    case well_known::auto_type:           return builtin(gs::type_kind::AUTO);
     default:                              return stdx::none;
     }
 }
@@ -67,8 +68,8 @@ analyzer::analyzer(compilation& comp, const unit& u, stdx::option<decl_id> decla
       alloc_base_{comp.alloc_count()} {}
 
 analyzer::analyzer(compilation& comp, const unit& u, instance& fn, gir::function& gir_fn) noexcept
-    : comp_{comp}, u_{u}, fn_{fn}, gir_fn_{gir_fn}, frame_{comp.next_frame()},
-      alloc_base_{comp.alloc_count()} {}
+    : comp_{comp}, u_{u}, fn_{fn}, gir_fn_{gir_fn}, captures_{fn.captures}, scope_{fn.scope},
+      self_type_{fn.self_type}, frame_{comp.next_frame()}, alloc_base_{comp.alloc_count()} {}
 
 analyzer::~analyzer() { comp_.release_allocs(alloc_base_); }
 
@@ -99,18 +100,25 @@ auto analyzer::analyze_function() -> result<void> {
     builder_.set_insert_point(*gir_fn_, gir_fn_->add_segment());
 
     record_reader rec{record(fn_->func)};
-    const auto    params{rec.body_field()};
+    const auto    params{params_of(mod(), rec.body_field())};
     rec.skip_body();
     const auto body{rec.body_field()};
-    for (usize i{0}; const auto param : params) {
+    for (usize i{0}, slot{0}; const auto param : params) {
+        const auto binding{fn_->bindings.empty() ? stdx::option<param_binding>{}
+                                                 : stdx::option<param_binding>{fn_->bindings[i]}};
+        ++i;
+        if (binding && binding->value) { TRY(bind_comptime_param(param, *binding->value)); }
+        if (binding && !binding->has_slot) { continue; }
+
         record_reader p{record(param)};
         const auto    name{p.str_field()};
         p.skip_body().skip_body();
         const auto  param_flags{p.u32_field()};
-        auto&       type{*fn_->params[i++]};
+        auto&       type{*fn_->params[slot++]};
         const bool  discarded{(param_flags & flags::PARAM_DISCARDED) != 0 || name == "_"};
-        const auto& slot{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
-        const gir::value value{slot.id, type};
+        const auto& added{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
+        const gir::value value{added.id, type};
+        if (binding && binding->value) { continue; }
 
         // A slice parameter is passed in a slot of its own, and a written one is spilled to one
         if (type.get_kind() == gs::type_kind::SLICE) {
@@ -130,6 +138,11 @@ auto analyzer::analyze_function() -> result<void> {
     const auto out{analyze_body(body)};
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
+
+    // An inferred return type with no `return` to fix it is `void`
+    if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
+        fn_->return_type = &builtin(gs::type_kind::VOID_);
+    }
 
     auto& ret{*fn_->return_type};
     if (ret.get_kind() == gs::type_kind::VOID_) {
@@ -176,6 +189,8 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::float_lit:       return analyze_float_lit(inst);
     case tag::int_type:        return analyze_int_type(inst);
     case tag::func:            return analyze_func(inst);
+    case tag::capture:         return analyze_capture(inst);
+    case tag::closure:         return analyze_closure(inst);
 
     case tag::add:
     case tag::sub:
@@ -240,6 +255,8 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::struct_decl:     return analyze_nominal_decl(inst, gs::type_kind::STRUCT);
     case tag::union_decl:      return analyze_nominal_decl(inst, gs::type_kind::UNION);
     case tag::enum_decl:       return analyze_nominal_decl(inst, gs::type_kind::ENUM);
+    case tag::interface_decl:  return analyze_interface_decl(inst);
+    case tag::dyn_type:        return analyze_dyn_type(inst);
 
     case tag::implicit_access: return enum_literal{inst};
     case tag::init_struct:     return analyze_init_struct(inst);
@@ -346,6 +363,7 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         },
         [](const gir::value& v) -> gs::type& { return *v.type; },
         [](const function_ref& f) -> gs::type& { return *f.fn->type; },
+        [&](const generic_ref&) -> gs::type& { return builtin(gs::type_kind::AUTO); },
         [](const place& p) -> gs::type& { return *p.pointee; },
         [&](merge_ref m) -> gs::type& { return type_of(merges_[m.index].arrivals.front().value); },
         [](const global_ref& g) -> gs::type& { return *g.type; },

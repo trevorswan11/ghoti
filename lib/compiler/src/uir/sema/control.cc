@@ -320,6 +320,16 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
+
+    // An inferred return type is the first returned value's
+    if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
+        if (is_untyped_literal(value)) {
+            return comp_.unsupported(u_, src, "an untyped literal as an inferred return");
+        }
+
+        fn_->return_type = &inferred_type(value);
+    }
+
     auto&      ret{*fn_->return_type};
     const auto returned{TRY(coerce_to(value, ret, src, {.what = use_site::kind::RETURN}))};
     if (is_comptime()) {

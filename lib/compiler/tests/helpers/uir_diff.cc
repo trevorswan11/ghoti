@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/interfaces/catch_interfaces_capture.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
@@ -55,6 +56,28 @@ namespace {
     return false;
 }
 
+// Whether UIR calls a function the old dump defines but never calls
+[[nodiscard]] auto calls_folded_function(std::string_view uir_text, std::string_view legacy_text)
+    -> bool {
+    for (const auto prefix : {std::string_view{"call @"}, std::string_view{"call \""}}) {
+        for (usize at{uir_text.find(prefix)}; at != std::string_view::npos;
+             at = uir_text.find(prefix, at + 1)) {
+            const auto start{at + prefix.size()};
+            const auto end{uir_text.find_first_of("\"(", start)};
+            if (end == std::string_view::npos) { break; }
+            const auto name{stdx::string::substr(uir_text, start, end - start)};
+            const bool called{
+                legacy_text.find(fmt::format("call @{}(", name)) != std::string_view::npos ||
+                legacy_text.find(fmt::format("call \"{}\"(", name)) != std::string_view::npos};
+            const bool defined{legacy_text.find(fmt::format("fn {}(", name)) !=
+                               std::string_view::npos};
+            if (!called && defined) { return true; }
+        }
+    }
+
+    return false;
+}
+
 // Whether UIR calls a function with only constant arguments that the old dump never calls
 [[nodiscard]] auto has_folded_call(std::string_view uir_text, std::string_view legacy_text)
     -> bool {
@@ -73,7 +96,27 @@ namespace {
             return true;
         }
     }
-    return false;
+
+    return calls_folded_function(uir_text, legacy_text);
+}
+
+// The old dump without the parameterized impl methods UIR's dump doesn't define
+[[nodiscard]] auto without_unused_impl_methods(std::string_view legacy_text,
+                                               std::string_view uir_text) -> std::string {
+    std::string kept;
+    for (usize at{0}; at < legacy_text.size();) {
+        const auto next{legacy_text.find("\nfn ", at + 1)};
+        const auto end{next == std::string_view::npos ? legacy_text.size() : next + 1};
+        const auto function{stdx::string::substr(legacy_text, at, end - at)};
+        const auto header_end{function.find('(')};
+        const auto name{stdx::string::substr(function, 0, header_end)};
+        const bool unused_impl_method{function.starts_with("fn pimpl#") &&
+                                      uir_text.find(name) == std::string_view::npos};
+        if (!unused_impl_method) { kept += function; }
+        at = end;
+    }
+
+    return kept;
 }
 
 [[nodiscard]] auto dump_with_flags(const gir::module_t& gir_mod) -> std::string {
@@ -143,6 +186,7 @@ auto uir_diff_status_name(uir_diff_status status) noexcept -> std::string_view {
     case uir_diff_status::REJECTED:         return "rejected";
     case uir_diff_status::FOLD_PLACEMENT:   return "fold-placement";
     case uir_diff_status::SEMANTICS_CHANGE: return "semantics-change";
+    case uir_diff_status::ON_USE_IMPL:      return "on-use-impl";
     case uir_diff_status::GIR_DIFF:         return "gir-diff";
     case uir_diff_status::ASTGEN_FAILED:    return "astgen-failed";
     case uir_diff_status::LEGACY_REJECTED:  return "legacy-rejected";
@@ -197,6 +241,9 @@ auto diff_pipelines(mod::source_loader&          loader,
     if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
         return {.status = uir_diff_status::FOLD_PLACEMENT};
     }
+    if (without_unused_impl_methods(legacy_text, uir_text) == uir_text) {
+        return {.status = uir_diff_status::ON_USE_IMPL};
+    }
     return {.status = uir_diff_status::GIR_DIFF,
             .detail = fmt::format("--- old\n{}--- uir\n{}", legacy_text, uir_text)};
 }
@@ -244,7 +291,11 @@ auto report_uir_diff(const uir_diff& diff) -> void {
     std::ofstream out{std::string{*path}, std::ios::app | std::ios::binary};
     std::string   flat{diff.status == uir_diff_status::GIR_DIFF ? "" : diff.detail};
     std::ranges::replace(flat, '\n', ' ');
-    fmt::println(out, "{}\t{}", uir_diff_status_name(diff.status), flat);
+    fmt::println(out,
+                 "{}\t{}\t{}",
+                 uir_diff_status_name(diff.status),
+                 Catch::getResultCapture().getCurrentTestName(),
+                 flat);
 }
 
 } // namespace ghoti::tests::helpers

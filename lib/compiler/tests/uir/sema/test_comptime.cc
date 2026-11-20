@@ -472,13 +472,22 @@ TEST_CASE("Const eval folds @export to void and the resolver names the entry poi
 }
 
 TEST_CASE("Const eval folds method call on struct instance", "[uir]") {
-    check_later_phase(
-        "const Point = struct { x: i32, pub const sum = fn(self): i32 { return self.x; }; };",
-        "self parameter");
+    const auto run{accepted(R"(
+        const Point = struct { x: i32, pub const sum = fn(self): i32 { return self.x; }; };
+        const p = Point{ .x = 4 };
+        const s = p.sum();
+    )")};
+    CHECK(run.int_value("s") == 4);
 }
 
 TEST_CASE("Const eval folds impl method call", "[uir]") {
-    check_later_phase("const Rect = struct { w: i32, h: i32 };\nimpl Rect {}", "`impl` block");
+    const auto run{accepted(R"(
+        const Rect = struct { w: i32, h: i32 };
+        impl Rect { pub const area = fn(self): i32 { return self.w * self.h; }; }
+        const r = Rect{ .w = 6, .h = 7 };
+        const a = r.area();
+    )")};
+    CHECK(run.int_value("a") == 42);
 }
 
 TEST_CASE("unlabeled comptime block in statement position executes at compile time", "[uir]") {
@@ -564,8 +573,9 @@ TEST_CASE("`unroll for` iterating over `[]u8` parameter", "[uir]") {
             unroll for (digits) |c| { n = n * 10 + @intCast(usize, c - '0'); }
             return n;
         };
+        const parsed = parse_usize("42");
     )",
-                      "comptime");
+                      "a slice of a compile-time array");
 }
 
 TEST_CASE("`loop` infinite loop expression in `const_eval`", "[uir]") {
@@ -621,8 +631,14 @@ TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order", "
 TEST_CASE("`errdefer` in `const_eval`", "[uir]") {
     check_later_phase(R"(
         const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+        const R = Result(i32, i32);
+        comptime let mut err_log: i32 = 0;
+        const test_err = fn(): R {
+            errdefer |e| err_log = e;
+            return R{ .err = 42 };
+        };
     )",
-                      "comptime");
+                      "comptime declaration");
 }
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir]") {

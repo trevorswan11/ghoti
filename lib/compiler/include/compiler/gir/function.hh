@@ -55,7 +55,7 @@ class function {
              bool            is_variadic = false,
              gir::linkage    linkage     = linkage::INTERNAL,
              std::string     abi_name    = "c") noexcept
-        : arena_{arena}, constants_{constants}, name_{std::move(name)}, type_{type},
+        : arena_{arena}, constants_{constants}, name_{std::move(name)}, type_{&type},
           is_test_{is_test}, is_comptime_{is_comptime}, is_variadic_{is_variadic},
           linkage_{linkage}, abi_name_{std::move(abi_name)} {}
     ~function() = default;
@@ -64,7 +64,7 @@ class function {
     [[nodiscard]] auto constants() const noexcept -> const ip::pool& { return constants_; }
 
     MAKE_GETTER(name, std::string_view);
-    MAKE_GETTER(type, sema::type&);
+    [[nodiscard]] auto get_type() const noexcept -> sema::type& { return *type_; }
     MAKE_GETTER(is_test, bool);
     MAKE_GETTER(is_comptime, bool);
     MAKE_GETTER(is_variadic, bool);
@@ -97,6 +97,8 @@ class function {
     auto               add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
+    // A signature whose return type its body infers is only complete once the body is analyzed
+    auto set_type(sema::type& type) -> void { type_ = &type; }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
     auto set_linkage(gir::linkage linkage) -> void { linkage_ = linkage; }
     auto set_attributes(const sema::resolved_attributes& attributes) -> void {
@@ -143,7 +145,7 @@ class function {
     const ip::pool&                        constants_;
     std::string                            name_;
     std::string                            source_name_;
-    sema::type&                            type_;
+    gsl::not_null<sema::type*>             type_;
     std::vector<gsl::not_null<parameter*>> params_;
     std::vector<gsl::not_null<segment*>>   segments_;
     usize                                  next_local_index_{0};

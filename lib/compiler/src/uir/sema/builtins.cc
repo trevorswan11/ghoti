@@ -182,6 +182,8 @@ auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> resul
 
 auto analyzer::builtin_this(const source& src) -> result<operand> {
     // The type whose namespace holds the declaration being analyzed
+    if (self_type_) { return interned_type(*self_type_); }
+    if (scope_) { return interned_type(*scope_->type); }
     const auto decl{fn_ ? stdx::option<decl_id>{fn_->decl} : declaring_};
     const auto owner{decl ? mod().decl_at(*decl).owner : stdx::none};
     if (!owner) { return comp_.unsupported(u_, src, "`@This` outside a type"); }

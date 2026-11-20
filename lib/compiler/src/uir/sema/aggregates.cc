@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/hash.hh>
@@ -17,6 +18,7 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/module/module.hh"
@@ -37,9 +39,10 @@ constexpr usize NOMINAL_TABLE_BASE{usize{1} << 48};
 
 [[nodiscard]] auto default_name(gs::type_kind kind) -> std::string_view {
     switch (kind) {
-    case gs::type_kind::UNION: return "union";
-    case gs::type_kind::ENUM:  return "enum";
-    default:                   return "struct";
+    case gs::type_kind::UNION:     return "union";
+    case gs::type_kind::ENUM:      return "enum";
+    case gs::type_kind::INTERFACE: return "interface";
+    default:                       return "struct";
     }
 }
 
@@ -67,11 +70,39 @@ auto nominal_key_hash::operator()(const nominal_key& key) const noexcept -> u64 
     return h.finalize();
 }
 
+auto compilation::instance_display_name(const instance& call) -> std::string {
+    std::vector<std::string> args;
+    for (const auto& binding : call.bindings) {
+        if (!binding.value) { continue; }
+        if (constants().is_type(*binding.value)) {
+            args.emplace_back(ctx_.type_display_name(constants().type_at(*binding.value)));
+            continue;
+        }
+
+        args.emplace_back(gir::const_value::from_interned(constants(), *binding.value).mangle());
+    }
+
+    const auto name{call.source_name.empty() ? std::string_view{call.symbol}
+                                             : std::string_view{call.source_name}};
+    return fmt::format("{}({})", name, fmt::join(args, ", "));
+}
+
+auto compilation::call_identity(const comptime_frame& frame) -> std::vector<ip::index> {
+    // A generic's instance binds some parameters before the call, so they are part of it too
+    std::vector<ip::index> args;
+    for (const auto& binding : frame.key->fn->bindings) {
+        if (binding.value) { args.emplace_back(*binding.value); }
+    }
+
+    args.insert(args.end(), frame.key->args.begin(), frame.key->args.end());
+    return args;
+}
+
 auto compilation::declare_nominal(const unit& u, inst_id inst, gs::type_kind kind) -> nominal& {
     nominal_key key{
         .unit = u.index,
         .inst = inst,
-        .args = calls_.empty() ? std::vector<ip::index>{} : calls_.back().key->args,
+        .args = calls_.empty() ? std::vector<ip::index>{} : call_identity(calls_.back()),
     };
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {
         return *nominals_[found->second];
@@ -91,6 +122,15 @@ auto compilation::declare_nominal(const unit& u, inst_id inst, gs::type_kind kin
         .enum_values = {},
     }))};
     nominal_ids_.emplace(std::move(key), id);
+
+    // A ctor instance's type is named for the call, and its members under the call's symbol
+    if (!calls_.empty()) {
+        const auto& call{*calls_.back().key->fn};
+        n.symbol_prefix = call.symbol;
+        n.name          = instance_display_name(call);
+        n.creator.emplace(call);
+    }
+
     ctx_.user_type_names.insert_or_assign(&type, lasting_name(n.name));
     return n;
 }
@@ -143,7 +183,8 @@ auto compilation::require_fields(const unit& u, const source& use, gs::type& t) 
     }
 
     n->state = nominal_state::FIELDS_RESOLVING;
-    analyzer   a{*this, *n->owner};
+    analyzer a{*this, *n->owner};
+    a.enter(*n);
     const auto resolved{a.resolve_fields(*n)};
     n->state = resolved ? nominal_state::RESOLVED : nominal_state::FAILED;
     if (!resolved) { return stdx::err{resolved.error()}; }
@@ -166,7 +207,34 @@ auto analyzer::analyze_nominal_decl(inst_id inst, gs::type_kind kind) -> result<
         return comp_.unsupported(u_, src_of(inst), "a type declared in a runtime body");
     }
 
-    return interned_type(*comp_.declare_nominal(u_, inst, kind).type);
+    auto  captures{TRY(captured_values(inst, kind))};
+    auto& n{comp_.declare_nominal(u_, inst, kind)};
+    if (n.state == nominal_state::DECLARED && n.captures.empty()) {
+        n.captures = std::move(captures);
+    }
+
+    return interned_type(*n.type);
+}
+
+auto analyzer::captured_values(inst_id inst, gs::type_kind kind) -> result<std::vector<ip::index>> {
+    auto rec{record(inst)};
+    rec.skip_u32();
+    if (kind == gs::type_kind::UNION) { rec.skip_u32().skip_body(); }
+    if (kind == gs::type_kind::ENUM) { rec.skip_body(); }
+
+    const auto&            src{src_of(inst)};
+    const auto             count{rec.count()};
+    std::vector<ip::index> values;
+    for (u32 i{0}; i < count; ++i) {
+        const auto value_ref{*rec.ref_field()};
+        rec.skip_u32().skip_str();
+        const auto value{TRY(resolve_value(value_ref, src))};
+        const auto index{comptime_value(value)};
+        if (!index) { return comp_.unsupported(u_, src, "a type that captures a runtime value"); }
+        values.emplace_back(*index);
+    }
+
+    return values;
 }
 
 auto analyzer::resolve_fields(nominal& n) -> result<void> {
@@ -211,9 +279,7 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         return comp_.unsupported(u_, src, "a packed struct");
     }
 
-    if (skip_captures(rec) != 0) {
-        return comp_.unsupported(u_, src, "a type that captures locals");
-    }
+    DISCARD(skip_captures(rec));
 
     const auto& expr{ast_of<ast::struct_expr>(u_, src)};
 
@@ -256,9 +322,7 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         return comp_.unsupported(u_, src, "a packed union");
     }
 
-    if (skip_captures(rec) != 0) {
-        return comp_.unsupported(u_, src, "a type that captures locals");
-    }
+    DISCARD(skip_captures(rec));
 
     stdx::option<gs::type&> tag_enum;
     bool                    void_tag{false};
@@ -317,9 +381,7 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
     const auto& src{src_of(n.inst)};
     const auto  enum_flags{rec.u32_field()};
     const auto  underlying_body{rec.body_field()};
-    if (skip_captures(rec) != 0) {
-        return comp_.unsupported(u_, src, "a type that captures locals");
-    }
+    DISCARD(skip_captures(rec));
 
     auto& ctx{comp_.ctx()};
     auto& underlying{underlying_body.empty()
@@ -407,17 +469,18 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     const auto n{comp_.nominal_of(owner)};
     if (!n) { return comp_.unsupported(u_, src, "a member of a type UIR didn't declare"); }
-    if (n->in_call) {
-        return comp_.unsupported(u_, src, "a member of a type a comptime call created");
-    }
-
     const auto& owner_mod{*n->owner->uir};
     if (const auto ns{owner_mod.namespace_of(n->inst)}) {
         for (const auto decl : ns->decls) {
             if (owner_mod.string(owner_mod.decl_at(decl).name) == name) {
-                return comp_.analyze_decl(*n->owner, decl, src);
+                return comp_.analyze_member(*n, decl, src);
             }
         }
+    }
+
+    // A member an impl adds to the type
+    for (const auto applied : TRY(comp_.impls_of(owner))) {
+        if (const auto member{TRY(comp_.impl_member(*applied, name, src))}) { return *member; }
     }
 
     return comp_.report(u_,

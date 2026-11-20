@@ -444,7 +444,7 @@ class record_reader {
 
   private:
     template <typename T> auto skip(const T&) noexcept -> record_reader& { return *this; }
-    [[nodiscard]] auto word() noexcept -> u32 { return mod_.extra()[at_++]; }
+    [[nodiscard]] auto         word() noexcept -> u32 { return mod_.extra()[at_++]; }
 
   private:
     const module_t& mod_;

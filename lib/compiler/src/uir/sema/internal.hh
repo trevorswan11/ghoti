@@ -17,6 +17,7 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -64,10 +65,17 @@ struct unit {
 };
 
 struct instance;
+struct generic_fn;
+struct nominal;
 
 // A function declaration used as a value
 struct function_ref {
     gsl::not_null<instance*> fn;
+};
+
+// A function with comptime or inferred parameters, which each call instantiates
+struct generic_ref {
+    gsl::not_null<generic_fn*> fn;
 };
 
 // A tagged union's field whose payload address isn't computed yet (read checks tag before it)
@@ -83,6 +91,8 @@ struct place {
     gsl::not_null<gs::type*>  pointee;
     bool                      is_mutable;
     stdx::option<union_field> pending{};
+    // A by-value parameter's own copy, whose array fields read with mutable elements
+    bool owned_copy{false};
 };
 
 // The values a `for` range's counter takes, which let it convert to any integer holding them all
@@ -115,6 +125,12 @@ struct slot_value {
     bool is_mutable{false};
     // A `for` range capture with known bounds
     stdx::option<value_range> range{};
+    // A comptime parameter's value, which compile-time reads see instead of the slot
+    stdx::option<ip::index> known{};
+    // An immutable binding spilled only to be addressed, whose value reads use directly
+    stdx::option<gir::value> origin{};
+    // A by-value parameter's own copy, whose array fields read with mutable elements
+    bool owned_copy{false};
 };
 
 // An untyped `.{ ... }` literal, which takes the type it is coerced to
@@ -138,6 +154,7 @@ struct global_const {
 using operand = stdx::variant<ip::index,      // a comptime value
                               gir::value,     // a runtime value
                               function_ref,   // a function
+                              generic_ref,    // a generic function
                               place,          // an addressable place
                               merge_ref,      // a pending merge of untyped branch values
                               global_ref,     // a module-level `let mut`
@@ -198,13 +215,22 @@ struct decl_state {
     stdx::option<stdx::box<std::string>> global_symbol{};
 };
 
-// A non-generic function's signature, and the GIR function its body is analyzed into
+// How an instance binds one of its template's parameters
+struct param_binding {
+    // The comptime value it is bound to, none for a runtime parameter
+    stdx::option<ip::index> value;
+    // Whether it has a GIR parameter, which a type parameter keeps though its value is known
+    bool has_slot;
+};
+
+// A function's signature, and the GIR function its body is analyzed into
 struct instance {
-    gsl::not_null<const unit*>            owner;
-    decl_id                               decl;
-    inst_id                               func;
-    std::string                           symbol;
-    gsl::not_null<gs::type*>              type;
+    gsl::not_null<const unit*> owner;
+    decl_id                    decl;
+    inst_id                    func;
+    std::string                symbol;
+    gsl::not_null<gs::type*>   type;
+    // The GIR parameters' types
     std::vector<gsl::not_null<gs::type*>> params;
     gsl::not_null<gs::type*>              return_type;
     gir::linkage                          linkage{gir::linkage::INTERNAL};
@@ -212,6 +238,80 @@ struct instance {
     bool                                  queued{false};
     // Returns `type`, so every call runs at compile time and there is no runtime body
     bool comptime_only{false};
+    // One per UIR parameter of a generic's instance, empty for a non-generic function
+    std::vector<param_binding> bindings{};
+    // The return type is `auto` until the body's first `return` fixes it
+    bool        infers_return{false};
+    bool        analyzed{false};
+    std::string source_name{};
+    // The values the body's `capture`s read
+    std::vector<ip::index> captures{};
+    // The type a member function's `self` has, before its modifier
+    stdx::option<gs::type&> self_type{};
+    // The `self` parameter's modifier, for a method
+    stdx::option<ast::type_modifier::modifier> self_modifier{};
+    // The type whose namespace declares the function
+    stdx::option<nominal&> scope{};
+};
+
+// A function declaration with comptime, `auto` or `type` parameters
+struct generic_fn {
+    gsl::not_null<const unit*> owner;
+    decl_id                    decl;
+    inst_id                    func;
+    std::string                name;
+    bool                       weak{false};
+    std::vector<ip::index>     captures{};
+    stdx::option<gs::type&>    self_type{};
+    stdx::option<nominal&>     scope{};
+};
+
+// What a function declared inside a type sees of it
+struct member_context {
+    std::vector<ip::index>  captures{};
+    stdx::option<gs::type&> self_type{};
+    // The prefix a ctor instance's members are named under: `Box__u8`
+    std::string_view       symbol_prefix{};
+    stdx::option<nominal&> scope{};
+    // The whole symbol, for a function no declaration names: an interface's default method
+    std::string_view symbol{};
+};
+
+// A generic function and every parameter's interned binding: a value, or a runtime type
+struct instance_key {
+    gsl::not_null<const generic_fn*> fn;
+    std::vector<ip::index>           args;
+
+    [[nodiscard]] auto operator==(const instance_key&) const noexcept -> bool = default;
+};
+
+struct instance_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const instance_key& key) const noexcept -> u64;
+};
+
+// An argument of a generic call, with the instruction that computed it when it has one
+struct call_arg {
+    operand           value;
+    stdx::option<ref> written{};
+};
+
+// An `impl` bound on one of a function's parameters
+struct impl_bound {
+    u32              param;
+    std::vector<ref> interfaces;
+};
+
+// A generic call's arguments bound to its template's parameters
+struct generic_binding {
+    instance_key                               key;
+    std::vector<param_binding>                 bindings{};
+    std::vector<gsl::not_null<gs::type*>>      slots{};
+    std::vector<std::string>                   mangled_params{};
+    std::vector<std::string>                   comptime_suffixes{};
+    stdx::option<gs::type&>                    return_type{};
+    bool                                       infers_return{false};
+    stdx::option<ast::type_modifier::modifier> self_modifier{};
 };
 
 // The quotas every compile-time loop and call is bounded by
@@ -239,6 +339,58 @@ struct nominal {
     bool in_call{false};
     // An enum's value for each variant, in declaration order
     std::vector<i64> enum_values{};
+    // The comptime values its `capture`s read
+    std::vector<ip::index> captures{};
+    // The call instance's symbol, which its members are named under
+    std::string symbol_prefix{};
+    // A ctor instance's member declarations, each analyzed for this instance alone
+    ankerl::unordered_dense::map<decl_id, decl_state> members{};
+    // The ctor instance whose call created it
+    stdx::option<const instance&> creator{};
+    // The declaration whose value it is, which an interface's default methods are declared under
+    stdx::option<decl_id> declaring_decl{};
+};
+
+// An `impl` block, registered before any analysis so member lookups can find it
+struct impl_entry {
+    gsl::not_null<const unit*> owner;
+    decl_id                    decl;
+    inst_id                    inst;
+};
+
+// An impl applied to one target type, with its parameters bound for that target
+struct impl_instance {
+    gsl::not_null<const impl_entry*> entry;
+    gsl::not_null<gs::type*>         target;
+    // One per impl parameter
+    std::vector<ip::index>  params;
+    stdx::option<gs::type&> interface;
+    // The prefix a parameterized impl's methods are named under
+    std::string prefix;
+    // Each member declaration's analysis for this target
+    ankerl::unordered_dense::map<decl_id, decl_state> members{};
+    // An interface default method's instance for this target, by method index
+    ankerl::unordered_dense::map<u32, operand> defaults{};
+    // The vtable a `dyn` of the interface uses for this target, once one was made
+    stdx::option<std::string> vtable{};
+};
+
+// One method an interface declares, in vtable order
+struct interface_method {
+    std::string_view name;
+    inst_id          func;
+};
+
+struct impl_key {
+    gsl::not_null<const impl_entry*> entry;
+    gsl::not_null<const gs::type*>   target;
+
+    [[nodiscard]] auto operator==(const impl_key&) const noexcept -> bool = default;
+};
+
+struct impl_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const impl_key& key) const noexcept -> u64;
 };
 
 // A nominal type's instruction and the comptime call it was created in
@@ -254,6 +406,8 @@ struct nominal_key_hash {
     using is_avalanching = void;
     [[nodiscard]] auto operator()(const nominal_key& key) const noexcept -> u64;
 };
+
+class analyzer;
 
 class compilation {
   public:
@@ -282,9 +436,57 @@ class compilation {
         -> result<operand>;
     // Puts the function's body on the work queue
     auto request_body(instance& fn) -> void;
+    // Analyzes a body whose return type is inferred now, since a caller needs that type
+    [[nodiscard]] auto infer_return(instance& fn, const unit& caller, const source& use)
+        -> result<void>;
     // Declares the function `decl`'s `func` value creates, leaving its body for the queue
-    [[nodiscard]] auto declare_function(const unit& u, decl_id decl, inst_id func)
+    [[nodiscard]] auto
+    declare_function(const unit& u, decl_id decl, inst_id func, const member_context& member = {})
         -> result<operand>;
+    // Impls (impls.cc)
+    auto register_impl(const unit& u, decl_id decl) -> void;
+    // Analyzes a plain impl's members, which are roots as every non-generic declaration is
+    auto analyze_impl_roots(const unit& u, decl_id decl) -> void;
+    // Every impl whose target is `target`, applied to it
+    [[nodiscard]] auto impls_of(gs::type& target)
+        -> result<std::vector<gsl::not_null<impl_instance*>>>;
+    // The member `name` an applied impl gives its target, a default method included
+    [[nodiscard]] auto impl_member(impl_instance& applied, std::string_view name, const source& use)
+        -> result<stdx::option<operand>>;
+
+    // `dyn` (dyn.cc)
+    [[nodiscard]] auto interface_methods(const nominal& iface) -> std::vector<interface_method>;
+    // The vtable of an impl's interface for its target, made and its methods requested on first use
+    [[nodiscard]] auto vtable_for(impl_instance& applied, const source& use)
+        -> result<std::string_view>;
+    // Whether an interface declares associated types or constants
+    [[nodiscard]] static auto declares_associated_items(const nominal& iface) -> bool;
+    // The program's root module, whose list of vtables codegen lowers
+    [[nodiscard]] auto root_source() -> mod::module_t&;
+
+    // A member declaration of `n`, analyzed per instance when a comptime call created `n`
+    [[nodiscard]] auto analyze_member(nominal& n, decl_id decl, const source& use)
+        -> result<operand>;
+    // What a function declared in `n`'s namespace sees of it
+    [[nodiscard]] auto member_context_of(nominal& n) -> member_context;
+    // A method's `self` type for its modifier, none for a modifier this phase doesn't handle
+    [[nodiscard]] auto self_param_type(const member_context&        member,
+                                       ast::type_modifier::modifier how) -> stdx::option<gs::type&>;
+
+    // Generic functions (generics.cc)
+    [[nodiscard]] auto is_generic(const unit& u, inst_id func) const -> bool;
+    [[nodiscard]] auto
+    declare_generic(const unit& u, decl_id decl, inst_id func, const member_context& member)
+        -> result<operand>;
+    // The instance a binding names, created on first use
+    [[nodiscard]] auto instance_for(generic_fn& g, generic_binding binding)
+        -> result<gsl::not_null<instance*>>;
+    // A type as a monomorph's symbol spells it
+    [[nodiscard]] auto mangle_type(const gs::type& t) -> std::string;
+    // A function's symbol, under its ctor instance's prefix when it has one
+    [[nodiscard]] auto
+    member_symbol(const unit& u, decl_id decl, inst_id func, const member_context& member)
+        -> result<std::string>;
 
     // Reports a diagnostic at `src`, with the compile-time calls in progress as notes, and returns
     // the poison stop. An identical diagnostic already reported isn't repeated
@@ -305,6 +507,8 @@ class compilation {
     [[nodiscard]] auto symbol_for(const unit& u, decl_id decl, const source& src)
         -> result<std::string>;
     [[nodiscard]] static auto linkage_of(const decl& d) noexcept -> gir::linkage;
+    [[nodiscard]] static auto
+    member_linkage(const unit& u, const decl& d, const member_context& member) -> gir::linkage;
     // Keeps a `let mut` global's symbol alive for the `global_ref`s that name it
     [[nodiscard]] auto own_symbol(const unit& u, decl_id decl, std::string symbol)
         -> const std::string&;
@@ -377,7 +581,39 @@ class compilation {
     using memo_entry = stdx::option<operand>;
 
   private:
-    auto analyze_roots() -> void;
+    // A declaration's value, its analysis state reached through `state_of`
+    // `setup` prepares the analyzer, binding what the declaration's namespace provides
+    template <typename State, typename Setup>
+    [[nodiscard]] auto
+    resolve_decl(const unit& u, decl_id decl, const source& use, State&& state_of, Setup&& setup)
+        -> result<operand>;
+    // How `@typeName` names a type a ctor instance creates: `Box(u8)`
+    [[nodiscard]] auto instance_display_name(const instance& call) -> std::string;
+    // The impl's parameter values for `target`, none when the impl doesn't apply to it
+    [[nodiscard]] auto impl_params_for(const impl_entry& entry, gs::type& target)
+        -> result<stdx::option<std::vector<ip::index>>>;
+    [[nodiscard]] auto impl_interface(const impl_entry& entry) -> result<stdx::option<gs::type&>>;
+    [[nodiscard]] auto impl_symbol_prefix(const impl_entry& entry, gs::type& target) -> std::string;
+    // An impl member declaration, analyzed once per target
+    [[nodiscard]] auto analyze_impl_decl(impl_instance& applied, decl_id decl, const source& use)
+        -> result<operand>;
+    // Binds an impl's parameters and target in the analyzer of one of its members
+    auto enter_impl(impl_instance& applied, analyzer& a) -> void;
+    // What an impl's member functions see of their target
+    [[nodiscard]] auto impl_context(impl_instance& applied) -> member_context;
+    // The interface's default method `name` instantiated for an impl's target
+    [[nodiscard]] auto default_method(impl_instance& applied, std::string_view name)
+        -> result<stdx::option<operand>>;
+    // How many module-level declarations, module-level type members and impl members carry
+    // each name, across every module
+    [[nodiscard]] auto declared_names() -> const ankerl::unordered_dense::map<std::string, u32>&;
+    // The type a declaration's value body declares outright, if any
+    [[nodiscard]] static auto declared_nominal(const unit& u, const decl& d)
+        -> stdx::option<inst_id>;
+    [[nodiscard]] static auto impl_inst_of(const unit& u, const decl& d) -> stdx::option<inst_id>;
+    // What tells a type a compile-time call creates apart from the same call's other instances
+    [[nodiscard]] static auto call_identity(const comptime_frame& frame) -> std::vector<ip::index>;
+    auto                      analyze_roots() -> void;
     // Analyzes the member declarations of a type a module-level declaration declared
     auto analyze_members(const unit& u, gs::type& owner) -> void;
     // The type a declaration's value body declares directly
@@ -402,6 +638,12 @@ class compilation {
     // Instances and nominals are referenced by address, so the arena keeps them in place
     ghoti::arena                                                      arena_;
     std::vector<gsl::not_null<instance*>>                             instances_;
+    std::vector<gsl::not_null<generic_fn*>>                           generics_;
+    std::vector<gsl::not_null<impl_entry*>>                           impls_;
+    ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
+        impl_instances_;
+    ankerl::unordered_dense::map<instance_key, gsl::not_null<instance*>, instance_key_hash>
+                                                                      instances_by_key_;
     std::vector<gsl::not_null<instance*>>                             queue_;
     gir::module_t                                                     gir_;
     gs::diagnostics                                                   diagnostics_;
@@ -416,12 +658,14 @@ class compilation {
     std::vector<gsl::not_null<nominal*>>                              nominals_;
     ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>  nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
+    u32                   vtables_{0};
     stdx::option<lowered> prelude_;
     stdx::option<u32>     prelude_unit_;
     // Per unit, each `and` / `or` that is the left side of another, built on first use
     std::vector<stdx::option<ankerl::unordered_dense::map<inst_id, inst_id>>> bool_parents_;
     // Each GIR symbol a declaration claimed, with the unit and declaration that claimed it
     ankerl::unordered_dense::map<std::string, std::pair<u32, decl_id>> symbols_;
+    stdx::option<ankerl::unordered_dense::map<std::string, u32>>       declared_names_;
 };
 
 // The result of analyzing a body: the value it yields, or none when control left it
@@ -476,6 +720,8 @@ class analyzer {
         -> result<gsl::not_null<gs::type*>>;
     // Analyzes the function's parameters and body into its GIR function
     [[nodiscard]] auto analyze_function() -> result<void>;
+    // Binds a comptime parameter of a runtime body, giving an aggregate a slot runtime reads use
+    [[nodiscard]] auto bind_comptime_param(inst_id param, ip::index value) -> result<void>;
     // A module-level declaration's value, emitting its GIR global when it has one
     [[nodiscard]] auto analyze_decl(decl_id decl) -> result<operand>;
     // Resolves a nominal type's fields, or an enum's values
@@ -486,6 +732,16 @@ class analyzer {
     [[nodiscard]] auto type_of(const operand& op) -> gs::type&;
     [[nodiscard]] auto denoted_type(const operand& op, const source& src)
         -> result<gsl::not_null<gs::type*>>;
+    // Binds a parameter of the signature this analyzer evaluates
+    auto bind(inst_id param, operand value) -> void;
+    // Analyzes one instruction of a signature body that isn't a parameter
+    [[nodiscard]] auto prepare(inst_id inst) -> result<void>;
+    // The operand a signature's instruction produced
+    [[nodiscard]] auto value_of(ref r, const source& src) -> result<operand>;
+    // Analyzes what follows as declared in `n`'s namespace, reading its captures
+    auto enter(nominal& n) -> void;
+    // Analyzes what follows reading `member`'s captures, in its type's namespace
+    auto enter(const member_context& member) -> void;
 
   private:
     // A break or repeat destination, and what reaches its merge
@@ -534,6 +790,12 @@ class analyzer {
         gir::value                container;
         bool                      is_slice;
         stdx::option<value_range> values{};
+    };
+
+    // A method's `self` argument, and the mutability of the object it came from
+    struct receiver_arg {
+        operand                              value;
+        gs::types::mut::mutability_modifiers mut;
     };
 
     // One `match` arm as UIR lists it
@@ -590,6 +852,35 @@ class analyzer {
     [[nodiscard]] auto analyze_float_lit(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_int_type(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_func(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_capture(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_closure(inst_id inst) -> result<operand>;
+    // What a function this analyzer declares sees of the type around it
+    [[nodiscard]] auto member_context_here() -> member_context;
+    // Whether the declaration's value is a closure of `func`, which declares it instead
+    [[nodiscard]] auto closure_declares(inst_id func) const -> bool;
+
+    // Methods (members.cc)
+    // The `self` argument a method takes from its object
+    [[nodiscard]] auto receiver(ast::type_modifier::modifier how,
+                                gs::type&                    self_type,
+                                ref                          object_ref,
+                                const source&                src) -> result<receiver_arg>;
+    // The modifier a method's `self` parameter is written with, none for a plain function
+    [[nodiscard]] auto self_modifier_of(const unit& u, inst_id func) const
+        -> stdx::option<ast::type_modifier::modifier>;
+    // The type whose methods an object's calls reach, through one pointer or reference
+    [[nodiscard]] auto receiver_type(const operand& object) -> stdx::option<gs::type&>;
+    // A `mut?` pointer or reference type resolved to one call's mutability
+    [[nodiscard]] auto with_mutability(gs::type& type, gs::types::mut::mutability_modifiers mut)
+        -> gs::type&;
+    // The mutability of an object a method reaches through a pointer or reference
+    [[nodiscard]] static auto place_mutability(const place& base, const place& object)
+        -> gs::types::mut::mutability_modifiers;
+    [[nodiscard]] auto call_method(gs::type&            owner,
+                                   ref                  object_ref,
+                                   std::string_view     name,
+                                   gsl::span<const ref> args,
+                                   const source&        src) -> result<operand>;
     // `^T`, `&T` and `[]T`
     [[nodiscard]] auto analyze_elem_type(inst_id inst, tag t) -> result<operand>;
     [[nodiscard]] auto analyze_array_type(inst_id inst) -> result<operand>;
@@ -598,6 +889,21 @@ class analyzer {
 
     // Nominal types (aggregates.cc)
     [[nodiscard]] auto analyze_nominal_decl(inst_id inst, gs::type_kind kind) -> result<operand>;
+    [[nodiscard]] auto analyze_interface_decl(inst_id inst) -> result<operand>;
+
+    // `dyn` (dyn.cc)
+    [[nodiscard]] auto analyze_dyn_type(inst_id inst) -> result<operand>;
+    // A pointer or reference to a type that implements the interface, as a `&dyn I` or `^dyn I`
+    [[nodiscard]] auto coerce_to_dyn(const operand& op, gs::type& target, const source& src)
+        -> result<stdx::option<operand>>;
+    // A method call through a `dyn` object's vtable, none when the object isn't one
+    [[nodiscard]] auto call_dyn(const operand&       object,
+                                std::string_view     name,
+                                gsl::span<const ref> args,
+                                const source&        src) -> result<stdx::option<operand>>;
+    // The comptime values a type declaration captures from the body around it
+    [[nodiscard]] auto captured_values(inst_id inst, gs::type_kind kind)
+        -> result<std::vector<ip::index>>;
     [[nodiscard]] auto resolve_struct(nominal& n) -> result<void>;
     [[nodiscard]] auto resolve_union(nominal& n) -> result<void>;
     [[nodiscard]] auto resolve_enum(nominal& n) -> result<void>;
@@ -640,6 +946,8 @@ class analyzer {
         -> result<usize>;
     // A field's type as a place reaches it, with an array's elements mutable through a mutable one
     [[nodiscard]] auto mutable_view(gs::type& field, bool through_mutable) -> gs::type&;
+    // An array field's type with immutable elements
+    [[nodiscard]] auto immutable_view(gs::type& field) -> gs::type&;
     [[nodiscard]] auto field_place(const place& object, std::string_view name, const source& src)
         -> result<place>;
     [[nodiscard]] auto index_operand(ref index_ref, const source& src) -> result<gir::value>;
@@ -856,9 +1164,39 @@ class analyzer {
                                      const source&        src,
                                      const source&        callee_src,
                                      bool                 through_member) -> result<operand>;
-    [[nodiscard]] auto call_at_comptime(instance&            target,
-                                        gsl::span<const ref> args,
-                                        const source&        src) -> result<operand>;
+    // A call of `target` on arguments that match its GIR parameters
+    [[nodiscard]] auto
+    call_with(instance& target, std::vector<operand> args, const source& src, bool through_member)
+        -> result<operand>;
+
+    // Generic calls (generics.cc)
+    [[nodiscard]] auto call_generic(generic_fn&           g,
+                                    std::vector<call_arg> args,
+                                    const source&         src,
+                                    const source&         callee_src) -> result<operand>;
+    [[nodiscard]] auto bind_generic(generic_fn&               g,
+                                    gsl::span<const call_arg> args,
+                                    const source&             src) -> result<generic_binding>;
+    // A comptime argument's value, reporting one only known at runtime
+    [[nodiscard]] auto comptime_argument(const call_arg&         arg,
+                                         stdx::option<gs::type&> declared,
+                                         const use_site&         use,
+                                         const source&           src) -> result<ip::index>;
+    // The narrowest of `i32`, `i64`, `u64`, `i128` and `u128` holding a `comptime_int`
+    [[nodiscard]] auto fitted_int_type(ip::index value) -> gs::type&;
+    // The type an argument gives an `auto` parameter or return
+    [[nodiscard]] auto inferred_type(const operand& arg) -> gs::type&;
+    // A parameter type with `auto` behind pointers or references filled from the argument's
+    [[nodiscard]] auto matched_type(gs::type& declared, const operand& arg, const source& src)
+        -> result<gsl::not_null<gs::type*>>;
+    // Reports an argument whose type doesn't implement every interface its parameter's bound names
+    [[nodiscard]] auto check_bound(analyzer&         sig,
+                                   const impl_bound& bound,
+                                   gs::type&         type,
+                                   const generic_fn& g,
+                                   inst_id           param,
+                                   const call_arg&   arg,
+                                   const source&     src) -> result<void>;
 
     // Builtins (builtins.cc)
     [[nodiscard]] auto analyze_builtin(inst_id inst) -> result<operand>;
@@ -885,6 +1223,8 @@ class analyzer {
     // Declarations (decls.cc)
     // Whether the declaration's value is a type it declares: `const P = struct { ... }`
     [[nodiscard]] auto declares_type(const decl& d) const -> bool;
+    // A module-level or member declaration's GIR symbol
+    [[nodiscard]] auto global_symbol(decl_id decl, const source& src) -> result<std::string>;
     [[nodiscard]] auto analyze_global(decl_id                 decl,
                                       const operand&          value,
                                       stdx::option<gs::type&> declared,
@@ -927,9 +1267,13 @@ class analyzer {
     std::vector<pending_merge>                        merges_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
-    // The runtime branches enclosing the instruction being analyzed
-    u32                frame_;
-    u32                runtime_depth_{0};
+    // The values `capture` instructions read, and the type whose namespace holds the body
+    std::vector<ip::index>  captures_;
+    stdx::option<nominal&>  scope_;
+    stdx::option<gs::type&> self_type_;
+    std::string             symbol_prefix_;
+    u32                     frame_;
+    u32                     runtime_depth_{0};
     u32                alloc_base_;
     stdx::option<jump> jump_;
 };
@@ -977,8 +1321,20 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 // `value` as a `type` constant, at the narrowest integer width that holds it
 [[nodiscard]] auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index;
 
+// An element as a container of `constant` mutability holds it. A pointer, reference or slice keeps
+// its own mutability, which is its pointee's
+[[nodiscard]] auto element_view(gs::context& ctx, gs::type& elem, bool constant) -> gs::type&;
+
+// Whether an array of references `from` is the array of pointers `to` with no conversion
+[[nodiscard]] auto decays_to(const gs::type& from, const gs::type& to) -> bool;
+
 // Whether a value of `type` holds a `type` somewhere, which only exists at compile time
 [[nodiscard]] auto holds_types(const gs::type& type) -> bool;
+
+// The `param` instructions of a function's parameter body, which also holds what its `impl`
+// bounds name
+[[nodiscard]] auto params_of(const module_t& m, gsl::span<const inst_id> body)
+    -> std::vector<inst_id>;
 
 // Whether a binding's value lives on past one use, so its spill is reused
 [[nodiscard]] constexpr auto is_binding(tag t) noexcept -> bool {

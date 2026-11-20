@@ -2,7 +2,6 @@
 
 #include <cctype>
 #include <charconv>
-#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <ios>

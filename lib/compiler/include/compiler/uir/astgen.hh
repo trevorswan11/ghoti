@@ -28,8 +28,8 @@ struct lowered {
 [[nodiscard]] auto lower_module(const mod::module_t& mod, const astgen_context& cx) -> lowered;
 
 struct lowered_module {
-    gsl::not_null<mod::module_t*>       source;
-    lowered                             result;
+    gsl::not_null<mod::module_t*> source;
+    lowered                       result;
 };
 
 // Lowers `root` and every module it imports, directly or not, once each and in load order

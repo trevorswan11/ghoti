@@ -41,9 +41,46 @@ constexpr std::string_view GLOBAL_CONSTANT{
 } // namespace
 
 auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -> result<operand> {
+    // A member of a type declared outside any call reads the type's namespace
+    const auto owner{u.uir->decl_at(decl).owner};
+    const auto scope{owner ? existing_nominal(u, *owner) : stdx::none};
+    return resolve_decl(
+        u,
+        decl,
+        use,
+        [&] -> decl_state& { return decls_[u.index][std::to_underlying(decl)]; },
+        [&](analyzer& a) {
+            if (scope) { a.enter(*scope); }
+        });
+}
+
+auto compilation::analyze_member(nominal& n, decl_id decl, const source& use) -> result<operand> {
+    if (!n.in_call) { return analyze_decl(*n.owner, decl, use); }
+    return resolve_decl(
+        *n.owner,
+        decl,
+        use,
+        [&] -> decl_state& { return n.members[decl]; },
+        [&](analyzer& a) { a.enter(n); });
+}
+
+auto compilation::analyze_impl_decl(impl_instance& applied, decl_id decl, const source& use)
+    -> result<operand> {
+    return resolve_decl(
+        *applied.entry->owner,
+        decl,
+        use,
+        [&] -> decl_state& { return applied.members[decl]; },
+        [&](analyzer& a) { enter_impl(applied, a); });
+}
+
+template <typename State, typename Setup>
+auto compilation::resolve_decl(
+    const unit& u, decl_id decl, const source& use, State&& state_of, Setup&& setup)
+    -> result<operand> {
     const auto& d{u.uir->decl_at(decl)};
-    switch (decls_[u.index][std::to_underlying(decl)].status) {
-    case decl_status::RESOLVED: return *decls_[u.index][std::to_underlying(decl)].value;
+    switch (state_of().status) {
+    case decl_status::RESOLVED: return *state_of().value;
     case decl_status::FAILED:   return stdx::err{stop::POISON};
     case decl_status::IN_PROGRESS:
         return report(u,
@@ -54,14 +91,17 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
     }
 
     if (is_deferred_error(u, d)) {
-        decls_[u.index][std::to_underlying(decl)].status = decl_status::FAILED;
+        state_of().status = decl_status::FAILED;
         return report(u, use, gs::error::COMPILE_ERROR_REACHED, deferred_error_message(u, d));
     }
 
-    decls_[u.index][std::to_underlying(decl)].status = decl_status::IN_PROGRESS;
-    analyzer   a{*this, u, decl};
+    state_of().status = decl_status::IN_PROGRESS;
+    analyzer a{*this, u, decl};
+    setup(a);
     const auto value{a.analyze_decl(decl)};
-    auto&      state{decls_[u.index][std::to_underlying(decl)]};
+
+    // The analysis may have added states, so the entry is looked up again
+    auto& state{state_of()};
     if (!value) {
         state.status = decl_status::FAILED;
         return stdx::err{value.error()};
@@ -123,13 +163,69 @@ auto compilation::own_symbol(const unit& u, decl_id decl, std::string symbol)
 
 auto compilation::symbol_for(const unit& u, decl_id decl, const source& src)
     -> result<std::string> {
-    std::string name{u.uir->string(u.uir->decl_at(decl).name)};
+    const auto& d{u.uir->decl_at(decl)};
+    std::string name{u.uir->string(d.name)};
     const auto [it, fresh]{symbols_.try_emplace(name, u.index, decl)};
     if (!fresh && it->second != std::pair{u.index, decl}) {
         return unsupported(u, src, "two declarations with one name in different scopes");
     }
 
+    // A name declared twice anywhere in the program is qualified per scope, which UIR can't yet
+    const bool  fixed{d.has(decl_flags::EXTERN) || d.has(decl_flags::EXPORT) ||
+                      d.has(decl_flags::WEAK) || d.link_name.len != 0};
+    const auto& names{declared_names()};
+    const auto  declared{names.find(name)};
+    if (!fixed && declared != names.end() && declared->second > 1) {
+        return unsupported(u, src, "a name the program declares in more than one scope");
+    }
+
     return name;
+}
+
+auto compilation::declared_names() -> const ankerl::unordered_dense::map<std::string, u32>& {
+    if (declared_names_) { return *declared_names_; }
+    auto&      counts{declared_names_.emplace()};
+    const auto count{[&](const unit& u, decl_id decl) {
+        const auto& d{u.uir->decl_at(decl)};
+        if (d.kind != decl_kind::VALUE || declared_nominal(u, d)) { return; }
+        counts[std::string{u.uir->string(d.name)}] += 1;
+    }};
+
+    // Module-level declarations, the members of module-level types and every impl's members
+    for (const auto& u : units_) {
+        for (const auto decl : u.uir->root_namespace().decls) {
+            const auto& d{u.uir->decl_at(decl)};
+            const auto  owner{d.kind == decl_kind::IMPL ? impl_inst_of(u, d)
+                                                        : declared_nominal(u, d)};
+            if (d.kind == decl_kind::VALUE) { count(u, decl); }
+            if (!owner) { continue; }
+            if (const auto ns{u.uir->namespace_of(*owner)}) {
+                for (const auto member : ns->decls) { count(u, member); }
+            }
+        }
+    }
+
+    return *declared_names_;
+}
+
+auto compilation::declared_nominal(const unit& u, const decl& d) -> stdx::option<inst_id> {
+    const auto body{u.uir->body(d.value_body)};
+    if (body.empty() || u.uir->tag_of(body.back()) != tag::yield) { return stdx::none; }
+    const auto yielded{as_inst(u.uir->data_of(body.back()).un.operand)};
+    if (!yielded) { return stdx::none; }
+    switch (u.uir->tag_of(*yielded)) {
+    case tag::struct_decl:
+    case tag::union_decl:
+    case tag::enum_decl:
+    case tag::interface_decl: return yielded;
+    default:                  return stdx::none;
+    }
+}
+
+auto compilation::impl_inst_of(const unit& u, const decl& d) -> stdx::option<inst_id> {
+    const auto body{u.uir->body(d.value_body)};
+    if (body.empty() || u.uir->tag_of(body.back()) != tag::yield) { return stdx::none; }
+    return as_inst(u.uir->data_of(body.back()).un.operand);
 }
 
 auto holds_types(const gs::type& type) -> bool {
@@ -154,7 +250,19 @@ auto compilation::linkage_of(const decl& d) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
-auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) -> result<operand> {
+auto compilation::member_linkage(const unit& u, const decl& d, const member_context& member)
+    -> gir::linkage {
+    // An impl's methods and an interface's defaults stay internal whatever their visibility
+    const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl};
+    const bool in_instance{member.scope && member.scope->in_call};
+    if (in_impl || in_instance || !member.symbol.empty()) { return gir::linkage::INTERNAL; }
+    return linkage_of(d);
+}
+
+auto compilation::declare_function(const unit&           u,
+                                   decl_id               decl,
+                                   inst_id               func,
+                                   const member_context& member) -> result<operand> {
     PROFILE_FUNCTION();
     const auto&   m{*u.uir};
     const auto&   d{m.decl_at(decl)};
@@ -177,10 +285,12 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     }
 
     if (!attrs.empty()) { return unsupported(u, src, "function attributes"); }
-    if (bound_count != 0) { return unsupported(u, src, "`impl` parameter bounds"); }
+    if (bound_count != 0 || is_generic(u, func)) { return declare_generic(u, decl, func, member); }
 
-    analyzer                              sig{*this, u};
-    std::vector<gsl::not_null<gs::type*>> param_types;
+    analyzer sig{*this, u};
+    sig.enter(member);
+    std::vector<gsl::not_null<gs::type*>>      param_types;
+    stdx::option<ast::type_modifier::modifier> self_modifier;
     for (const auto param : params) {
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
@@ -190,8 +300,17 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};
         if (!default_body.empty()) { return unsupported(u, param_src, "a default argument"); }
-        if ((param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK | flags::PARAM_SELF)) != 0) {
-            return unsupported(u, param_src, "a comptime, pack or self parameter");
+        if ((param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK)) != 0) {
+            return unsupported(u, param_src, "a comptime or pack parameter");
+        }
+
+        if ((param_flags & flags::PARAM_SELF) != 0) {
+            const auto mod_kind{static_cast<ast::type_modifier::modifier>(modifier)};
+            const auto self{self_param_type(member, mod_kind)};
+            if (!self) { return unsupported(u, param_src, "this `self` parameter"); }
+            self_modifier.emplace(mod_kind);
+            param_types.emplace_back(&*self);
+            continue;
         }
 
         if (modifier != 0) { return unsupported(u, param_src, "a parameter modifier"); }
@@ -205,9 +324,10 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
 
     auto&      return_type{*TRY(sig.eval_type(ret, src))};
     const bool comptime_only{is_comptime_only(return_type)};
+    const bool infers_return{return_type.get_kind() == gs::type_kind::AUTO};
     const bool no_value{return_type.get_kind() == gs::type_kind::VOID_ ||
                         return_type.get_kind() == gs::type_kind::NORETURN};
-    if (!no_value && !comptime_only &&
+    if (!no_value && !comptime_only && !infers_return &&
         (!gs::is_value_type(return_type.get_kind()) ||
          gs::is_comptime_numeric(return_type.get_kind()))) {
         return unsupported(u, src, "a return type that is comptime-only or generic");
@@ -217,7 +337,7 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
     for (usize i{0}; i < param_types.size(); ++i) { span[i] = param_types[i]; }
     auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
 
-    auto  symbol{TRY(symbol_for(u, decl, src))};
+    auto  symbol{TRY(member_symbol(u, decl, func, member))};
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
         .owner         = &units_[u.index],
         .decl          = decl,
@@ -226,10 +346,17 @@ auto compilation::declare_function(const unit& u, decl_id decl, inst_id func) ->
         .type          = &fn_type,
         .params        = std::move(param_types),
         .return_type   = &return_type,
-        .linkage       = linkage_of(d),
+        .linkage       = member_linkage(u, d, member),
         .weak          = d.has(decl_flags::WEAK),
         .queued        = false,
         .comptime_only = comptime_only,
+        .bindings      = {},
+        .infers_return = infers_return,
+        .source_name   = {},
+        .captures      = member.captures,
+        .self_type     = member.self_type,
+        .self_modifier = self_modifier,
+        .scope         = member.scope,
     }))};
     request_body(fn);
     return function_ref{&fn};
@@ -253,7 +380,13 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     if (!d.value_body) { return comp_.unsupported(u_, src, "a declaration without a value"); }
 
     stdx::option<gs::type&> declared;
-    if (d.type_body) { declared.emplace(*TRY(eval_type(mod().body(d.type_body), src))); }
+    bool                    infers{false};
+    if (d.type_body) {
+        auto& type{*TRY(eval_type(mod().body(d.type_body), src))};
+        infers = type.get_kind() == gs::type_kind::AUTO;
+        if (!infers) { declared.emplace(type); }
+    }
+
     const auto value{eval_comptime(mod().body(d.value_body))};
     if (!value && value.error() == stop::RUNTIME) {
         return comp_.report_runtime_need(
@@ -261,12 +394,17 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     }
 
     if (!value) { return stdx::err{value.error()}; }
-    if (value->is<function_ref>()) {
+    if (value->is<function_ref>() || value->is<generic_ref>()) {
         if (declared) {
             return comp_.unsupported(u_, src, "a function declaration with an explicit type");
         }
 
         return *value;
+    }
+
+    // An `auto` declaration takes its value's type, a number its default one
+    if (infers && gs::is_comptime_numeric(type_of(*value).get_kind())) {
+        declared.emplace(comp_.ctx().default_concrete(type_of(*value)));
     }
 
     return analyze_global(decl, *value, declared, src);
@@ -326,8 +464,7 @@ auto analyzer::analyze_global(decl_id                 decl,
         // Only a module-level alias is listed
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
         if (!declared && !declares_type(d) && module_level) {
-            comp_.gir().add_type(TRY(comp_.symbol_for(u_, decl, src)),
-                                 pool.type_at(*constant_index));
+            comp_.gir().add_type(TRY(global_symbol(decl, src)), pool.type_at(*constant_index));
         }
 
         return value;
@@ -347,7 +484,10 @@ auto analyzer::analyze_global(decl_id                 decl,
 
     // One holding types only exists at compile time, so it has no storage
     if (is_aggregate && !is_mutable && holds_types(type)) { return stored; }
-    auto  symbol_name{TRY(comp_.symbol_for(u_, decl, src))};
+
+    // A ctor instance's scalar constant is folded wherever it is read
+    if (scope_ && scope_->in_call && !is_mutable && !is_aggregate) { return stored; }
+    auto  symbol_name{TRY(global_symbol(decl, src))};
     auto& global{comp_.gir().add_global(std::move(symbol_name),
                                         type,
                                         !is_mutable,

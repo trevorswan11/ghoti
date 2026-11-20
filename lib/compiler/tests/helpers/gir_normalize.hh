@@ -13,6 +13,7 @@ namespace ghoti::tests::helpers {
 //   - every `alloca` moves to the top of the entry segment, keeping their order
 //   - temporaries are renumbered by first appearance
 //   - types, globals and functions are sorted by name
+//   - a nominal type in a monomorph's symbol loses its discriminator: `id__struct#`
 [[nodiscard]] auto normalize_gir(std::string_view dump) -> std::string;
 
 } // namespace ghoti::tests::helpers
