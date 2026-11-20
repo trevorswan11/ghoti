@@ -13,6 +13,7 @@ import "truncf.gh" as _;
 import "floor_ceil.gh" as _;
 import "float_from_int.gh" as _;
 import "trunc.gh" as _;
+import "int_from_float.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -174,4 +175,5 @@ test {
     import "floor_ceil.gh";
     import "float_from_int.gh";
     import "trunc.gh";
+    import "int_from_float.gh";
 }
