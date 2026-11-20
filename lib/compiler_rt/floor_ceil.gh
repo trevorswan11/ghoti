@@ -11,6 +11,7 @@
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
+const mem = std.mem;
 const math = std.math;
 const symbol = compiler_rt.symbol;
 
@@ -292,12 +293,20 @@ const floor_ceil = fn(comptime T: type, comptime op: enum { floor, ceil }, x: T)
             if (e >= 0) {
                 let m = (@as(U, 1) << @intCast(mantissa - e)) - 1;
                 if (u & m == 0) return x;
+                @cfg (compiler_rt.want_float_exceptions) {
+                    mem.do_not_optimize_away(x + C);
+                }
                 if (u >> bits - 1 == @intFromBool(op == .floor)) u += m;
                 return @bitCast(u & ~m);
-            } else return match comptime (op) {
-                .floor => if (u >> bits - 1 == 0) 0.0 else if (u << 1 != 0) -1.0 else x,
-                .ceil => if (u >> bits - 1 != 0) -0.0 else if (u << 1 != 0) 1.0 else x,
-            };
+            } else {
+                @cfg (compiler_rt.want_float_exceptions) {
+                    mem.do_not_optimize_away(x + C);
+                }
+                return match comptime (op) {
+                    .floor => if (u >> bits - 1 == 0) 0.0 else if (u << 1 != 0) -1.0 else x,
+                    .ceil => if (u >> bits - 1 != 0) -0.0 else if (u << 1 != 0) 1.0 else x,
+                };
+            }
         },
         f64, f80, f128 => {
             let e = u >> mantissa & mask;
@@ -310,10 +319,15 @@ const floor_ceil = fn(comptime T: type, comptime op: enum { floor, ceil }, x: T)
             let positive = u >> bits - 1 == 0;
             let y: T = if (positive) x + C - C - x else x - C + C - x;
 
-            if (e <= bias - 1) return match comptime (op) {
-                .floor => if (positive) 0.0 else -1.0,
-                .ceil => if (positive) 1.0 else -0.0,
-            };
+            if (e <= bias - 1) {
+                @cfg (compiler_rt.want_float_exceptions) {
+                    mem.do_not_optimize_away(y);
+                }
+                return match comptime (op) {
+                    .floor => if (positive) 0.0 else -1.0,
+                    .ceil => if (positive) 1.0 else -0.0,
+                };
+            }
             return match (op) {
                 .floor if (y > 0) => x + y - 1,
                 .ceil if (y < 0) => x + y + 1,

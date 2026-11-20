@@ -194,3 +194,84 @@ test "read_packed_int" {
     @expect(read_packed_int(u32, wide, 4, .little) == 0x01234567);
     @expect(read_packed_int(u24, wide, 8, .little) == 0x123456);
 }
+
+/// Force an evaluation of the expression; this tries to prevent the compiler from optimizing the
+/// computation away even if the result eventually gets discarded.
+pub const do_not_optimize_away = fn(val: auto): void {
+    if comptime return;
+
+    match comptime (@typeInfo(@TypeOf(val))) {
+        .void, .comptime_int, .comptime_float, .enum_literal, .type => return,
+        .enum => do_not_optimize_away(@backingInt(val)),
+        .bool => do_not_optimize_away(@intFromBool(val)),
+        .int => |int| {
+            if comptime (int.bits <= @bitSizeOf(c_long)) {
+                const bits = @max(8, std.math.ceil_power_of_two(u16, int.bits)!);
+                let widened = @as(@Int(.{ .signedness = int.signedness, .bits = bits }), val);
+                asm { template: "", inputs: ("r" = widened), options: (volatile) };
+            } else {
+                do_not_optimize_away(^val);
+            }
+        },
+        .float => |float| match comptime (float.bits) {
+            32, 64 => asm { template: "", inputs: ("rm" = val), options: (volatile) },
+            _ => do_not_optimize_away(^val),
+        },
+        // The pointer escapes, and the clobber keeps every store it can reach
+        .pointer, .reference => asm {
+            template: "",
+            inputs: ("r" = val),
+            clobbers: ("memory"),
+            options: (volatile),
+        },
+        .array => |array| {
+            if comptime (array.len * @sizeOf(array.child) <= 64) {
+                for (val) |v| {
+                    do_not_optimize_away(v);
+                }
+            } else {
+                do_not_optimize_away(^val);
+            }
+        },
+        _ => do_not_optimize_away(^val),
+    }
+};
+
+test "do_not_optimize_away" {
+    comptime do_not_optimize_away("test");
+    const Endian = enum { little, big };
+
+    const Pair = struct { a: u32, b: f64 };
+
+    do_not_optimize_away({});
+    do_not_optimize_away(true);
+    do_not_optimize_away(0);
+    do_not_optimize_away(0.0);
+    do_not_optimize_away(@as(u1, 0));
+    do_not_optimize_away(@as(u3, 0));
+    do_not_optimize_away(@as(u8, 0));
+    do_not_optimize_away(@as(u16, 0));
+    do_not_optimize_away(@as(u32, 0));
+    do_not_optimize_away(@as(u64, 0));
+    do_not_optimize_away(@as(u128, 0));
+    do_not_optimize_away(@as(u13, 0));
+    do_not_optimize_away(@as(u37, 0));
+    do_not_optimize_away(@as(u96, 0));
+    do_not_optimize_away(@as(u200, 0));
+    do_not_optimize_away(@as(i7, -1));
+    do_not_optimize_away(@as(f16, 0.0));
+    do_not_optimize_away(@as(f32, 0.0));
+    do_not_optimize_away(@as(f64, 0.0));
+    do_not_optimize_away(@as(f80, 0.0));
+    do_not_optimize_away(@as(f128, 0.0));
+    do_not_optimize_away([4]u8{ 0, 0, 0, 0 });
+    let mut big: [100]mut u8 = undefined;
+    @memset(big[0..], 0);
+    do_not_optimize_away(big);
+    do_not_optimize_away(Endian.little);
+    do_not_optimize_away(Pair{ .a = 1, .b = 2.0 });
+    do_not_optimize_away("test");
+
+    let x: u32 = 5;
+    do_not_optimize_away(^x);
+}
