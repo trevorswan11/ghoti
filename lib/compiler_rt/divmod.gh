@@ -2,6 +2,9 @@
 //!
 //! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/udivmod.zig
 //! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/arm.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/aulldiv.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/aullrem.zig
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
@@ -15,6 +18,18 @@ comptime {
     @cfg (compiler_rt.want_aeabi) {
         symbol(__aeabi_idiv, "__aeabi_idiv");
         symbol(__aeabi_uidiv, "__aeabi_uidiv");
+        symbol(__aeabi_idivmod, "__aeabi_idivmod");
+        symbol(__aeabi_uidivmod, "__aeabi_uidivmod");
+        symbol(__aeabi_ldivmod, "__aeabi_ldivmod");
+        symbol(__aeabi_uldivmod, "__aeabi_uldivmod");
+    }
+
+    @cfg (compiler_rt.want_windows_x86_msvc_abi) {
+        // Don't let LLVM apply the stdcall name mangling on those MSVC builtins
+        symbol(_alldiv, "\x01__alldiv");
+        symbol(_allrem, "\x01__allrem");
+        symbol(_aulldiv, "\x01__aulldiv");
+        symbol(_aullrem, "\x01__aullrem");
     }
 
     symbol(__udivmodti4, "__udivmodti4");
@@ -49,6 +64,102 @@ comptime {
 
     const __aeabi_uidiv = fn(n: u32, d: u32) callconv(.aapcs): u32 {
         return div_u32(n, d);
+    };
+
+    const __aeabi_idivmod = fn(n: i32, d: i32) callconv(.aapcs): u64 {
+        return aeabi_idivmod(n, d);
+    };
+
+    const __aeabi_uidivmod = fn(n: u32, d: u32) callconv(.aapcs): u64 {
+        return aeabi_uidivmod(n, d);
+    };
+
+    const __aeabi_ldivmod = fn(n: i64, d: i64) callconv(.aapcs): u128 {
+        return aeabi_ldivmod(n, d);
+    };
+
+    const __aeabi_uldivmod = fn(n: u64, d: u64) callconv(.aapcs): u128 {
+        return aeabi_uldivmod(n, d);
+    };
+}
+
+@[inline(.always)] const aeabi_idivmod = fn(n: i32, d: i32): u64 {
+    let mut r: i32 = undefined;
+    let q = __divmodsi4(n, d, ^mut r);
+    return pack_divmod(u64, q, r);
+};
+
+@[inline(.always)] const aeabi_uidivmod = fn(n: u32, d: u32): u64 {
+    let mut r: u32 = undefined;
+    let q = __udivmodsi4(n, d, ^mut r);
+    return pack_divmod(u64, q, r);
+};
+
+@[inline(.always)] const aeabi_ldivmod = fn(n: i64, d: i64): u128 {
+    let mut r: i64 = undefined;
+    let q = __divmoddi4(n, d, ^mut r);
+    return pack_divmod(u128, q, r);
+};
+
+@[inline(.always)] const aeabi_uldivmod = fn(n: u64, d: u64): u128 {
+    let mut r: u64 = undefined;
+    let q = __udivmoddi4(n, d, ^mut r);
+    return pack_divmod(u128, q, r);
+};
+
+/// Packs a quotient and remainder so that returning the result in a register sequence puts the
+/// quotient in the lower-numbered half. Big-endian targets fill a sequence from its high half.
+@[inline(.always)]
+const pack_divmod = fn(comptime T: type, quotient: auto, remainder: @TypeOf(quotient)): T {
+    const half_bits = @bitSizeOf(T) / 2;
+    const Half = @Int(.{ .signedness = .unsigned, .bits = half_bits });
+    let q = @as(T, @bitCast(Half, quotient));
+    let r = @as(T, @bitCast(Half, remainder));
+    @cfg (endian == .big) {
+        return q << half_bits | r;
+    }
+    return r << half_bits | q;
+};
+
+/// Splits a packed divmod result back into its quotient and remainder
+@[testing] const unpack_divmod = fn(comptime H: type, pair: auto): [2]H {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(H) });
+    let low = @bitCast(H, @truncate(U, pair));
+    let high = @bitCast(H, @truncate(U, pair >> @bitSizeOf(H)));
+    @cfg (endian == .big) {
+        return .{ high, low };
+    }
+    return .{ low, high };
+};
+
+test "aeabi divmod packs the quotient and remainder" {
+    let a = unpack_divmod(i32, aeabi_idivmod(-7, 2));
+    @expect(a[0] == -3 and a[1] == -1);
+    let b = unpack_divmod(i32, aeabi_idivmod(std.math.min_int(i32), -1));
+    @expect(b[0] == std.math.min_int(i32) and b[1] == 0);
+    let c = unpack_divmod(u32, aeabi_uidivmod(0xFFFF_FFFF, 10));
+    @expect(c[0] == 429496729 and c[1] == 5);
+    let d = unpack_divmod(i64, aeabi_ldivmod(-0x1234_5678_9ABC_DEF0, 0x1_0000_0001));
+    @expect(d[0] == -0x1234_5678 and d[1] == -0x8888_8878);
+    let e = unpack_divmod(u64, aeabi_uldivmod(0xFFFF_FFFF_FFFF_FFFF, 0x1_0000_0000));
+    @expect(e[0] == 0xFFFF_FFFF and e[1] == 0xFFFF_FFFF);
+}
+
+@cfg (compiler_rt.want_windows_x86_msvc_abi) {
+    const _alldiv = fn(a: i64, b: i64) callconv(.stdcall): i64 {
+        return div_i64(a, b);
+    };
+
+    const _allrem = fn(a: i64, b: i64) callconv(.stdcall): i64 {
+        return __moddi3(a, b);
+    };
+
+    const _aulldiv = fn(a: u64, b: u64) callconv(.stdcall): u64 {
+        return __udivmoddi4(a, b, nullptr);
+    };
+
+    const _aullrem = fn(a: u64, b: u64) callconv(.stdcall): u64 {
+        return __umoddi3(a, b);
     };
 }
 
