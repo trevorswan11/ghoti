@@ -20,6 +20,82 @@ pub const float_eps = float.float_eps;
 pub const approx_eq_abs = float.approx_eq_abs;
 pub const approx_eq_rel = float.approx_eq_rel;
 pub const @"f80" = float.f80;
+pub const is_finite = float.is_finite;
+pub const is_snan = float.is_snan;
+
+/// Raise INVALID fpu exception. No-op on WASM and in comptime.
+pub const raise_invalid = fn(): void {
+    if comptime return;
+    @cfg (family != .wasm) {
+        let mut zero: f32 = 0.0;
+        std.mem.do_not_optimize_away(^zero);
+        std.mem.do_not_optimize_away(zero / zero);
+    }
+};
+
+/// Raise INEXACT fpu exception. No-op on WASM and in comptime
+pub const raise_div_by_zero = fn(): void {
+    if comptime return;
+    @cfg (family != .wasm) {
+        let mut zero: f32 = 0.0;
+        std.mem.do_not_optimize_away(^zero);
+        std.mem.do_not_optimize_away(1.0 / zero);
+    }
+};
+
+/// Raise UNDERFLOW fpu exception. No-op on WASM and in comptime
+pub const raise_underflow = fn(): void {
+    if comptime return;
+    @cfg (family != .wasm) {
+        let mut min = float.float_true_min(f32);
+        std.mem.do_not_optimize_away(^min);
+        std.mem.do_not_optimize_away(min * min);
+    }
+};
+
+/// Raise OVERFLOW fpu exception. No-op on WASM and in comptime
+pub const raise_overflow = fn(): void {
+    if comptime return;
+    @cfg (family != .wasm) {
+        let mut max = float.float_max(f32);
+        std.mem.do_not_optimize_away(^max);
+        std.mem.do_not_optimize_away(max * max);
+    }
+};
+
+/// Raise INEXACT fpu exception. No-op on WASM and in comptime
+pub const raise_inexact = fn(): void {
+    if comptime return;
+    @cfg (family != .wasm) {
+        let mut three: f32 = 3.0;
+        std.mem.do_not_optimize_away(^three);
+        std.mem.do_not_optimize_away(2.0 / three);
+    }
+};
+
+pub const round = fn(val: auto): @TypeOf(val) {
+    if (val >= 0.0) {
+        return @floor(val + 0.5);
+    } else {
+        return @ceil(val - 0.5);
+    }
+};
+
+test "raise exceptions" {
+    raise_invalid();
+    raise_div_by_zero();
+    raise_underflow();
+    raise_overflow();
+    raise_inexact();
+
+    comptime {
+        raise_invalid();
+        raise_div_by_zero();
+        raise_underflow();
+        raise_overflow();
+        raise_inexact();
+    }
+}
 
 test {
     import "float.gh";
