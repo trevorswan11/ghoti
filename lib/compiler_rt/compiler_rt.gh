@@ -23,6 +23,9 @@ import "log2.gh" as _;
 import "log10.gh" as _;
 import "exp.gh" as _;
 import "exp2.gh" as _;
+import "sin.gh" as _;
+import "cos.gh" as _;
+import "tan.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -206,4 +209,7 @@ test {
     import "exp.gh";
     import "exp2.gh";
     import "exp_f128.gh";
+    import "sin.gh";
+    import "cos.gh";
+    import "tan.gh";
 }
