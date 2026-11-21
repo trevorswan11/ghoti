@@ -1,9 +1,851 @@
 //! Ported from:
 //!
-//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/float_from_int.zig
-//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/float_from_int_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int_from_float.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int_from_float_test.zig
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
 const math = std.math;
 const symbol = compiler_rt.symbol;
+const byte_index = compiler_rt.byte_index;
+
+comptime {
+    symbol(__fixhfsi, "__fixhfsi");
+    symbol(__fixhfdi, "__fixhfdi");
+    symbol(__fixhfti, "__fixhfti");
+    symbol(__fixhfei, "__fixhfei");
+
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_f2iz, "__aeabi_f2iz");
+        symbol(__aeabi_f2lz, "__aeabi_f2lz");
+    } else {
+        symbol(__fixsfsi, "__fixsfsi");
+        symbol(__fixsfdi, "__fixsfdi");
+        symbol(__fixsfti, "__fixsfti");
+    }
+    symbol(__fixsfei, "__fixsfei");
+
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_d2iz, "__aeabi_d2iz");
+        symbol(__aeabi_d2lz, "__aeabi_d2lz");
+    } else {
+        symbol(__fixdfsi, "__fixdfsi");
+        symbol(__fixdfdi, "__fixdfdi");
+        symbol(__fixdfti, "__fixdfti");
+    }
+    symbol(__fixdfei, "__fixdfei");
+
+    symbol(__fixxfsi, "__fixxfsi");
+    symbol(__fixxfdi, "__fixxfdi");
+    symbol(__fixxfti, "__fixxfti");
+    symbol(__fixxfei, "__fixxfei");
+
+    symbol(__fixtfsi, "__fixtfsi");
+    symbol(__fixtfdi, "__fixtfdi");
+    symbol(__fixtfti, "__fixtfti");
+    symbol(__fixtfei, "__fixtfei");
+}
+
+const __fixhfsi = fn(a: f16) callconv(.c): i32 {
+    return i32_int_from_float_f16(a);
+};
+
+@[inline(.always)] const i32_int_from_float_f16 = fn(a: f16): i32 {
+    return int_from_float(i32, a);
+};
+
+const __fixhfdi = fn(a: f16) callconv(.c): i64 {
+    return i64_int_from_float_f16(a);
+};
+
+@[inline(.always)] const i64_int_from_float_f16 = fn(a: f16): i64 {
+    return int_from_float(i64, a);
+};
+
+const __fixhfti = fn(a: f16) callconv(.c): i128 {
+    return i128_int_from_float_f16(a);
+};
+
+@[inline(.always)] const i128_int_from_float_f16 = fn(a: f16): i128 {
+    return int_from_float(i128, a);
+};
+
+const __fixhfei = fn(r: ^mut u8, bits: usize, a: f16) callconv(.c): void {
+    signed_int_from_float_f16(r, bits, a);
+};
+
+@[inline(.always)] const signed_int_from_float_f16 = fn(r: ^mut u8, bits: usize, a: f16): void {
+    big_int_from_float(true, r, bits, a);
+};
+
+const __fixsfsi = fn(a: f32) callconv(.c): i32 {
+    return i32_int_from_float_f32(a);
+};
+
+@[inline(.always)] const i32_int_from_float_f32 = fn(a: f32): i32 {
+    return int_from_float(i32, a);
+};
+
+test "i32_int_from_float_f32" {
+    import "cases/int_from_float/fixsfsi.gh" as fixsfsi_cases;
+    for (fixsfsi_cases.cases) |case| {
+        @expect(i32_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixsfdi = fn(a: f32) callconv(.c): i64 {
+    return i64_int_from_float_f32(a);
+};
+
+@[inline(.always)] const i64_int_from_float_f32 = fn(a: f32): i64 {
+    return int_from_float(i64, a);
+};
+
+test "i64_int_from_float_f32" {
+    import "cases/int_from_float/fixsfdi.gh" as fixsfdi_cases;
+    for (fixsfdi_cases.cases) |case| {
+        @expect(i64_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixsfti = fn(a: f32) callconv(.c): i128 {
+    return i128_int_from_float_f32(a);
+};
+
+@[inline(.always)] const i128_int_from_float_f32 = fn(a: f32): i128 {
+    return int_from_float(i128, a);
+};
+
+test "i128_int_from_float_f32" {
+    import "cases/int_from_float/fixsfti.gh" as fixsfti_cases;
+    for (fixsfti_cases.cases) |case| {
+        @expect(i128_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixsfei = fn(r: ^mut u8, bits: usize, a: f32) callconv(.c): void {
+    signed_int_from_float_f32(r, bits, a);
+};
+
+@[inline(.always)] const signed_int_from_float_f32 = fn(r: ^mut u8, bits: usize, a: f32): void {
+    big_int_from_float(true, r, bits, a);
+};
+
+const __fixdfsi = fn(a: f64) callconv(.c): i32 {
+    return i32_int_from_float_f64(a);
+};
+
+@[inline(.always)] const i32_int_from_float_f64 = fn(a: f64): i32 {
+    return int_from_float(i32, a);
+};
+
+test "i32_int_from_float_f64" {
+    import "cases/int_from_float/fixdfsi.gh" as fixdfsi_cases;
+    for (fixdfsi_cases.cases) |case| {
+        @expect(i32_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixdfdi = fn(a: f64) callconv(.c): i64 {
+    return i64_int_from_float_f64(a);
+};
+
+@[inline(.always)] const i64_int_from_float_f64 = fn(a: f64): i64 {
+    return int_from_float(i64, a);
+};
+
+test "i64_int_from_float_f64" {
+    import "cases/int_from_float/fixdfdi.gh" as fixdfdi_cases;
+    for (fixdfdi_cases.cases) |case| {
+        @expect(i64_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixdfti = fn(a: f64) callconv(.c): i128 {
+    return i128_int_from_float_f64(a);
+};
+
+@[inline(.always)] const i128_int_from_float_f64 = fn(a: f64): i128 {
+    return int_from_float(i128, a);
+};
+
+test "i128_int_from_float_f64" {
+    import "cases/int_from_float/fixdfti.gh" as fixdfti_cases;
+    for (fixdfti_cases.cases) |case| {
+        @expect(i128_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixdfei = fn(r: ^mut u8, bits: usize, a: f64) callconv(.c): void {
+    signed_int_from_float_f64(r, bits, a);
+};
+
+@[inline(.always)] const signed_int_from_float_f64 = fn(r: ^mut u8, bits: usize, a: f64): void {
+    big_int_from_float(true, r, bits, a);
+};
+
+const __fixxfsi = fn(a: compiler_rt.f80) callconv(.c): i32 {
+    return i32_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const i32_int_from_float_f80 = fn(a: f80): i32 {
+    return int_from_float(i32, a);
+};
+
+const __fixxfdi = fn(a: compiler_rt.f80) callconv(.c): i64 {
+    return i64_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const i64_int_from_float_f80 = fn(a: f80): i64 {
+    return int_from_float(i64, a);
+};
+
+const __fixxfti = fn(a: compiler_rt.f80) callconv(.c): i128 {
+    return i128_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const i128_int_from_float_f80 = fn(a: f80): i128 {
+    return int_from_float(i128, a);
+};
+
+const __fixxfei = fn(r: ^mut u8, bits: usize, a: compiler_rt.f80) callconv(.c): void {
+    signed_int_from_float_f80(r, bits, @bitCast(a));
+};
+
+@[inline(.always)] const signed_int_from_float_f80 = fn(r: ^mut u8, bits: usize, a: f80): void {
+    big_int_from_float(true, r, bits, a);
+};
+
+const __fixtfsi = fn(a: f128) callconv(.c): i32 {
+    return i32_int_from_float_f128(a);
+};
+
+@[inline(.always)] const i32_int_from_float_f128 = fn(a: f128): i32 {
+    return int_from_float(i32, a);
+};
+
+test "i32_int_from_float_f128" {
+    import "cases/int_from_float/fixtfsi.gh" as fixtfsi_cases;
+    for (fixtfsi_cases.cases) |case| {
+        @expect(i32_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixtfdi = fn(a: f128) callconv(.c): i64 {
+    return i64_int_from_float_f128(a);
+};
+
+@[inline(.always)] const i64_int_from_float_f128 = fn(a: f128): i64 {
+    return int_from_float(i64, a);
+};
+
+test "i64_int_from_float_f128" {
+    import "cases/int_from_float/fixtfdi.gh" as fixtfdi_cases;
+    for (fixtfdi_cases.cases) |case| {
+        @expect(i64_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixtfti = fn(a: f128) callconv(.c): i128 {
+    return i128_int_from_float_f128(a);
+};
+
+@[inline(.always)] const i128_int_from_float_f128 = fn(a: f128): i128 {
+    return int_from_float(i128, a);
+};
+
+test "i128_int_from_float_f128" {
+    import "cases/int_from_float/fixtfti.gh" as fixtfti_cases;
+    for (fixtfti_cases.cases) |case| {
+        @expect(i128_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixtfei = fn(r: ^mut u8, bits: usize, a: f128) callconv(.c): void {
+    signed_int_from_float_f128(r, bits, a);
+};
+
+@[inline(.always)] const signed_int_from_float_f128 = fn(r: ^mut u8, bits: usize, a: f128): void {
+    big_int_from_float(true, r, bits, a);
+};
+
+comptime {
+    symbol(__fixunshfsi, "__fixunshfsi");
+    symbol(__fixunshfdi, "__fixunshfdi");
+    symbol(__fixunshfti, "__fixunshfti");
+    symbol(__fixunshfei, "__fixunshfei");
+
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_f2uiz, "__aeabi_f2uiz");
+        symbol(__aeabi_f2ulz, "__aeabi_f2ulz");
+    } else {
+        symbol(__fixunssfsi, "__fixunssfsi");
+        symbol(__fixunssfdi, "__fixunssfdi");
+        symbol(__fixunssfti, "__fixunssfti");
+    }
+    symbol(__fixunssfei, "__fixunssfei");
+
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_d2uiz, "__aeabi_d2uiz");
+        symbol(__aeabi_d2ulz, "__aeabi_d2ulz");
+    } else {
+        symbol(__fixunsdfsi, "__fixunsdfsi");
+        symbol(__fixunsdfdi, "__fixunsdfdi");
+        symbol(__fixunsdfti, "__fixunsdfti");
+    }
+    symbol(__fixunsdfei, "__fixunsdfei");
+
+    symbol(__fixunsxfsi, "__fixunsxfsi");
+    symbol(__fixunsxfdi, "__fixunsxfdi");
+    symbol(__fixunsxfti, "__fixunsxfti");
+    symbol(__fixunsxfei, "__fixunsxfei");
+
+    symbol(__fixunstfsi, "__fixunstfsi");
+    symbol(__fixunstfdi, "__fixunstfdi");
+    symbol(__fixunstfti, "__fixunstfti");
+    symbol(__fixunstfei, "__fixunstfei");
+}
+
+const __fixunshfsi = fn(a: f16) callconv(.c): u32 {
+    return u32_int_from_float_f16(a);
+};
+
+@[inline(.always)] const u32_int_from_float_f16 = fn(a: f16): u32 {
+    return int_from_float(u32, a);
+};
+
+const __fixunshfdi = fn(a: f16) callconv(.c): u64 {
+    return u64_int_from_float_f16(a);
+};
+
+@[inline(.always)] const u64_int_from_float_f16 = fn(a: f16): u64 {
+    return int_from_float(u64, a);
+};
+
+const __fixunshfti = fn(a: f16) callconv(.c): u128 {
+    return u128_int_from_float_f16(a);
+};
+
+@[inline(.always)] const u128_int_from_float_f16 = fn(a: f16): u128 {
+    return int_from_float(u128, a);
+};
+
+test "u128_int_from_float_f16" {
+    @expect(u128_int_from_float_f16(math.inf(f16)) == math.max_int(u128));
+    @expect(u128_int_from_float_f16(math.float_max(f16)) == 65504);
+}
+
+const __fixunshfei = fn(r: ^mut u8, bits: usize, a: f16) callconv(.c): void {
+    unsigned_int_from_float_f16(r, bits, a);
+};
+
+@[inline(.always)] const unsigned_int_from_float_f16 = fn(r: ^mut u8, bits: usize, a: f16): void {
+    big_int_from_float(false, r, bits, a);
+};
+
+const __fixunssfsi = fn(a: f32) callconv(.c): u32 {
+    return u32_int_from_float_f32(a);
+};
+
+@[inline(.always)] const u32_int_from_float_f32 = fn(a: f32): u32 {
+    return int_from_float(u32, a);
+};
+
+test "u32_int_from_float_f32" {
+    import "cases/int_from_float/fixunssfsi.gh" as fixunssfsi_cases;
+    for (fixunssfsi_cases.cases) |case| {
+        @expect(u32_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixunssfdi = fn(a: f32) callconv(.c): u64 {
+    return u64_int_from_float_f32(a);
+};
+
+@[inline(.always)] const u64_int_from_float_f32 = fn(a: f32): u64 {
+    return int_from_float(u64, a);
+};
+
+test "u64_int_from_float_f32" {
+    import "cases/int_from_float/fixunssfdi.gh" as fixunssfdi_cases;
+    for (fixunssfdi_cases.cases) |case| {
+        @expect(u64_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixunssfti = fn(a: f32) callconv(.c): u128 {
+    return u128_int_from_float_f32(a);
+};
+
+@[inline(.always)] const u128_int_from_float_f32 = fn(a: f32): u128 {
+    return int_from_float(u128, a);
+};
+
+test "u128_int_from_float_f32" {
+    import "cases/int_from_float/fixunssfti.gh" as fixunssfti_cases;
+    for (fixunssfti_cases.cases) |case| {
+        @expect(u128_int_from_float_f32(case.a) == case.expected);
+    }
+}
+
+const __fixunssfei = fn(r: ^mut u8, bits: usize, a: f32) callconv(.c): void {
+    unsigned_int_from_float_f32(r, bits, a);
+};
+
+@[inline(.always)] const unsigned_int_from_float_f32 = fn(r: ^mut u8, bits: usize, a: f32): void {
+    big_int_from_float(false, r, bits, a);
+};
+
+const __fixunsdfsi = fn(a: f64) callconv(.c): u32 {
+    return u32_int_from_float_f64(a);
+};
+
+@[inline(.always)] const u32_int_from_float_f64 = fn(a: f64): u32 {
+    return int_from_float(u32, a);
+};
+
+test "u32_int_from_float_f64" {
+    import "cases/int_from_float/fixunsdfsi.gh" as fixunsdfsi_cases;
+    for (fixunsdfsi_cases.cases) |case| {
+        @expect(u32_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixunsdfdi = fn(a: f64) callconv(.c): u64 {
+    return u64_int_from_float_f64(a);
+};
+
+@[inline(.always)] const u64_int_from_float_f64 = fn(a: f64): u64 {
+    return int_from_float(u64, a);
+};
+
+test "u64_int_from_float_f64" {
+    import "cases/int_from_float/fixunsdfdi.gh" as fixunsdfdi_cases;
+    for (fixunsdfdi_cases.cases) |case| {
+        @expect(u64_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixunsdfti = fn(a: f64) callconv(.c): u128 {
+    return u128_int_from_float_f64(a);
+};
+
+@[inline(.always)] const u128_int_from_float_f64 = fn(a: f64): u128 {
+    return int_from_float(u128, a);
+};
+
+test "u128_int_from_float_f64" {
+    import "cases/int_from_float/fixunsdfti.gh" as fixunsdfti_cases;
+    for (fixunsdfti_cases.cases) |case| {
+        @expect(u128_int_from_float_f64(case.a) == case.expected);
+    }
+}
+
+const __fixunsdfei = fn(r: ^mut u8, bits: usize, a: f64) callconv(.c): void {
+    unsigned_int_from_float_f64(r, bits, a);
+};
+
+@[inline(.always)] const unsigned_int_from_float_f64 = fn(r: ^mut u8, bits: usize, a: f64): void {
+    big_int_from_float(false, r, bits, a);
+};
+
+const __fixunsxfsi = fn(a: compiler_rt.f80) callconv(.c): u32 {
+    return u32_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const u32_int_from_float_f80 = fn(a: f80): u32 {
+    return int_from_float(u32, a);
+};
+
+const __fixunsxfdi = fn(a: compiler_rt.f80) callconv(.c): u64 {
+    return u64_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const u64_int_from_float_f80 = fn(a: f80): u64 {
+    return int_from_float(u64, a);
+};
+
+const __fixunsxfti = fn(a: compiler_rt.f80) callconv(.c): u128 {
+    return u128_int_from_float_f80(@bitCast(a));
+};
+
+@[inline(.always)] const u128_int_from_float_f80 = fn(a: f80): u128 {
+    return int_from_float(u128, a);
+};
+
+test "u128_int_from_float_f80" {
+    @expect(u128_int_from_float_f80(math.inf(f80)) == math.max_int(u128));
+    @expect(u128_int_from_float_f80(math.float_max(f80)) == math.max_int(u128));
+    @expect(u128_int_from_float_f80(math.max_int(u64)) == math.max_int(u64));
+}
+
+const __fixunsxfei = fn(r: ^mut u8, bits: usize, a: compiler_rt.f80) callconv(.c): void {
+    unsigned_int_from_float_f80(r, bits, @bitCast(a));
+};
+
+@[inline(.always)] const unsigned_int_from_float_f80 = fn(r: ^mut u8, bits: usize, a: f80): void {
+    big_int_from_float(false, r, bits, a);
+};
+
+const __fixunstfsi = fn(a: f128) callconv(.c): u32 {
+    return u32_int_from_float_f128(a);
+};
+
+@[inline(.always)] const u32_int_from_float_f128 = fn(a: f128): u32 {
+    return int_from_float(u32, a);
+};
+
+test "u32_int_from_float_f128" {
+    import "cases/int_from_float/fixunstfsi.gh" as fixunstfsi_cases;
+    for (fixunstfsi_cases.cases) |case| {
+        @expect(u32_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixunstfdi = fn(a: f128) callconv(.c): u64 {
+    return u64_int_from_float_f128(a);
+};
+
+@[inline(.always)] const u64_int_from_float_f128 = fn(a: f128): u64 {
+    return int_from_float(u64, a);
+};
+
+test "u64_int_from_float_f128" {
+    import "cases/int_from_float/fixunstfdi.gh" as fixunstfdi_cases;
+    for (fixunstfdi_cases.cases) |case| {
+        @expect(u64_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixunstfti = fn(a: f128) callconv(.c): u128 {
+    return u128_int_from_float_f128(a);
+};
+
+@[inline(.always)] const u128_int_from_float_f128 = fn(a: f128): u128 {
+    return int_from_float(u128, a);
+};
+
+test "u128_int_from_float_f128" {
+    import "cases/int_from_float/fixunstfti.gh" as fixunstfti_cases;
+    for (fixunstfti_cases.cases) |case| {
+        @expect(u128_int_from_float_f128(case.a) == case.expected);
+    }
+}
+
+const __fixunstfei = fn(r: ^mut u8, bits: usize, a: f128) callconv(.c): void {
+    unsigned_int_from_float_f128(r, bits, a);
+};
+
+@[inline(.always)] const unsigned_int_from_float_f128 = fn(r: ^mut u8, bits: usize, a: f128): void {
+    big_int_from_float(false, r, bits, a);
+};
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_f2iz = fn(a: f32) callconv(.aapcs): i32 {
+        return i32_int_from_float_f32(a);
+    };
+
+    const __aeabi_f2lz = fn(a: f32) callconv(.aapcs): i64 {
+        return i64_int_from_float_f32(a);
+    };
+
+    const __aeabi_d2iz = fn(a: f64) callconv(.aapcs): i32 {
+        return i32_int_from_float_f64(a);
+    };
+
+    const __aeabi_d2lz = fn(a: f64) callconv(.aapcs): i64 {
+        return i64_int_from_float_f64(a);
+    };
+
+    const __aeabi_f2uiz = fn(a: f32) callconv(.aapcs): u32 {
+        return u32_int_from_float_f32(a);
+    };
+
+    const __aeabi_f2ulz = fn(a: f32) callconv(.aapcs): u64 {
+        return u64_int_from_float_f32(a);
+    };
+
+    const __aeabi_d2uiz = fn(a: f64) callconv(.aapcs): u32 {
+        return u32_int_from_float_f64(a);
+    };
+
+    const __aeabi_d2ulz = fn(a: f64) callconv(.aapcs): u64 {
+        return u64_int_from_float_f64(a);
+    };
+}
+
+/// Truncates `a` toward zero, saturating to the bounds of `I`. NaN saturates by its sign bit.
+@[inline(.always)] const int_from_float = fn(comptime I: type, a: auto): I {
+    const F = @TypeOf(a);
+    const float_bits = @typeInfo(F).float.bits;
+    const int_bits = @typeInfo(I).int.bits;
+    const rep_t = @Int(.{ .signedness = .unsigned, .bits = float_bits });
+    const sig_bits = math.float_mantissa_bits(F);
+    const exp_bits = math.float_exponent_bits(F);
+    const fractional_bits = math.float_fractional_bits(F);
+
+    const implicit_bit = if comptime (F != f80) @as(rep_t, 1) << sig_bits else 0;
+    const max_exp = 1 << (exp_bits - 1);
+    const exp_bias = max_exp - 1;
+    const sig_mask = (@as(rep_t, 1) << sig_bits) - 1;
+
+    // Break a into sign, exponent, significand
+    let a_rep = @bitCast(rep_t, a);
+    let negative = (a_rep >> (float_bits - 1)) != 0;
+    let exponent = @as(i32, @intCast((a_rep << 1) >> (sig_bits + 1))) - exp_bias;
+    let significand: rep_t = (a_rep & sig_mask) | implicit_bit;
+
+    // If the exponent is negative, the result rounds to zero.
+    if (exponent < 0) return 0;
+
+    // If the value is too large for the integer type, saturate.
+    match comptime (@typeInfo(I).int.signedness) {
+        .unsigned => {
+            if (negative) return 0;
+            if (@as(c_uint, @intCast(exponent)) >= @min(int_bits, max_exp)) return math.max_int(I);
+        },
+        .signed => {
+            if (@as(c_uint, @intCast(exponent)) >= @min(int_bits - 1, max_exp)) {
+                return if (negative) @as(I, math.min_int(I)) else math.max_int(I);
+            }
+        },
+    }
+
+    // If 0 <= exponent < sig_bits, right shift to get the result.
+    // Otherwise, shift left.
+    let mut result: I = undefined;
+    if (exponent < fractional_bits) {
+        result = @intCast(significand >> @intCast(fractional_bits - exponent));
+    } else {
+        result = @as(I, @intCast(significand)) << @intCast(exponent - fractional_bits);
+    }
+
+    if (@typeInfo(I).int.signedness == .signed and negative) return ~result +% 1;
+    return result;
+};
+
+/// Converts `a` into the `bits`-wide integer stored at `r` in its in-memory representation,
+/// truncating toward zero and saturating like `int_from_float`. The bits past `bits` in the
+/// top byte are filled with the sign so the whole buffer holds the same value.
+@[inline(.always)]
+const big_int_from_float = fn(comptime is_signed: bool, r: ^mut u8, bits: usize, a: auto): void {
+    const F = @TypeOf(a);
+    const float_bits = @typeInfo(F).float.bits;
+    const rep_t = @Int(.{ .signedness = .unsigned, .bits = float_bits });
+    const sig_bits = math.float_mantissa_bits(F);
+    const exp_bits = math.float_exponent_bits(F);
+    const fractional_bits = math.float_fractional_bits(F);
+
+    // The significand with its integer bit, and room to shift it within a byte
+    const Sig = @Int(.{ .signedness = .unsigned, .bits = fractional_bits + 1 });
+    const Window = @Int(.{ .signedness = .unsigned, .bits = fractional_bits + 1 + 8 });
+
+    const implicit_bit = if comptime (F != f80) @as(rep_t, 1) << sig_bits else 0;
+    const exp_bias = (1 << (exp_bits - 1)) - 1;
+    const sig_mask = (@as(rep_t, 1) << sig_bits) - 1;
+
+    let len = (bits + 7) / 8;
+    if (len == 0) return;
+    let bytes = @sliceFromPtr(r, len);
+    @memset(bytes, 0);
+
+    // Break a into sign, exponent, significand
+    let a_rep = @bitCast(rep_t, a);
+    let negative = (a_rep >> (float_bits - 1)) != 0;
+    let exponent = @as(i32, @intCast((a_rep << 1) >> (sig_bits + 1))) - exp_bias;
+    let significand = @as(Sig, @truncate((a_rep & sig_mask) | implicit_bit));
+
+    // If the exponent is negative, the result rounds to zero.
+    if (exponent < 0 or (!is_signed and negative)) return;
+
+    // Magnitude bits available below the sign
+    let value_bits = bits - @intFromBool(is_signed);
+    if (@as(usize, @intCast(exponent)) >= value_bits) {
+        if (is_signed and negative) {
+            // The minimum is the negation of the magnitude 2^value_bits
+            bytes[byte_index(len, value_bits / 8)] = @as(u8, 1) << @truncate(u3, value_bits);
+            negate(bytes);
+        } else {
+            let full_bytes = value_bits / 8;
+            for (0..full_bytes) |i| {
+                bytes[byte_index(len, i)] = 0xff;
+            }
+            if (full_bytes < len) {
+                bytes[byte_index(len, full_bytes)] = (@as(u8, 1) << @truncate(u3, value_bits)) - 1;
+            }
+        }
+        return;
+    }
+
+    // Place the truncated magnitude so its top bit lands at `exponent`, which is below `bits`
+    let mut window: Window = undefined;
+    let mut i: usize = 0;
+    if (exponent < fractional_bits) {
+        window = significand >> @intCast(fractional_bits - exponent);
+    } else {
+        let shift = @as(usize, @intCast(exponent)) - fractional_bits;
+        window = @as(Window, significand) << @truncate(u3, shift);
+        i = shift / 8;
+    }
+    while (window != 0) : (i += 1) {
+        bytes[byte_index(len, i)] = @truncate(window);
+        window >>= 8;
+    }
+
+    if (is_signed and negative) negate(bytes);
+};
+
+/// Two's complement negation of the integer held in `bytes`
+@[inline(.always)] const negate = fn(bytes: []mut u8): void {
+    let mut carry: u1 = 1;
+    for (0..bytes.len) |i| {
+        let idx = byte_index(bytes.len, i);
+        let sum = @as(u9, ~bytes[idx]) + carry;
+        bytes[idx] = @truncate(sum);
+        carry = @truncate(sum >> 8);
+    }
+};
+
+@[testing] const test_int_from_float = fn(comptime T: type, expected: T, a: auto): void {
+    const F = @TypeOf(a);
+    let mut actual: T = undefined;
+    let r = @ptrCast(^mut u8, ^mut actual);
+    match comptime (@typeInfo(T).int.signedness) {
+        .signed => big_int_from_float(true, r, @bitSizeOf(T), @as(F, a)),
+        .unsigned => big_int_from_float(false, r, @bitSizeOf(T), @as(F, a)),
+    }
+    @expect(expected == actual);
+};
+
+test "signed_int_from_float_f32" {
+    test_int_from_float(i256, -1 << 127, @as(f32, -0x1p127));
+    test_int_from_float(i256, -1 << 100, @as(f32, -0x1p100));
+    test_int_from_float(i256, -1 << 50, @as(f32, -0x1p50));
+    test_int_from_float(i256, -1 << 1, @as(f32, -0x1p1));
+    test_int_from_float(i256, -1 << 0, @as(f32, -0x1p0));
+    test_int_from_float(i256, 0, @as(f32, 0));
+    test_int_from_float(i256, 1 << 0, @as(f32, 0x1p0));
+    test_int_from_float(i256, 1 << 1, @as(f32, 0x1p1));
+    test_int_from_float(i256, 1 << 50, @as(f32, 0x1p50));
+    test_int_from_float(i256, 1 << 100, @as(f32, 0x1p100));
+    test_int_from_float(i256, 1 << 127, @as(f32, 0x1p127));
+}
+
+test "unsigned_int_from_float_f32" {
+    test_int_from_float(u256, 0, @as(f32, 0));
+    test_int_from_float(u256, 1 << 0, @as(f32, 0x1p0));
+    test_int_from_float(u256, 1 << 1, @as(f32, 0x1p1));
+    test_int_from_float(u256, 1 << 50, @as(f32, 0x1p50));
+    test_int_from_float(u256, 1 << 100, @as(f32, 0x1p100));
+    test_int_from_float(u256, 1 << 127, @as(f32, 0x1p127));
+}
+
+test "signed_int_from_float_f64" {
+    test_int_from_float(i256, -1 << 255, @as(f64, -0x1p255));
+    test_int_from_float(i256, -1 << 127, @as(f64, -0x1p127));
+    test_int_from_float(i256, -1 << 100, @as(f64, -0x1p100));
+    test_int_from_float(i256, -1 << 50, @as(f64, -0x1p50));
+    test_int_from_float(i256, -1 << 1, @as(f64, -0x1p1));
+    test_int_from_float(i256, -1 << 0, @as(f64, -0x1p0));
+    test_int_from_float(i256, 0, @as(f64, 0));
+    test_int_from_float(i256, 1 << 0, @as(f64, 0x1p0));
+    test_int_from_float(i256, 1 << 1, @as(f64, 0x1p1));
+    test_int_from_float(i256, 1 << 50, @as(f64, 0x1p50));
+    test_int_from_float(i256, 1 << 100, @as(f64, 0x1p100));
+    test_int_from_float(i256, 1 << 127, @as(f64, 0x1p127));
+    test_int_from_float(i256, 1 << 254, @as(f64, 0x1p254));
+}
+
+test "unsigned_int_from_float_f64" {
+    test_int_from_float(u256, 0, @as(f64, 0));
+    test_int_from_float(u256, 1 << 0, @as(f64, 0x1p0));
+    test_int_from_float(u256, 1 << 1, @as(f64, 0x1p1));
+    test_int_from_float(u256, 1 << 50, @as(f64, 0x1p50));
+    test_int_from_float(u256, 1 << 100, @as(f64, 0x1p100));
+    test_int_from_float(u256, 1 << 127, @as(f64, 0x1p127));
+    test_int_from_float(u256, 1 << 255, @as(f64, 0x1p255));
+}
+
+test "big_int_from_float matches the fixed-width path" {
+    let values: [8]f64 = .{
+        0,
+        1.5,
+        -1.5,
+        0x1.23456789ABCDEp100,
+        -0x1.23456789ABCDEp100,
+        -0.75,
+        0x1p126,
+        -0x1p127,
+    };
+    for (values) |v| {
+        let mut wide: i256 = undefined;
+        signed_int_from_float_f64(@ptrCast(^mut u8, ^mut wide), 256, v);
+        @expect(wide == i128_int_from_float_f64(v));
+
+        let mut narrow: i128 = undefined;
+        signed_int_from_float_f64(@ptrCast(^mut u8, ^mut narrow), 128, v);
+        @expect(narrow == i128_int_from_float_f64(v));
+
+        let mut unsigned: u128 = undefined;
+        unsigned_int_from_float_f64(@ptrCast(^mut u8, ^mut unsigned), 128, v);
+        @expect(unsigned == u128_int_from_float_f64(v));
+    }
+
+    let extended: [4]f80 = .{ 0x1.FFFFFFFFFFFFFFFEp63, -0x1p63, 12.75, -0x1.8p100 };
+    for (extended) |v| {
+        let mut wide: i256 = undefined;
+        signed_int_from_float_f80(@ptrCast(^mut u8, ^mut wide), 256, v);
+        @expect(wide == i128_int_from_float_f80(v));
+    }
+
+    let quad: [3]f128 = .{ 0x1.23456789ABCDEF0123456789ABCDp120, -0x1.8p2, 0x1p-3 };
+    for (quad) |v| {
+        let mut wide: i256 = undefined;
+        signed_int_from_float_f128(@ptrCast(^mut u8, ^mut wide), 256, v);
+        @expect(wide == i128_int_from_float_f128(v));
+    }
+
+    let half: [3]f16 = .{ 65504, -65504, -2.5 };
+    for (half) |v| {
+        let mut wide: i256 = undefined;
+        signed_int_from_float_f16(@ptrCast(^mut u8, ^mut wide), 256, v);
+        @expect(wide == i128_int_from_float_f16(v));
+    }
+}
+
+test "big_int_from_float saturates" {
+    test_int_from_float(i256, math.max_int(i256), math.inf(f64));
+    test_int_from_float(i256, math.min_int(i256), -math.inf(f64));
+    test_int_from_float(i256, math.max_int(i256), @as(f64, 0x1p256));
+    test_int_from_float(i256, math.min_int(i256), @as(f64, -0x1p255));
+    test_int_from_float(u256, math.max_int(u256), math.inf(f64));
+    test_int_from_float(u256, math.max_int(u256), @as(f64, 0x1p256));
+    test_int_from_float(u256, 0, -math.inf(f64));
+    test_int_from_float(u256, 0, @as(f64, -0x1p200));
+    test_int_from_float(i256, 0, @as(f64, -0.5));
+    test_int_from_float(u256, 0, @as(f64, 0.99));
+}
+
+test "big_int_from_float odd widths" {
+    // The bits past `bits` in the top byte carry the sign
+    let mut positive: u256 = 0;
+    signed_int_from_float_f64(@ptrCast(^mut u8, ^mut positive), 197, 0x1p195);
+    @expect(positive == 1 << 195);
+    let mut negative: i256 = 0;
+    signed_int_from_float_f64(@ptrCast(^mut u8, ^mut negative), 197, -0x1p196);
+    @expect(@as(i200, @truncate(negative)) == -(1 << 196));
+
+    // Saturation stops at `bits`, and bytes past the integer are never written
+    let mut big: [4]u64 = .{ 0, 0, 0, 0xAAAA_AAAA_AAAA_AAAA };
+    unsigned_int_from_float_f64(@ptrCast(^mut u8, ^mut big), 201, math.inf(f64));
+    @expect(big[0] == math.max_int(u64) and big[2] == math.max_int(u64));
+    @cfg (endian == .little) {
+        @expect(big[3] == 0xAAAA_AAAA_AAAA_01FF);
+    }
+    let mut smin: i256 = 0;
+    signed_int_from_float_f64(@ptrCast(^mut u8, ^mut smin), 197, -0x1p300);
+    @expect(@as(i197, @truncate(smin)) == math.min_int(i197));
+    let mut smax: i256 = 0;
+    signed_int_from_float_f64(@ptrCast(^mut u8, ^mut smax), 197, 0x1p300);
+    @expect(smax == math.max_int(i197));
+}
