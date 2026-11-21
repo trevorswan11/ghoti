@@ -21,8 +21,8 @@ comptime {
     } else {
         symbol(__fixsfsi, "__fixsfsi");
         symbol(__fixsfdi, "__fixsfdi");
-        symbol(__fixsfti, "__fixsfti");
     }
+    symbol(__fixsfti, "__fixsfti");
     symbol(__fixsfei, "__fixsfei");
 
     @cfg (compiler_rt.want_aeabi) {
@@ -31,8 +31,8 @@ comptime {
     } else {
         symbol(__fixdfsi, "__fixdfsi");
         symbol(__fixdfdi, "__fixdfdi");
-        symbol(__fixdfti, "__fixdfti");
     }
+    symbol(__fixdfti, "__fixdfti");
     symbol(__fixdfei, "__fixdfei");
 
     symbol(__fixxfsi, "__fixxfsi");
@@ -281,8 +281,8 @@ comptime {
     } else {
         symbol(__fixunssfsi, "__fixunssfsi");
         symbol(__fixunssfdi, "__fixunssfdi");
-        symbol(__fixunssfti, "__fixunssfti");
     }
+    symbol(__fixunssfti, "__fixunssfti");
     symbol(__fixunssfei, "__fixunssfei");
 
     @cfg (compiler_rt.want_aeabi) {
@@ -291,8 +291,8 @@ comptime {
     } else {
         symbol(__fixunsdfsi, "__fixunsdfsi");
         symbol(__fixunsdfdi, "__fixunsdfdi");
-        symbol(__fixunsdfti, "__fixunsdfti");
     }
+    symbol(__fixunsdfti, "__fixunsdfti");
     symbol(__fixunsdfei, "__fixunsdfei");
 
     symbol(__fixunsxfsi, "__fixunsxfsi");
