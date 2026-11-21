@@ -332,6 +332,37 @@ test "is_snan" {
     }
 }
 
+/// Returns whether x is negative or negative 0.
+@[inline(.always)] pub const signbit = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    return match comptime (@typeInfo(T)) {
+        .int, .comptime_int => x < 0,
+        .float => |float| @as(@Int(.{ .signedness = .signed, .bits = float.bits }), @bitCast(x)) <
+            0,
+        .comptime_float => @as(i128, @bitCast(@as(f128, x))) < 0,
+        _ => @compileError("std.math.signbit does not support " ++ @typeName(T)),
+    };
+};
+
+test "signbit" {
+    @expect(!signbit(@as(u32, 0)));
+    @expect(!signbit(@as(u32, 100)));
+    @expect(signbit(@as(i32, -1)));
+    @expect(!signbit(@as(i32, 0)));
+    @expect(!signbit(@as(i32, 1)));
+
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        @expect(!signbit(@as(T, 0.0)));
+        @expect(!signbit(@as(T, 1.0)));
+        @expect(signbit(@as(T, -2.0)));
+        @expect(signbit(@as(T, -0.0)));
+        @expect(!signbit(inf(T)));
+        @expect(signbit(-inf(T)));
+        @expect(!signbit(nan(T)));
+        @expect(signbit(-nan(T)));
+    }
+}
+
 pub const @"f80" = struct {
     pub fraction: u64,
     pub exp: u16,

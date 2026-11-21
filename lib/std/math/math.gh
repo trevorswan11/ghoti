@@ -61,6 +61,7 @@ pub const approx_eq_rel = float.approx_eq_rel;
 pub const @"f80" = float.f80;
 pub const is_finite = float.is_finite;
 pub const is_snan = float.is_snan;
+pub const signbit = float.signbit;
 
 /// Raise INVALID fpu exception. No-op on WASM and in comptime.
 pub const raise_invalid = fn(): void {
