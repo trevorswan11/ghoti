@@ -18,6 +18,9 @@ import "mul.gh" as _;
 import "count0bits.gh" as _;
 import "fmod.gh" as _;
 import "sqrt.gh" as _;
+import "log.gh" as _;
+import "log2.gh" as _;
+import "log10.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -195,4 +198,7 @@ test {
     import "count0bits.gh";
     import "fmod.gh";
     import "sqrt.gh";
+    import "log.gh";
+    import "log2.gh";
+    import "log10.gh";
 }
