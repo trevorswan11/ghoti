@@ -35,7 +35,7 @@ impl std.mem.AllocatorVTable for PageAllocator {
         new_len: usize,
     ): std.Option(^mut u8) {
         if (self.resize(memory, alignment, new_len)) {
-            return .{ .some = memory.ptr };
+            return .of(memory.ptr);
         }
         return .empty;
     };
@@ -45,6 +45,7 @@ impl std.mem.AllocatorVTable for PageAllocator {
         memory: []mut u8,
         _: std.mem.Alignment,
     ): void {
+        if (memory.len == 0uz) return;
         if (std.os.free(memory.ptr, memory.len) == .err) {
             @panic("PageAllocator.free: munmap/VirtualFree failed");
         }
@@ -88,5 +89,132 @@ test "PageAllocator: create/destroy round-trips a single item" {
             @expect(p.a + @as(u64, p.b) == 3u64);
         },
         .err => @expect(false, "PageAllocator.create failed"),
+    }
+}
+
+test "PageAllocator: resize within page succeeds and preserves contents" {
+    let allocator = std.heap.page_allocator;
+    match (allocator.alloc(u32, 16uz)) {
+        .ok => |buf| {
+            defer allocator.free(buf);
+            for (buf, 0..) |&mut v, i| {
+                v = @intCast(u32, i + 1);
+            }
+
+            // Expanding within page size succeeds
+            @expect(allocator.resize(buf, 32uz));
+            @expect(buf[0] == 1u32);
+            @expect(buf[15] == 16u32);
+
+            // Shrinking within page size succeeds
+            @expect(allocator.resize(buf, 8uz));
+            @expect(buf[0] == 1u32);
+            @expect(buf[7] == 8u32);
+
+            // Resizing across page boundary fails
+            let huge = std.os.page_size() * 3uz;
+            @expect(!allocator.resize(buf, huge));
+        },
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: resize to zero frees the allocation" {
+    let allocator = std.heap.page_allocator;
+    match (allocator.alloc(u8, 64uz)) {
+        .ok => |buf| {
+            @expect(allocator.resize(buf, 0uz));
+        },
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: remap within page returns slice with requested length" {
+    let allocator = std.heap.page_allocator;
+    match (allocator.alloc(i32, 10uz)) {
+        .ok => |buf| {
+            defer allocator.free(buf);
+            buf[0] = 100i32;
+            buf[9] = 900i32;
+
+            match (allocator.remap(buf, 20uz)) {
+                .some => |remapped| {
+                    @expect(remapped.len == 20uz);
+                    @expect(remapped.ptr == buf.ptr);
+                    @expect(remapped[0] == 100i32);
+                    @expect(remapped[9] == 900i32);
+                },
+                .none => @expect(false, "PageAllocator.remap within page unexpectedly failed"),
+            }
+        },
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: realloc grows across page boundary by relocating" {
+    let allocator = std.heap.page_allocator;
+    match (allocator.alloc(u8, 16uz)) {
+        .ok => |buf| {
+            for (buf, 0..) |&mut b, i| {
+                b = @intCast(u8, i + 10);
+            }
+
+            // Reallocate to multiple pages (exceeding initial page)
+            let new_len = std.os.page_size() * 2uz;
+            match (allocator.realloc(buf, new_len)) {
+                .ok => |new_buf| {
+                    defer allocator.free(new_buf);
+                    @expect(new_buf.len == new_len);
+                    for (0..16uz) |i| {
+                        @expect(new_buf[i] == @intCast(u8, i + 10));
+                    }
+                },
+                .err => @expect(false, "PageAllocator.realloc failed"),
+            }
+        },
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: realloc from empty allocation behaves like alloc" {
+    let allocator = std.heap.page_allocator;
+    let empty: []mut i32 = @sliceFromPtr(@ptrFromInt(^mut i32, 4uz), 0uz);
+    match (allocator.realloc(empty, 5uz)) {
+        .ok => |buf| {
+            defer allocator.free(buf);
+            @expect(buf.len == 5uz);
+            buf[0] = 77;
+            @expect(buf[0] == 77);
+        },
+        .err => @expect(false, "PageAllocator.realloc from empty failed"),
+    }
+}
+
+test "PageAllocator: realloc to zero frees allocation" {
+    let allocator = std.heap.page_allocator;
+    match (allocator.alloc(u64, 8uz)) {
+        .ok => |buf| {
+            match (allocator.realloc(buf, 0uz)) {
+                .ok => |empty| {
+                    @expect(empty.len == 0uz);
+                },
+                .err => @expect(false, "PageAllocator.realloc to 0 failed"),
+            }
+        },
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: dupe duplicates slice memory" {
+    let allocator = std.heap.page_allocator;
+    let original = [4uz]mut i32{ 11, 22, 33, 44 };
+    match (allocator.dupe(i32, original)) {
+        .ok => |dup| {
+            defer allocator.free(dup);
+            @expect(dup.len == 4uz);
+            @expect(dup.ptr != ^mut original[0uz]);
+            @expect(dup[0] == 11 and dup[1] == 22 and dup[2] == 33 and dup[3] == 44);
+        },
+        .err => @expect(false, "PageAllocator.dupe failed"),
     }
 }
