@@ -289,6 +289,49 @@ test "approx_eq_rel" {
     }
 }
 
+/// Returns whether x is a finite value.
+@[inline(.always)] pub const is_finite = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    comptime @assert(@typeInfo(T) == .float);
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+    const remove_sign = ~@as(TBits, 0) >> 1;
+    return @bitCast(TBits, x) & remove_sign < @bitCast(TBits, inf(T));
+};
+
+test "is_finite" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        @expect(is_finite(@as(T, 1.0)));
+        @expect(is_finite(@as(T, -1.0)));
+        @expect(is_finite(@as(T, 0.0)));
+        @expect(is_finite(@as(T, -0.0)));
+        @expect(is_finite(float_true_min(T)));
+        @expect(is_finite(float_min(T)));
+        @expect(is_finite(float_max(T)));
+        @expect(!is_finite(inf(T)));
+        @expect(!is_finite(-inf(T)));
+        @expect(!is_finite(nan(T)));
+        @expect(!is_finite(-nan(T)));
+    }
+}
+
+/// Returns whether x is a signalling NaN.
+@[inline(.always)] pub const is_snan = fn(x: auto): bool {
+    const T = @TypeOf(x);
+    comptime @assert(@typeInfo(T) == .float);
+    const TBits = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+    const quiet_signal_bit_mask = 1 << (float_fractional_bits(T) - 1);
+    return is_nan(x) and (@bitCast(TBits, x) & quiet_signal_bit_mask == 0);
+};
+
+test "is_snan" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        @expect(is_snan(snan(T)));
+        @expect(!is_snan(nan(T)));
+        @expect(!is_snan(@as(T, 1.0)));
+        @expect(!is_snan(inf(T)));
+    }
+}
+
 pub const @"f80" = struct {
     pub fraction: u64,
     pub exp: u16,
