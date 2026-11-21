@@ -1,0 +1,285 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/count0bits.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/clzsi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/clzdi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/clzti2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ctzsi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ctzdi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ctzti2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ffssi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ffsdi2_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/ffsti2_test.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__clzsi2, "__clzsi2");
+    symbol(__clzdi2, "__clzdi2");
+    symbol(__clzti2, "__clzti2");
+    symbol(__ctzsi2, "__ctzsi2");
+    symbol(__ctzdi2, "__ctzdi2");
+    symbol(__ctzti2, "__ctzti2");
+    symbol(__ffssi2, "__ffssi2");
+    symbol(__ffsdi2, "__ffsdi2");
+    symbol(__ffsti2, "__ffsti2");
+}
+
+// clz - count leading zeroes
+// - clz_xi2 for unoptimized little and big endian
+// - __clzsi2 on Thumb-1: assume a != 0
+// - __clzsi2 on ARM32: assume a != 0
+
+// ctz - count trailing zeroes
+// - ctz_xi2 for unoptimized little and big endian
+
+// ffs - find first set
+// * ffs = (a == 0) => 0, (a != 0) => ctz + 1
+// * dont pay for `if (x == 0) return shift;` inside ctz
+// - ffs_xi2 for unoptimized little and big endian
+
+@[inline(.always)] const clz_xi2 = fn(comptime T: type, a: T): i32 {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    let mut x = @bitCast(U, a);
+    let mut n: U = @bitSizeOf(T);
+
+    // Count first bit set using binary search, from Hacker's Delight
+    comptime let mut shift = @bitSizeOf(T);
+    unroll while (shift > 1) {
+        shift >>= 1;
+        let y = x >> shift;
+        if (y != 0) {
+            n -= shift;
+            x = y;
+        }
+    }
+    return @intCast(n - x);
+};
+
+@cfg ((arch == .thumb or (arch == .arm and cpu.has(.noarm))) and !cpu.has(.thumb2)) {
+    /// Similar to the generic version with the last two rounds replaced by a LUT
+    @[naked] const __clzsi2 = fn() callconv(.c): void {
+        asm {
+            template:
+                \\movs r1, #32
+                \\lsrs r2, r0, #16
+                \\beq 1f
+                \\subs r1, #16
+                \\movs r0, r2
+                \\1:
+                \\lsrs r2, r0, #8
+                \\beq 1f
+                \\subs r1, #8
+                \\movs r0, r2
+                \\1:
+                \\lsrs r2, r0, #4
+                \\beq 1f
+                \\subs r1, #4
+                \\movs r0, r2
+                \\1:
+                \\adr r3, .lut
+                \\ldrb r0, [r3, r0]
+                \\subs r0, r1, r0
+                \\bx lr
+                \\.p2align 2
+                \\// Number of bits set in the 0-15 range
+                \\.lut:
+                \\.byte 0,1,2,2,3,3,3,3,4,4,4,4,4,4,4,4
+            ,
+            options: (volatile, noreturn),
+        };
+    };
+} else @cfg (arch == .arm and cpu.has(.v4t)) {
+    @[naked] const __clzsi2 = fn() callconv(.c): void {
+        asm {
+            template:
+                \\// Assumption: n != 0
+                \\// r0: n
+                \\// r1: count of leading zeros in n + 1
+                \\// r2: scratch register for shifted r0
+                \\mov r1, #1
+                \\
+                \\// Basic block:
+                \\// if ((r0 >> SHIFT) == 0)
+                \\//   r1 += SHIFT;
+                \\// else
+                \\//   r0 >>= SHIFT;
+                \\// for descending powers of two as SHIFT.
+                \\lsrs r2, r0, #16
+                \\movne r0, r2
+                \\addeq r1, #16
+                \\
+                \\lsrs r2, r0, #8
+                \\movne r0, r2
+                \\addeq r1, #8
+                \\
+                \\lsrs r2, r0, #4
+                \\movne r0, r2
+                \\addeq r1, #4
+                \\
+                \\lsrs r2, r0, #2
+                \\movne r0, r2
+                \\addeq r1, #2
+                \\
+                \\// The basic block invariants at this point are (r0 >> 2) == 0 and
+                \\// r0 != 0. This means 1 <= r0 <= 3 and 0 <= (r0 >> 1) <= 1.
+                \\//
+                \\// r0 | (r0 >> 1) == 0 | (r0 >> 1) == 1 | -(r0 >> 1) | 1 - (r0 >> 1)f
+                \\// ---+----------------+----------------+------------+--------------
+                \\// 1  | 1              | 0              | 0          | 1
+                \\// 2  | 0              | 1              | -1         | 0
+                \\// 3  | 0              | 1              | -1         | 0
+                \\//
+                \\// The r1's initial value of 1 compensates for the 1 here.
+                \\sub r0, r1, r0, lsr #1
+                \\bx lr
+            ,
+            options: (volatile, noreturn),
+        };
+    };
+} else {
+    const __clzsi2 = fn(a: i32) callconv(.c): i32 {
+        return clz_xi2(i32, a);
+    };
+}
+
+test "__clzsi2" {
+    import "cases/count0bits/clzsi2.gh" as clzsi2_cases;
+    for (clzsi2_cases.cases) |case| {
+        @expect(clz_xi2(i32, @bitCast(case.a)) == case.expected);
+    }
+}
+
+const __clzdi2 = fn(a: i64) callconv(.c): i32 {
+    return clz_xi2(i64, a);
+};
+
+test "__clzdi2" {
+    import "cases/count0bits/clzdi2.gh" as clzdi2_cases;
+    for (clzdi2_cases.cases) |case| {
+        @expect(__clzdi2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+const __clzti2 = fn(a: i128) callconv(.c): i32 {
+    return clz_xi2(i128, a);
+};
+
+test "__clzti2" {
+    import "cases/count0bits/clzti2.gh" as clzti2_cases;
+    for (clzti2_cases.cases) |case| {
+        @expect(__clzti2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+@[inline(.always)] const ctz_xi2 = fn(comptime T: type, a: T): i32 {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    let mut x = @bitCast(U, a);
+    let mut n: U = 1;
+
+    // Number of trailing zeroes as binary search, from Hacker's Delight
+    let mut mask: U = std.math.max_int(U);
+    comptime let mut shift = @bitSizeOf(T);
+    if (x == 0) return shift;
+    unroll while (shift > 1) {
+        shift >>= 1;
+        mask >>= shift;
+        if ((x & mask) == 0) {
+            n += shift;
+            x >>= shift;
+        }
+    }
+    return @intCast(n - (x & 1));
+};
+
+const __ctzsi2 = fn(a: i32) callconv(.c): i32 {
+    return ctz_xi2(i32, a);
+};
+
+test "__ctzsi2" {
+    import "cases/count0bits/ctzsi2.gh" as ctzsi2_cases;
+    for (ctzsi2_cases.cases) |case| {
+        @expect(__ctzsi2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+const __ctzdi2 = fn(a: i64) callconv(.c): i32 {
+    return ctz_xi2(i64, a);
+};
+
+test "__ctzdi2" {
+    import "cases/count0bits/ctzdi2.gh" as ctzdi2_cases;
+    for (ctzdi2_cases.cases) |case| {
+        @expect(__ctzdi2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+const __ctzti2 = fn(a: i128) callconv(.c): i32 {
+    return ctz_xi2(i128, a);
+};
+
+test "__ctzti2" {
+    import "cases/count0bits/ctzti2.gh" as ctzti2_cases;
+    for (ctzti2_cases.cases) |case| {
+        @expect(__ctzti2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+@[inline(.always)] const ffs_xi2 = fn(comptime T: type, a: T): i32 {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    let mut x = @bitCast(U, a);
+    let mut n: U = 1;
+
+    // adapted from Number of trailing zeroes (see ctz_xi2)
+    let mut mask: U = std.math.max_int(U);
+    comptime let mut shift = @bitSizeOf(T);
+
+    // In contrast to ctz return 0
+    if (x == 0) return 0;
+    unroll while (shift > 1) {
+        shift >>= 1;
+        mask >>= shift;
+        if ((x & mask) == 0) {
+            n += shift;
+            x >>= shift;
+        }
+    }
+
+    // return ctz + 1
+    return @intCast(i32, n - (x & 1)) + 1;
+};
+
+const __ffssi2 = fn(a: i32) callconv(.c): i32 {
+    return ffs_xi2(i32, a);
+};
+
+test "__ffssi2" {
+    import "cases/count0bits/ffssi2.gh" as ffssi2_cases;
+    for (ffssi2_cases.cases) |case| {
+        @expect(__ffssi2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+const __ffsdi2 = fn(a: i64) callconv(.c): i32 {
+    return ffs_xi2(i64, a);
+};
+
+test "__ffsdi2" {
+    import "cases/count0bits/ffsdi2.gh" as ffsdi2_cases;
+    for (ffsdi2_cases.cases) |case| {
+        @expect(__ffsdi2(@bitCast(case.a)) == case.expected);
+    }
+}
+
+const __ffsti2 = fn(a: i128) callconv(.c): i32 {
+    return ffs_xi2(i128, a);
+};
+
+test "__ffsti2" {
+    import "cases/count0bits/ffsti2.gh" as ffsti2_cases;
+    for (ffsti2_cases.cases) |case| {
+        @expect(__ffsti2(@bitCast(case.a)) == case.expected);
+    }
+}
