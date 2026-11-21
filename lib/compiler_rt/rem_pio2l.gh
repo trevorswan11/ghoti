@@ -1,0 +1,267 @@
+//! Ported from musl, which is licensed under the MIT license:
+//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+//!
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2l.c
+import std;
+import "rem_pio2_large.gh" as rem_pio2_large_impl;
+
+const math = std.math;
+const ld = math.long_double;
+const rem_pio2_large = rem_pio2_large_impl.rem_pio2_large;
+
+const small_f80 = fn(x_val: f80): bool {
+    let se = ld.sign_exponent(x_val);
+    let top = ld.mantissa_top(x_val);
+    let lhs = (@as(u32, se & 0x7fff) << 16) | top;
+    let rhs: u32 = ((0x3fff + 25) << 16) | (0x921f >> 1) | 0x8000;
+    return lhs < rhs;
+};
+
+const quobits_f80 = fn(v: f80): i32 {
+    let q: i32 = @intFromFloat(v);
+    return @intCast(i32, @bitCast(u32, q) & 0x7fffffff);
+};
+
+const small_f128 = fn(x_val: f128): bool {
+    let se = ld.sign_exponent(x_val);
+    let top = ld.mantissa_top(x_val);
+    let lhs = (@as(u32, se & 0x7fff) << 16) | top;
+    let rhs: u32 = ((0x3fff + 45) << 16) | 0x921f;
+    return lhs < rhs;
+};
+
+const quobits_f128 = fn(fn_val: f128): i32 {
+    let q: i64 = @intFromFloat(fn_val);
+    return @intCast(i32, @bitCast(u64, q) & 0x7fffffff);
+};
+
+pub const rem_pio2l_f80 = fn(x: f80, y: &mut [2]mut f80): i32 {
+    const round1: i32 = 22;
+    const round2: i32 = 61;
+    const nx: usize = 3;
+    const ny: usize = 2;
+
+    const pio4: f80 = 0x1.921fb54442d1846ap-1;
+    // 64 bits of 2/pi
+    const invpio2: f80 = 6.36619772367581343076e-01; // 0xa2f9836e4e44152a.0p-64
+    // first  39 bits of pi/2
+    const pio2_1: f64 = 1.57079632679597125389e+00; // 0x3FF921FB, 0x54444000
+    // pi/2 - pio2_1
+    const pio2_1t: f80 = -1.07463465549719416346e-12; // -0x973dcb3b399d747f.0p-103
+    // second 39 bits of pi/2
+    const pio2_2: f64 = -1.07463465549783099519e-12; // -0x12e7b967674000.0p-92
+    // pi/2 - (pio2_1+pio2_2)
+    const pio2_2t: f80 = 6.36831716351095013979e-25; // 0xc51701b839a25205.0p-144
+    // third  39 bits of pi/2
+    const pio2_3: f64 = 6.36831716351370313614e-25; // 0x18a2e037074000.0p-133
+    // pi/2 - (pio2_1+pio2_2+pio2_3)
+    const pio2_3t: f80 = -2.75299651904407171810e-37; // -0xbb5bf6c7ddd660ce.0p-185
+
+    let x_se = ld.sign_exponent(x);
+    let ex: i32 = @intCast(x_se & 0x7fff);
+
+    if (small_f80(x)) {
+        // rint(x/(pi/2))
+        const toint: f80 = 1.5 / math.float_eps(f80);
+        let mut fn_ = x * invpio2 + toint - toint;
+        let mut n = quobits_f80(fn_);
+        let mut r = x - fn_ * @as(f80, pio2_1);
+        let mut w = fn_ * pio2_1t; // 1st round good to 102/180 bits
+
+        // Matters with directed rounding.
+        if (r - w < -pio4) {
+            @branchHint(.unlikely);
+            n -= 1;
+            fn_ -= 1.0;
+            r = x - fn_ * @as(f80, pio2_1);
+            w = fn_ * pio2_1t;
+        } else if (r - w > pio4) {
+            @branchHint(.unlikely);
+            n += 1;
+            fn_ += 1.0;
+            r = x - fn_ * @as(f80, pio2_1);
+            w = fn_ * pio2_1t;
+        }
+
+        y[0] = r - w;
+
+        let ey: i32 = @intCast(ld.sign_exponent(y[0]) & 0x7fff);
+        if (ex - ey > round1) {
+            let mut t = r;
+            w = fn_ * @as(f80, pio2_2);
+            r = t - w;
+            w = fn_ * pio2_2t - ((t - r) - w);
+            y[0] = r - w;
+            let ey2: i32 = @intCast(ld.sign_exponent(y[0]) & 0x7fff);
+            if (ex - ey2 > round2) {
+                t = r;
+                w = fn_ * @as(f80, pio2_3);
+                r = t - w;
+                w = fn_ * pio2_3t - ((t - r) - w);
+                y[0] = r - w;
+            }
+        }
+        y[1] = (r - y[0]) - w;
+        return n;
+    }
+
+    // all other (large) arguments
+    if (ex == 0x7fff) { // x is inf or NaN
+        y[0] = x - x;
+        y[1] = y[0];
+        return 0;
+    }
+
+    let mut z: f80 = math.scalbn(@abs(x), -math.ilogb(x) + 23);
+    let mut tx: [3]mut f64 = undefined;
+    let mut ty: [2]mut f64 = undefined;
+    let mut i: usize = 0;
+
+    while (i < nx - 1) {
+        tx[i] = @floatFromInt(f64, @intFromFloat(i32, z));
+        z = (z - @as(f80, tx[i])) * 0x1p24;
+        i += 1;
+    }
+
+    tx[i] = @floatCast(f64, z);
+    while (tx[i] == 0.0) {
+        i -= 1;
+    }
+
+    let n = rem_pio2_large(
+        tx[0..(i + 1)],
+        ty[0..ny],
+        ex - 0x3fff - 23,
+        @intCast(i32, i + 1),
+        ny,
+    );
+    let mut w: f64 = ty[1];
+    let r = ty[0] + w;
+    w -= r - ty[0];
+
+    if ((x_se >> 15) != 0) {
+        y[0] = -@as(f80, r);
+        y[1] = -@as(f80, w);
+        return -n;
+    }
+
+    y[0] = @as(f80, r);
+    y[1] = @as(f80, w);
+    return n;
+};
+
+pub const rem_pio2l_f128 = fn(x: f128, y: &mut [2]mut f128): i32 {
+    const round1: i32 = 51;
+    const round2: i32 = 119;
+    const nx: usize = 5;
+    const ny: usize = 3;
+
+    const pio4: f128 = 0x1.921fb54442d18469898cc51701b8p-1;
+    const invpio2: f128 = 6.3661977236758134307553505349005747e-01;
+    const pio2_1: f128 = 1.5707963267948966192292994253909555e+00;
+    const pio2_1t: f128 = 2.0222662487959507323996846200947577e-21;
+    const pio2_2: f128 = 2.0222662487959507323994779168837751e-21;
+    const pio2_2t: f128 = 2.0670321098263988236496903051604844e-43;
+    const pio2_3: f128 = 2.0670321098263988236499468110329591e-43;
+    const pio2_3t: f128 = -2.5650587247459238361625433492959285e-65;
+
+    let x_se = ld.sign_exponent(x);
+    let ex: i32 = @intCast(x_se & 0x7fff);
+
+    if (small_f128(x)) {
+        // rint(x/(pi/2))
+        const toint: f128 = 1.5 / math.float_eps(f128);
+        let mut fn_ = x * invpio2 + toint - toint;
+        let mut n = quobits_f128(fn_);
+        let mut r = x - fn_ * pio2_1;
+        let mut w = fn_ * pio2_1t; // 1st round good to 102/180 bits
+
+        // Matters with directed rounding.
+        if (r - w < -pio4) {
+            @branchHint(.unlikely);
+            n -= 1;
+            fn_ -= 1.0;
+            r = x - fn_ * pio2_1;
+            w = fn_ * pio2_1t;
+        } else if (r - w > pio4) {
+            @branchHint(.unlikely);
+            n += 1;
+            fn_ -= 1.0;
+            r = x - fn_ * pio2_1;
+            w = fn_ * pio2_1t;
+        }
+
+        y[0] = r - w;
+
+        let ey: i32 = @intCast(ld.sign_exponent(y[0]) & 0x7fff);
+        if (ex - ey > round1) {
+            let mut t = r;
+            w = fn_ * pio2_2;
+            r = t - w;
+            w = fn_ * pio2_2t - ((t - r) - w);
+            y[0] = r - w;
+            let ey2: i32 = @intCast(ld.sign_exponent(y[0]) & 0x7fff);
+            if (ex - ey2 > round2) {
+                t = r;
+                w = fn_ * pio2_3;
+                r = t - w;
+                w = fn_ * pio2_3t - ((t - r) - w);
+                y[0] = r - w;
+            }
+        }
+        y[1] = (r - y[0]) - w;
+        return n;
+    }
+
+    // all other (large) arguments
+    if (ex == 0x7fff) { // x is inf or NaN
+        y[0] = x - x;
+        y[1] = y[0];
+        return 0;
+    }
+
+    let mut z: f128 = math.scalbn(@abs(x), -math.ilogb(x) + 23);
+    let mut tx: [5]mut f64 = undefined;
+    let mut ty: [3]mut f64 = undefined;
+    let mut i: usize = 0;
+
+    while (i < nx - 1) {
+        tx[i] = @floatFromInt(f64, @intFromFloat(i32, z));
+        z = (z - @as(f128, tx[i])) * 0x1p24;
+        i += 1;
+    }
+
+    tx[i] = @floatCast(f64, z);
+    while (tx[i] == 0.0) {
+        i -= 1;
+    }
+
+    let n = rem_pio2_large(
+        tx[0..(i + 1)],
+        ty[0..ny],
+        ex - 0x3fff - 23,
+        @intCast(i32, i + 1),
+        ny,
+    );
+    let mut w: f64 = ty[1] + ty[2];
+    let r = ty[0] + w;
+    w -= r - ty[0];
+
+    if ((x_se >> 15) != 0) {
+        y[0] = -@as(f128, r);
+        y[1] = -@as(f128, w);
+        return -n;
+    }
+
+    y[0] = @as(f128, r);
+    y[1] = @as(f128, w);
+    return n;
+};
+
+pub const rem_pio2l = fn(comptime T: type, x: T, y: &mut [2]mut T): i32 {
+    return match comptime (T) {
+        f80 => rem_pio2l_f80(x, y),
+        f128 => rem_pio2l_f128(x, y),
+        _ => @compileError("rem_pio2l supports only f80 and f128"),
+    };
+};
