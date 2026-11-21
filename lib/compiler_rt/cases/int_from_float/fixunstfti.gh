@@ -1,0 +1,25 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int_from_float_test.zig
+import std;
+
+const math = std.math;
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub a: f128, pub expected: u128 }{
+    .{ .a = math.inf(f128),  .expected = 0xffffffffffffffffffffffffffffffff },
+    .{ .a = 0.0,             .expected = 0 },
+    .{ .a = 0.5,             .expected = 0 },
+    .{ .a = 0.99,            .expected = 0 },
+    .{ .a = 1.0,             .expected = 1 },
+    .{ .a = 1.5,             .expected = 1 },
+    .{ .a = 1.99,            .expected = 1 },
+    .{ .a = 2.0,             .expected = 2 },
+    .{ .a = 2.01,            .expected = 2 },
+    .{ .a = -0.01,           .expected = 0 },
+    .{ .a = -0.99,           .expected = 0 },
+    .{ .a = 0x1p+128,        .expected = 0xffffffffffffffffffffffffffffffff },
+    .{ .a = 0x1.FFFFFEp+126, .expected = 0x7fffff80000000000000000000000000 },
+    .{ .a = 0x1.FFFFFEp+127, .expected = 0xffffff00000000000000000000000000 },
+    .{ .a = 0x1.FFFFFEp+128, .expected = 0xffffffffffffffffffffffffffffffff },
+    .{ .a = 0x1.FFFFFEp+129, .expected = 0xffffffffffffffffffffffffffffffff },
+};

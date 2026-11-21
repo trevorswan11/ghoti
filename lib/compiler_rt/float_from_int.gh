@@ -7,6 +7,7 @@ import "compiler_rt.gh" as compiler_rt;
 
 const math = std.math;
 const symbol = compiler_rt.symbol;
+const byte_index = compiler_rt.byte_index;
 
 comptime {
     symbol(__floatsihf, "__floatsihf");
@@ -832,14 +833,6 @@ const __floatuneitf = fn(a: ^u8, bits: usize) callconv(.c): f128 {
     }
 
     return @bitCast(sign_bit | result);
-};
-
-/// Where byte `i`, counting from the least significant, sits in a `len`-byte integer
-@[inline(.always)] const byte_index = fn(len: usize, i: usize): usize {
-    @cfg (endian == .little) {
-        return i;
-    }
-    return len - 1 - i;
 };
 
 /// Converts the `bits`-wide integer stored at `a` in its in-memory representation.
