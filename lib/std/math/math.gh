@@ -62,6 +62,9 @@ pub const @"f80" = float.f80;
 pub const is_finite = float.is_finite;
 pub const is_snan = float.is_snan;
 pub const signbit = float.signbit;
+pub const sign_exponent = float.sign_exponent;
+pub const mantissa_top = float.mantissa_top;
+pub const long_double = float.long_double;
 
 /// Raise INVALID fpu exception. No-op on WASM and in comptime.
 pub const raise_invalid = fn(): void {
@@ -163,9 +166,19 @@ test {
 
 import "ldexp.gh" as ldexp_;
 pub const ldexp = ldexp_.ldexp;
+pub const scalbn = ldexp; // TODO: Real impl if ghoti ever supports more than binary base IEEE-754 floats
 
 test {
     import "ldexp.gh";
+}
+
+import "ilogb.gh" as ilogb_;
+pub const ilogb = ilogb_.ilogb;
+pub const fp_ilogbnan = ilogb_.fp_ilogbnan;
+pub const fp_ilogb0 = ilogb_.fp_ilogb0;
+
+test {
+    import "ilogb.gh";
 }
 
 import "isinf.gh" as isinf;

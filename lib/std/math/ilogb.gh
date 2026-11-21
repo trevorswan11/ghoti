@@ -1,0 +1,76 @@
+//! Ported from musl, which is MIT licensed.
+//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+//!
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/ilogbl.c
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/ilogbf.c
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/ilogb.c
+import std;
+
+const math = std.math;
+
+pub const fp_ilogbnan = math.min_int(i32);
+pub const fp_ilogb0 = math.min_int(i32);
+
+/// Returns the binary exponent of x as an integer.
+///
+/// Special Cases:
+///  - ilogb(+-inf) = max_int(i32)
+///  - ilogb(+-0)   = min_int(i32)
+///  - ilogb(nan)   = min_int(i32)
+pub const ilogb = fn(x: auto): i32 {
+    const T = @TypeOf(x);
+    const type_width = @typeInfo(T).float.bits;
+    const significand_bits = math.float_mantissa_bits(T);
+    const exponent_bits = math.float_exponent_bits(T);
+
+    const Z = @Int(.{ .signedness = .unsigned, .bits = type_width });
+
+    const sign_bit = @as(Z, 1) << (significand_bits + exponent_bits);
+    const max_exponent = (1 << exponent_bits) - 1;
+    const exponent_bias = max_exponent >> 1;
+
+    const abs_mask = sign_bit - 1;
+
+    let u = @bitCast(Z, x) & abs_mask;
+    let e: i32 = @intCast(u >> significand_bits);
+
+    if (e == 0) {
+        if (u == 0) {
+            math.raise_invalid();
+            return fp_ilogb0;
+        }
+
+        const offset = 1 + exponent_bits + (if comptime (T == f80) 1 else 0) - exponent_bias;
+        return offset - @intCast(i32, @clz(u));
+    }
+
+    if (e == max_exponent) {
+        math.raise_invalid();
+        if (u > @bitCast(Z, math.inf(T))) {
+            return fp_ilogbnan;
+        } else {
+            return math.max_int(i32);
+        }
+    }
+
+    return e - exponent_bias;
+};
+
+test "ilogb" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        @expect(ilogb(@as(T, 0.0)) == fp_ilogb0);
+        @expect(ilogb(@as(T, 0.5)) == -1);
+        @expect(ilogb(@as(T, 0.8923)) == -1);
+        @expect(ilogb(@as(T, 10.0)) == 3);
+        @expect(ilogb(@as(T, 2398.23)) == 11);
+        @expect(ilogb(math.inf(T)) == math.max_int(i32));
+        @expect(ilogb(-math.inf(T)) == math.max_int(i32));
+        @expect(ilogb(math.nan(T)) == fp_ilogbnan);
+    }
+
+    @expect(ilogb(@as(f16, -65504.0)) == 15);
+    @expect(ilogb(@as(f32, -123984.0)) == 16);
+    @expect(ilogb(@as(f64, -123984.0)) == 16);
+    @expect(ilogb(@as(f80, -123984.0)) == 16);
+    @expect(ilogb(@as(f128, -123984.0)) == 16);
+}

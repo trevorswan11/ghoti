@@ -380,3 +380,44 @@ pub const @"f80" = struct {
         };
     };
 };
+
+pub const sign_exponent = fn(x: auto): u16 {
+    const T = @TypeOf(x);
+    const bit_width = @typeInfo(T).float.bits;
+    return match comptime (bit_width) {
+        80 => @intCast(u16, @bitCast(u80, x) >> 64),
+        128 => @intCast(u16, @bitCast(u128, x) >> 112),
+        _ => @compileError("`sign_exponent` supports floats of only 80 and 128 bit width"),
+    };
+};
+
+test "sign_exponent" {
+    @expect(sign_exponent(@as(f80, -0.0)) == 0x8000);
+    @expect(sign_exponent(@as(f128, 0.0)) == 0x0000);
+    @expect(sign_exponent(@as(f128, 42.0)) == 0x4004);
+}
+
+/// Takes the top 16 bits of a `long double`'s mantissa.
+pub const mantissa_top = fn(x: auto): u16 {
+    const T = @TypeOf(x);
+    const bit_width = @typeInfo(T).float.bits;
+    return match comptime (bit_width) {
+        80 => @intCast(u16, (@bitCast(u80, x) >> 48) & 0xFFFF),
+        128 => @intCast(u16, (@bitCast(u128, x) >> 96) & 0xFFFF),
+        _ => @compileError("`mantissa_top` supports floats of only 80 and 128 bit width"),
+    };
+};
+
+test "mantissa_top" {
+    @expect(mantissa_top(@as(f80, -0.0)) == 0x0000);
+    @expect(mantissa_top(nan(f128)) == 0x8000);
+    @expect(mantissa_top(@as(f128, 42.0)) == 0x5000);
+}
+
+const float_sign_exponent = sign_exponent;
+const float_mantissa_top = mantissa_top;
+
+pub const long_double = struct {
+    pub const sign_exponent = float_sign_exponent;
+    pub const mantissa_top = float_mantissa_top;
+};
