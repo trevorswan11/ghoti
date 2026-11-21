@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <ranges>
+#include <utility>
 
 #include <stdx/assert.hh>
 #include <stdx/profiler.hh>
@@ -24,6 +25,30 @@ namespace {
 [[nodiscard]] auto int_abi_align(u16 bits, const codegen::type_layout& layout) -> usize {
     if (bits > 32 && bits <= 64) { return layout.i64_align; }
     return std::max<usize>(int_abi_bytes(bits), 1);
+}
+
+// The i32 tag every tagged union stores ahead of its payload
+constexpr usize TAG_BYTES{4};
+
+[[nodiscard]] auto is_tagged(const sema::types::union_t& un) -> bool {
+    return !un.is_untagged && !un.is_bit_packed();
+}
+
+// The widest and the most aligned payload, ignoring the tag
+[[nodiscard]] auto payload_extent(const sema::types::union_t& un,
+                                  const codegen::type_layout& layout) -> std::pair<usize, usize> {
+    usize max_size{0};
+    usize max_align{1};
+    for (const auto field : un.fields) {
+        if (!field) { continue; }
+        max_align = std::max(max_align, align_of(*field, layout));
+        max_size  = std::max(max_size, size_of(*field, layout));
+    }
+    return {max_size, max_align};
+}
+
+[[nodiscard]] auto round_up(usize value, usize align) -> usize {
+    return align > 0 ? (value + align - 1) / align * align : value;
 }
 
 [[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture,
@@ -102,11 +127,8 @@ auto align_of(const sema::type& type, const codegen::type_layout& layout) -> usi
                     return int_abi_align(static_cast<u16>(*bits), layout);
                 }
             }
-            return std::ranges::fold_left(
-                un->fields | std::views::filter([](const auto f) { return f.has_value(); }) |
-                    std::views::transform([&layout](const auto f) { return align_of(*f, layout); }),
-                1UZ,
-                [](usize a, usize b) { return std::max(a, b); });
+            const auto payload_align{payload_extent(*un, layout).second};
+            return is_tagged(*un) ? std::max(TAG_BYTES, payload_align) : payload_align;
         }
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:
@@ -201,14 +223,13 @@ auto size_of(const sema::type& type, const codegen::type_layout& layout) -> usiz
                     return int_abi_bytes(static_cast<u16>(*bits));
                 }
             }
-            usize max_size{0};
-            usize max_align{1};
-            for (const auto field : un->fields) {
-                if (!field) { continue; }
-                max_align = std::max(max_align, align_of(*field, layout));
-                max_size  = std::max(max_size, size_of(*field, layout));
-            }
-            return max_align > 0 ? (max_size + max_align - 1) / max_align * max_align : max_size;
+            const auto [max_size, max_align]{payload_extent(*un, layout)};
+            if (!is_tagged(*un)) { return round_up(max_size, max_align); }
+
+            // The payload follows the tag at its own alignment, matching the LLVM lowering
+            if (max_size == 0) { return TAG_BYTES; }
+            const auto align{std::max(TAG_BYTES, max_align)};
+            return round_up(round_up(TAG_BYTES, max_align) + max_size, align);
         }
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:

@@ -1,4 +1,8 @@
+#include <string_view>
+#include <tuple>
+
 #include <catch2/catch_test_macros.hpp>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -169,24 +173,56 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Small = union(enum) {
+            none: void,
+            byte: u8,
+            word: i32,
+        };
         const Value = union(enum) {
             none: void,
             small: i32,
             big: f64,
         };
+        const Quad = union(enum) {
+            none: void,
+            small: u8,
+            big: f128,
+        };
     )")};
 
-    const auto [val_sym, val_data, val_type]{
-        ctx->get_type_sym_info<sema::symbols::node_t>("Value", idx)};
-    auto* val_llvm{translator.translate(val_type)};
-    REQUIRE(val_llvm->isStructTy());
-    auto* val_struct{llvm::cast<llvm::StructType>(val_llvm)};
-    REQUIRE(val_struct->getNumElements() == 2);
-    CHECK(val_struct->getElementType(0)->isIntegerTy(32));
-    REQUIRE(val_struct->getElementType(1)->isArrayTy());
-    auto* payload_arr{llvm::cast<llvm::ArrayType>(val_struct->getElementType(1))};
-    CHECK(payload_arr->getNumElements() == 8);
+    // The payload slot sits at its most aligned member's alignment, which the union then takes
+    const auto& dl{mod.getDataLayout()};
+    const auto  layout_of{[&](std::string_view name) {
+        const auto [sym, data, type]{ctx->get_type_sym_info<sema::symbols::node_t>(name, idx)};
+        auto* llvm_ty{translator.translate(type)};
+        REQUIRE(llvm_ty->isStructTy());
+        auto* st{llvm::cast<llvm::StructType>(llvm_ty)};
+        REQUIRE(st->getNumElements() == 2);
+        CHECK(st->getElementType(0)->isIntegerTy(32));
+        return std::tuple{st,
+                          dl.getStructLayout(st)->getElementOffset(1).getFixedValue(),
+                          dl.getTypeAllocSize(st).getFixedValue(),
+                          dl.getABITypeAlign(st).value()};
+    }};
+
+    const auto [small, small_offset, small_size, small_align]{layout_of("Small")};
+    REQUIRE(small->getElementType(1)->isArrayTy());
+    auto* payload_arr{llvm::cast<llvm::ArrayType>(small->getElementType(1))};
+    CHECK(payload_arr->getNumElements() == 4);
     CHECK(payload_arr->getElementType()->isIntegerTy(8));
+    CHECK(small_offset == 4);
+    CHECK(small_size == 8);
+    CHECK(small_align == 4);
+
+    const auto [value, value_offset, value_size, value_align]{layout_of("Value")};
+    CHECK(value_offset == 8);
+    CHECK(value_size == 16);
+    CHECK(value_align == 8);
+
+    const auto [quad, quad_offset, quad_size, quad_align]{layout_of("Quad")};
+    CHECK(quad_offset == 16);
+    CHECK(quad_size == 32);
+    CHECK(quad_align == 16);
 }
 
 TEST_CASE("Type translate untagged extern union types") {

@@ -325,21 +325,48 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
         set_untagged_union_body(union_ty, u);
         return union_ty;
     }
-    u64 max_size{0};
-
+    u64         max_size{0};
+    u64         max_align{1};
+    llvm::Type* most_aligned{nullptr};
     for (const auto field : u.fields) {
         if (field->get_kind() == sema::type_kind::VOID_) { continue; }
         auto* field_ty{translate(*field)};
         if (field_ty && !field_ty->isVoidTy()) {
             max_size = std::max(max_size, dl.getTypeAllocSize(field_ty).getFixedValue());
+            if (const auto align{f80_storage_align(module_, field_ty)}; align > max_align) {
+                max_align    = align;
+                most_aligned = field_ty;
+            }
         }
     }
 
     std::vector<llvm::Type*> elements;
     elements.emplace_back(get_int32_ty());
-    if (max_size > 0) { elements.emplace_back(llvm::ArrayType::get(get_int8_ty(), max_size)); }
+    if (max_size > 0) {
+        elements.emplace_back(tagged_payload_type(max_size, max_align, most_aligned));
+    }
     union_ty->setBody(elements);
     return union_ty;
+}
+
+// Byte storage while the tag's alignment suffices, otherwise words of the payload's alignment so
+// the payload slot lands on an aligned offset
+auto type_translator::tagged_payload_type(u64 size, u64 align, llvm::Type* most_aligned)
+    -> llvm::Type* {
+    const auto& dl{module_.getDataLayout()};
+    if (!most_aligned || align <= dl.getABITypeAlign(get_int32_ty()).value()) {
+        return llvm::ArrayType::get(get_int8_ty(), size);
+    }
+    auto* word{llvm::IntegerType::get(context_, static_cast<u32>(align * 8))};
+    if (dl.getABITypeAlign(word).value() == align) {
+        return llvm::ArrayType::get(word, llvm::divideCeil(size, align));
+    }
+
+    // No integer has this alignment, so the most aligned member carries it plus byte padding
+    const auto member_size{dl.getTypeAllocSize(most_aligned).getFixedValue()};
+    if (member_size >= size) { return most_aligned; }
+    return llvm::StructType::get(
+        context_, {most_aligned, llvm::ArrayType::get(get_int8_ty(), size - member_size)});
 }
 
 // Stores the member clang would (the most aligned, then the largest) plus tail padding, and

@@ -78,6 +78,7 @@ class type_translator {
                          bool                         is_packed) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
     auto set_untagged_union_body(llvm::StructType* union_ty, const sema::types::union_t& u) -> void;
+    auto tagged_payload_type(u64 size, u64 align, llvm::Type* most_aligned) -> llvm::Type*;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
         -> llvm::Type*;
