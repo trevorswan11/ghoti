@@ -229,4 +229,23 @@ pub const Allocator = struct {
         @memcpy(new_buf, slice);
         return .of(new_buf);
     };
+
+    /// Copies `slice` to newly allocated memory, appending a null terminator. Caller owns the memory.
+    pub const dupeZ = fn(self, comptime T: type, slice: []T): std.Result([:0]mut T, AllocError) {
+        let mut len_with_null: usize = undefined;
+        if (@addWithOverflow(slice.len, 1uz, ^mut len_with_null)) {
+            return .fail(.out_of_memory);
+        }
+        let new_buf = self.alloc(T, len_with_null)?;
+        @memcpy(new_buf[0uz..slice.len], slice);
+        new_buf[slice.len] = @bitCast(0);
+
+        const Raw = extern struct {
+            ptr: ^mut T,
+            len: usize,
+        };
+        let mut raw = Raw{ .ptr = new_buf.ptr, .len = slice.len };
+        let z_slice = *(@ptrCast(^mut [:0]mut T, ^mut raw));
+        return .of(z_slice);
+    };
 };
