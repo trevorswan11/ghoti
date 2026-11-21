@@ -1,0 +1,849 @@
+//! The `__atomic_*` routines LLVM calls when an atomic access can't be lowered inline
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/atomics.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+
+const AtomicRmwOp = builtin.AtomicRmwOp;
+
+/// ARMv6-M has no ldrex/strex, so it can't CAS at all (Linux offers a kernel helper for it, which
+/// isn't wired up here). LLVM also sets `v6m` on every later core, so ARMv6-M is the one with it
+/// but neither `v6t2` (ARMv7 and up) nor `v8m`.
+const is_armv6m = @cfgValue((arch == .arm or arch == .thumb) and cpu.has(.v6m) and
+    !cpu.has(.v6t2) and
+    !cpu.has(.v8m));
+
+/// A RISC-V without the `A` extension, like the bare-metal `generic` CPU, has no atomics at all
+const is_riscv_without_atomics = @cfgValue((arch == .riscv32 or arch == .riscv64) and !cpu.has(.a));
+
+/// This constant is true iff the target architecture supports the bare minimum
+/// to implement the atomic load/store intrinsics.
+/// Some architectures support atomic load/stores but no CAS, but we ignore this
+/// detail to keep the export logic clean and because we need some kind of CAS to
+/// implement the spinlocks.
+const supports_atomic_ops = @cfgValue(!is_armv6m and !is_riscv_without_atomics);
+
+const is_sparc = @cfgValue(arch == .sparc or arch == .sparc64);
+const is_little_endian = @cfgValue(endian == .little);
+
+/// A SPARC without CAS or swap only has test-and-set (`ldstub`), so every access takes the lock.
+const sparc_without_cas = @cfgValue(arch == .sparc);
+
+/// The size in bytes of the biggest object the target can load/store atomically.
+/// Anything bigger goes through a spinlock.
+// TODO: x86/x86_64 could check for cmpxchg8b/cmpxchg16b and raise this accordingly
+const largest_atomic_size: usize = if comptime (sparc_without_cas) 0 else @sizeOf(usize);
+
+/// The size in bytes of the smallest object the target can fetch/exchange atomically; loads and
+/// stores are not included. Anything smaller is emulated with a CAS on the containing word.
+/// Every target ghoti supports handles single bytes. Zig raises this to 4 for AMDGCN, which has
+/// no atomics besides load and store (as of LLVM 15).
+const smallest_atomic_fetch_exch_size: usize = 1;
+
+const cache_line_size = 64;
+
+/// SPARC's `ldstub` writes 255 into the lock byte, so that's what marks it as held there.
+/// See section B.7 of the SPARCv8 spec and A.29 of the SPARCv9 spec.
+const LockWord = if comptime (is_sparc) u8 else usize;
+const unlocked: LockWord = 0;
+const locked: LockWord = if comptime (is_sparc) 255 else 1;
+
+const Spinlock = struct {
+    /// Padded out to a cache line so neighboring locks never share one
+    @[align(cache_line_size)] pub v: LockWord = unlocked,
+
+    pub const acquire = fn(&mut self): void {
+        loop {
+            let mut flag: LockWord = undefined;
+            if comptime (is_sparc) {
+                asm {
+                    template: "ldstub [%1], %0",
+                    outputs: ("=r" = flag),
+                    inputs: ("r" = ^mut self.v),
+                    clobbers: ("memory"),
+                    options: (volatile),
+                };
+            } else {
+                flag = @atomicRmw(LockWord, ^mut self.v, .xchg, locked, .acquire);
+            }
+            if (flag == unlocked) {
+                return;
+            }
+        }
+    };
+
+    pub const release = fn(&mut self): void {
+        if comptime (is_sparc) {
+            asm {
+                template: "clrb [%0]",
+                inputs: ("r" = ^mut self.v),
+                clobbers: ("memory"),
+                options: (volatile),
+            };
+        } else {
+            @atomicStore(^mut self.v, unlocked, .release);
+        }
+    };
+};
+
+// Allocate ~4096 bytes of memory for the spinlock table
+const max_spinlocks = 64;
+
+const SpinlockTable = struct {
+    // TODO(tcs) #458: Use a splat if possible
+    pub list: [max_spinlocks]mut Spinlock = unlocked_list(),
+
+    /// Acquires the lock guarding `address`
+    pub const get = fn(&mut self, address: usize): &mut Spinlock {
+        let sl = &mut self.list[(address >> 3) % max_spinlocks];
+        sl.acquire();
+        return sl;
+    };
+};
+
+const unlocked_list = fn(): [max_spinlocks]mut Spinlock {
+    let mut list: [max_spinlocks]mut Spinlock = undefined;
+    for (0..max_spinlocks) |i| {
+        list[i] = .{};
+    }
+    return list;
+};
+
+let mut spinlocks: SpinlockTable = .{};
+
+@cfg (supports_atomic_ops) {
+    comptime {
+        symbol(__atomic_load, "__atomic_load");
+        symbol(__atomic_store, "__atomic_store");
+        symbol(__atomic_exchange, "__atomic_exchange");
+        symbol(__atomic_compare_exchange, "__atomic_compare_exchange");
+
+        symbol(__atomic_fetch_add_1, "__atomic_fetch_add_1");
+        symbol(__atomic_fetch_add_2, "__atomic_fetch_add_2");
+        symbol(__atomic_fetch_add_4, "__atomic_fetch_add_4");
+        symbol(__atomic_fetch_add_8, "__atomic_fetch_add_8");
+        symbol(__atomic_fetch_add_16, "__atomic_fetch_add_16");
+
+        symbol(__atomic_fetch_sub_1, "__atomic_fetch_sub_1");
+        symbol(__atomic_fetch_sub_2, "__atomic_fetch_sub_2");
+        symbol(__atomic_fetch_sub_4, "__atomic_fetch_sub_4");
+        symbol(__atomic_fetch_sub_8, "__atomic_fetch_sub_8");
+        symbol(__atomic_fetch_sub_16, "__atomic_fetch_sub_16");
+
+        symbol(__atomic_fetch_and_1, "__atomic_fetch_and_1");
+        symbol(__atomic_fetch_and_2, "__atomic_fetch_and_2");
+        symbol(__atomic_fetch_and_4, "__atomic_fetch_and_4");
+        symbol(__atomic_fetch_and_8, "__atomic_fetch_and_8");
+        symbol(__atomic_fetch_and_16, "__atomic_fetch_and_16");
+
+        symbol(__atomic_fetch_or_1, "__atomic_fetch_or_1");
+        symbol(__atomic_fetch_or_2, "__atomic_fetch_or_2");
+        symbol(__atomic_fetch_or_4, "__atomic_fetch_or_4");
+        symbol(__atomic_fetch_or_8, "__atomic_fetch_or_8");
+        symbol(__atomic_fetch_or_16, "__atomic_fetch_or_16");
+
+        symbol(__atomic_fetch_xor_1, "__atomic_fetch_xor_1");
+        symbol(__atomic_fetch_xor_2, "__atomic_fetch_xor_2");
+        symbol(__atomic_fetch_xor_4, "__atomic_fetch_xor_4");
+        symbol(__atomic_fetch_xor_8, "__atomic_fetch_xor_8");
+        symbol(__atomic_fetch_xor_16, "__atomic_fetch_xor_16");
+
+        symbol(__atomic_fetch_nand_1, "__atomic_fetch_nand_1");
+        symbol(__atomic_fetch_nand_2, "__atomic_fetch_nand_2");
+        symbol(__atomic_fetch_nand_4, "__atomic_fetch_nand_4");
+        symbol(__atomic_fetch_nand_8, "__atomic_fetch_nand_8");
+        symbol(__atomic_fetch_nand_16, "__atomic_fetch_nand_16");
+
+        symbol(__atomic_fetch_umax_1, "__atomic_fetch_umax_1");
+        symbol(__atomic_fetch_umax_2, "__atomic_fetch_umax_2");
+        symbol(__atomic_fetch_umax_4, "__atomic_fetch_umax_4");
+        symbol(__atomic_fetch_umax_8, "__atomic_fetch_umax_8");
+        symbol(__atomic_fetch_umax_16, "__atomic_fetch_umax_16");
+
+        symbol(__atomic_fetch_umin_1, "__atomic_fetch_umin_1");
+        symbol(__atomic_fetch_umin_2, "__atomic_fetch_umin_2");
+        symbol(__atomic_fetch_umin_4, "__atomic_fetch_umin_4");
+        symbol(__atomic_fetch_umin_8, "__atomic_fetch_umin_8");
+        symbol(__atomic_fetch_umin_16, "__atomic_fetch_umin_16");
+
+        symbol(__atomic_load_1, "__atomic_load_1");
+        symbol(__atomic_load_2, "__atomic_load_2");
+        symbol(__atomic_load_4, "__atomic_load_4");
+        symbol(__atomic_load_8, "__atomic_load_8");
+        symbol(__atomic_load_16, "__atomic_load_16");
+
+        symbol(__atomic_store_1, "__atomic_store_1");
+        symbol(__atomic_store_2, "__atomic_store_2");
+        symbol(__atomic_store_4, "__atomic_store_4");
+        symbol(__atomic_store_8, "__atomic_store_8");
+        symbol(__atomic_store_16, "__atomic_store_16");
+
+        symbol(__atomic_exchange_1, "__atomic_exchange_1");
+        symbol(__atomic_exchange_2, "__atomic_exchange_2");
+        symbol(__atomic_exchange_4, "__atomic_exchange_4");
+        symbol(__atomic_exchange_8, "__atomic_exchange_8");
+        symbol(__atomic_exchange_16, "__atomic_exchange_16");
+
+        symbol(__atomic_compare_exchange_1, "__atomic_compare_exchange_1");
+        symbol(__atomic_compare_exchange_2, "__atomic_compare_exchange_2");
+        symbol(__atomic_compare_exchange_4, "__atomic_compare_exchange_4");
+        symbol(__atomic_compare_exchange_8, "__atomic_compare_exchange_8");
+        symbol(__atomic_compare_exchange_16, "__atomic_compare_exchange_16");
+    }
+}
+
+// Every routine below ignores the requested memory model and uses seq_cst, the strongest one.
+
+// Generic version of GCC atomic builtin functions.
+// Those work on any object no matter the pointer alignment nor its size.
+
+const __atomic_load = fn(size: u32, src: ^u8, dest: ^mut u8, model: i32) callconv(.c): void {
+    _ = model;
+    let sl = spinlocks.get(@intFromPtr(src));
+    defer sl.release();
+    @memcpy(dest[0..size], src[0..size]);
+};
+
+const __atomic_store = fn(size: u32, dest: ^mut u8, src: ^u8, model: i32) callconv(.c): void {
+    _ = model;
+    let sl = spinlocks.get(@intFromPtr(dest));
+    defer sl.release();
+    @memcpy(dest[0..size], src[0..size]);
+};
+
+const __atomic_exchange = fn(
+    size: u32,
+    ptr: ^mut u8,
+    val: ^u8,
+    old: ^mut u8,
+    model: i32,
+) callconv(.c): void {
+    _ = model;
+    let sl = spinlocks.get(@intFromPtr(ptr));
+    defer sl.release();
+    @memcpy(old[0..size], ptr[0..size]);
+    @memcpy(ptr[0..size], val[0..size]);
+};
+
+const __atomic_compare_exchange = fn(
+    size: u32,
+    ptr: ^mut u8,
+    expected: ^mut u8,
+    desired: ^u8,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    _ = success;
+    _ = failure;
+    let sl = spinlocks.get(@intFromPtr(ptr));
+    defer sl.release();
+    for (0..size) |i| {
+        if (expected[i] != ptr[i]) {
+            @memcpy(expected[0..size], ptr[0..size]);
+            return 0;
+        }
+    }
+    @memcpy(ptr[0..size], desired[0..size]);
+    return 1;
+};
+
+// The sized GCC atomic builtins, which LLVM emits only when the object's size is known and its
+// pointer is suitably aligned
+
+@[inline(.always)] const atomic_load_n = fn(comptime T: type, src: ^mut T, model: i32): T {
+    _ = model;
+    if comptime (@sizeOf(T) > largest_atomic_size) {
+        let sl = spinlocks.get(@intFromPtr(src));
+        defer sl.release();
+        return *src;
+    } else {
+        return @atomicLoad(T, src, .seq_cst);
+    }
+};
+
+const __atomic_load_1 = fn(src: ^mut u8, model: i32) callconv(.c): u8 {
+    return atomic_load_n(u8, src, model);
+};
+
+const __atomic_load_2 = fn(src: ^mut u16, model: i32) callconv(.c): u16 {
+    return atomic_load_n(u16, src, model);
+};
+
+const __atomic_load_4 = fn(src: ^mut u32, model: i32) callconv(.c): u32 {
+    return atomic_load_n(u32, src, model);
+};
+
+const __atomic_load_8 = fn(src: ^mut u64, model: i32) callconv(.c): u64 {
+    return atomic_load_n(u64, src, model);
+};
+
+const __atomic_load_16 = fn(src: ^mut u128, model: i32) callconv(.c): u128 {
+    return atomic_load_n(u128, src, model);
+};
+
+@[inline(.always)]
+const atomic_store_n = fn(comptime T: type, dst: ^mut T, value: T, model: i32): void {
+    _ = model;
+    if comptime (@sizeOf(T) > largest_atomic_size) {
+        let sl = spinlocks.get(@intFromPtr(dst));
+        defer sl.release();
+        *dst = value;
+    } else {
+        @atomicStore(dst, value, .seq_cst);
+    }
+};
+
+const __atomic_store_1 = fn(dst: ^mut u8, value: u8, model: i32) callconv(.c): void {
+    atomic_store_n(u8, dst, value, model);
+};
+
+const __atomic_store_2 = fn(dst: ^mut u16, value: u16, model: i32) callconv(.c): void {
+    atomic_store_n(u16, dst, value, model);
+};
+
+const __atomic_store_4 = fn(dst: ^mut u32, value: u32, model: i32) callconv(.c): void {
+    atomic_store_n(u32, dst, value, model);
+};
+
+const __atomic_store_8 = fn(dst: ^mut u64, value: u64, model: i32) callconv(.c): void {
+    atomic_store_n(u64, dst, value, model);
+};
+
+const __atomic_store_16 = fn(dst: ^mut u128, value: u128, model: i32) callconv(.c): void {
+    atomic_store_n(u128, dst, value, model);
+};
+
+/// What a read-modify-write `op` stores, given the `old` value in memory and the operand `val`
+@[inline(.always)]
+const apply_op = fn(comptime T: type, comptime op: AtomicRmwOp, old: T, val: T): T {
+    return match comptime (op) {
+        .xchg => val,
+        .add => old +% val,
+        .sub => old -% val,
+        .band => old & val,
+        .nand => ~(old & val),
+        .bor => old | val,
+        .bxor => old ^ val,
+        .umax => @max(old, val),
+        .umin => @min(old, val),
+        _ => @compileError("unsupported atomic op"),
+    };
+};
+
+/// Applies `op` to the `T` at `ptr` with a CAS loop over the `wide_size`-byte word containing it,
+/// for targets that can't fetch/exchange anything narrower than that word. Returns the old value.
+const wide_update = fn(
+    comptime T: type,
+    comptime wide_size: usize,
+    comptime op: AtomicRmwOp,
+    ptr: ^mut T,
+    val: T,
+): T {
+    const Wide = @Int(.{ .signedness = .unsigned, .bits = wide_size * 8 });
+    const Shift = math.Log2Int(Wide);
+
+    let addr = @intFromPtr(ptr);
+    let wide_ptr = @ptrFromInt(^mut Wide, addr & ~@as(usize, wide_size - 1));
+
+    // How many bytes sit below `ptr`'s least significant byte within the word
+    let offset = addr & (wide_size - 1);
+    let byte_shift = if comptime (is_little_endian) offset else wide_size - offset - @sizeOf(T);
+    let shift = @intCast(Shift, byte_shift * 8);
+    let mask = @as(Wide, math.max_int(T)) << shift;
+
+    let mut wide_old = @atomicLoad(Wide, wide_ptr, .seq_cst);
+    let mut old: T = undefined;
+    loop {
+        old = @truncate(T, (wide_old & mask) >> shift);
+        let new = apply_op(T, op, old, val);
+        let wide_new = (wide_old & ~mask) | (@as(Wide, new) << shift);
+        if (@cmpxchgWeak(Wide, wide_ptr, wide_old, wide_new, .seq_cst, .seq_cst, ^mut wide_old)) {
+            break;
+        }
+    }
+    return old;
+};
+
+/// Applies `op` to the `T` at `ptr` and returns the value it replaced
+@[inline(.always)] const fetch_op_n = fn(
+    comptime T: type,
+    comptime op: AtomicRmwOp,
+    ptr: ^mut T,
+    val: T,
+    model: i32,
+): T {
+    _ = model;
+    if comptime (@sizeOf(T) > largest_atomic_size) {
+        let sl = spinlocks.get(@intFromPtr(ptr));
+        defer sl.release();
+        let old = *ptr;
+        *ptr = apply_op(T, op, old, val);
+        return old;
+    } else if comptime (@sizeOf(T) < smallest_atomic_fetch_exch_size) {
+        return wide_update(T, smallest_atomic_fetch_exch_size, op, ptr, val);
+    } else {
+        return @atomicRmw(T, ptr, op, val, .seq_cst);
+    }
+};
+
+const __atomic_exchange_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .xchg, ptr, val, model);
+};
+
+const __atomic_exchange_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .xchg, ptr, val, model);
+};
+
+const __atomic_exchange_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .xchg, ptr, val, model);
+};
+
+const __atomic_exchange_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .xchg, ptr, val, model);
+};
+
+const __atomic_exchange_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .xchg, ptr, val, model);
+};
+
+/// Stores `desired` at `ptr` if it holds `expected`, returning 1; otherwise writes the value it
+/// does hold into `expected` and returns 0
+@[inline(.always)] const atomic_compare_exchange_n = fn(
+    comptime T: type,
+    ptr: ^mut T,
+    expected: ^mut T,
+    desired: T,
+    success: i32,
+    failure: i32,
+): i32 {
+    _ = success;
+    _ = failure;
+    if comptime (@sizeOf(T) > largest_atomic_size) {
+        let sl = spinlocks.get(@intFromPtr(ptr));
+        defer sl.release();
+        let value = *ptr;
+        if (value == *expected) {
+            *ptr = desired;
+            return 1;
+        }
+        *expected = value;
+        return 0;
+    } else {
+        let mut actual: T = undefined;
+        if (@cmpxchgStrong(T, ptr, *expected, desired, .seq_cst, .seq_cst, ^mut actual)) {
+            return 1;
+        }
+        *expected = actual;
+        return 0;
+    }
+};
+
+const __atomic_compare_exchange_1 = fn(
+    ptr: ^mut u8,
+    expected: ^mut u8,
+    desired: u8,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    return atomic_compare_exchange_n(u8, ptr, expected, desired, success, failure);
+};
+
+const __atomic_compare_exchange_2 = fn(
+    ptr: ^mut u16,
+    expected: ^mut u16,
+    desired: u16,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    return atomic_compare_exchange_n(u16, ptr, expected, desired, success, failure);
+};
+
+const __atomic_compare_exchange_4 = fn(
+    ptr: ^mut u32,
+    expected: ^mut u32,
+    desired: u32,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    return atomic_compare_exchange_n(u32, ptr, expected, desired, success, failure);
+};
+
+const __atomic_compare_exchange_8 = fn(
+    ptr: ^mut u64,
+    expected: ^mut u64,
+    desired: u64,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    return atomic_compare_exchange_n(u64, ptr, expected, desired, success, failure);
+};
+
+const __atomic_compare_exchange_16 = fn(
+    ptr: ^mut u128,
+    expected: ^mut u128,
+    desired: u128,
+    success: i32,
+    failure: i32,
+) callconv(.c): i32 {
+    return atomic_compare_exchange_n(u128, ptr, expected, desired, success, failure);
+};
+
+const __atomic_fetch_add_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .add, ptr, val, model);
+};
+
+const __atomic_fetch_add_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .add, ptr, val, model);
+};
+
+const __atomic_fetch_add_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .add, ptr, val, model);
+};
+
+const __atomic_fetch_add_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .add, ptr, val, model);
+};
+
+const __atomic_fetch_add_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .add, ptr, val, model);
+};
+
+const __atomic_fetch_sub_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .sub, ptr, val, model);
+};
+
+const __atomic_fetch_sub_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .sub, ptr, val, model);
+};
+
+const __atomic_fetch_sub_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .sub, ptr, val, model);
+};
+
+const __atomic_fetch_sub_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .sub, ptr, val, model);
+};
+
+const __atomic_fetch_sub_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .sub, ptr, val, model);
+};
+
+const __atomic_fetch_and_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .band, ptr, val, model);
+};
+
+const __atomic_fetch_and_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .band, ptr, val, model);
+};
+
+const __atomic_fetch_and_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .band, ptr, val, model);
+};
+
+const __atomic_fetch_and_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .band, ptr, val, model);
+};
+
+const __atomic_fetch_and_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .band, ptr, val, model);
+};
+
+const __atomic_fetch_or_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .bor, ptr, val, model);
+};
+
+const __atomic_fetch_or_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .bor, ptr, val, model);
+};
+
+const __atomic_fetch_or_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .bor, ptr, val, model);
+};
+
+const __atomic_fetch_or_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .bor, ptr, val, model);
+};
+
+const __atomic_fetch_or_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .bor, ptr, val, model);
+};
+
+const __atomic_fetch_xor_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .bxor, ptr, val, model);
+};
+
+const __atomic_fetch_xor_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .bxor, ptr, val, model);
+};
+
+const __atomic_fetch_xor_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .bxor, ptr, val, model);
+};
+
+const __atomic_fetch_xor_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .bxor, ptr, val, model);
+};
+
+const __atomic_fetch_xor_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .bxor, ptr, val, model);
+};
+
+const __atomic_fetch_nand_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .nand, ptr, val, model);
+};
+
+const __atomic_fetch_nand_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .nand, ptr, val, model);
+};
+
+const __atomic_fetch_nand_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .nand, ptr, val, model);
+};
+
+const __atomic_fetch_nand_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .nand, ptr, val, model);
+};
+
+const __atomic_fetch_nand_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .nand, ptr, val, model);
+};
+
+const __atomic_fetch_umax_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .umax, ptr, val, model);
+};
+
+const __atomic_fetch_umax_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .umax, ptr, val, model);
+};
+
+const __atomic_fetch_umax_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .umax, ptr, val, model);
+};
+
+const __atomic_fetch_umax_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .umax, ptr, val, model);
+};
+
+const __atomic_fetch_umax_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .umax, ptr, val, model);
+};
+
+const __atomic_fetch_umin_1 = fn(ptr: ^mut u8, val: u8, model: i32) callconv(.c): u8 {
+    return fetch_op_n(u8, .umin, ptr, val, model);
+};
+
+const __atomic_fetch_umin_2 = fn(ptr: ^mut u16, val: u16, model: i32) callconv(.c): u16 {
+    return fetch_op_n(u16, .umin, ptr, val, model);
+};
+
+const __atomic_fetch_umin_4 = fn(ptr: ^mut u32, val: u32, model: i32) callconv(.c): u32 {
+    return fetch_op_n(u32, .umin, ptr, val, model);
+};
+
+const __atomic_fetch_umin_8 = fn(ptr: ^mut u64, val: u64, model: i32) callconv(.c): u64 {
+    return fetch_op_n(u64, .umin, ptr, val, model);
+};
+
+const __atomic_fetch_umin_16 = fn(ptr: ^mut u128, val: u128, model: i32) callconv(.c): u128 {
+    return fetch_op_n(u128, .umin, ptr, val, model);
+};
+
+test "generic __atomic_load/__atomic_store copy an odd-sized object" {
+    let mut obj: [13]mut u8 = undefined;
+    let mut src: [13]mut u8 = undefined;
+    let mut dst: [13]mut u8 = undefined;
+    for (0..13) |i| {
+        obj[i] = 0;
+        src[i] = @truncate(u8, i * 17 + 1);
+        dst[i] = 0;
+    }
+    __atomic_store(13, obj.ptr, src.ptr, 5);
+    __atomic_load(13, obj.ptr, dst.ptr, 5);
+    for (0..13) |i| {
+        @expect(obj[i] == src[i]);
+        @expect(dst[i] == src[i]);
+    }
+}
+
+test "generic __atomic_exchange returns the old bytes and stores the new ones" {
+    let mut obj: [13]mut u8 = undefined;
+    let mut val: [13]mut u8 = undefined;
+    let mut old: [13]mut u8 = undefined;
+    for (0..13) |i| {
+        obj[i] = @truncate(u8, i);
+        val[i] = @truncate(u8, 100 + i);
+        old[i] = 0;
+    }
+    __atomic_exchange(13, obj.ptr, val.ptr, old.ptr, 5);
+    for (0..13) |i| {
+        @expect(old[i] == @truncate(u8, i));
+        @expect(obj[i] == @truncate(u8, 100 + i));
+    }
+}
+
+test "generic __atomic_compare_exchange swaps on a match and reports the value on a mismatch" {
+    let mut obj: [13]mut u8 = undefined;
+    let mut expected: [13]mut u8 = undefined;
+    let mut desired: [13]mut u8 = undefined;
+    for (0..13) |i| {
+        obj[i] = @truncate(u8, i);
+        expected[i] = @truncate(u8, i);
+        desired[i] = @truncate(u8, 50 + i);
+    }
+    @expect(__atomic_compare_exchange(13, obj.ptr, expected.ptr, desired.ptr, 5, 5) == 1);
+    for (0..13) |i| {
+        @expect(obj[i] == @truncate(u8, 50 + i));
+    }
+
+    // Only the last byte differs, so a byte-at-a-time comparison has to reach it
+    for (0..13) |i| {
+        expected[i] = @truncate(u8, 50 + i);
+    }
+    expected[12] = 0;
+    @expect(__atomic_compare_exchange(13, obj.ptr, expected.ptr, desired.ptr, 5, 5) == 0);
+    for (0..13) |i| {
+        @expect(expected[i] == @truncate(u8, 50 + i));
+    }
+}
+
+test "sized loads and stores round-trip every width" {
+    let mut a: u8 = 0;
+    let mut b: u16 = 0;
+    let mut c: u32 = 0;
+    let mut d: u64 = 0;
+    let mut e: u128 = 0;
+    __atomic_store_1(^mut a, 0xA5, 5);
+    __atomic_store_2(^mut b, 0xBEEF, 5);
+    __atomic_store_4(^mut c, 0xDEADBEEF, 5);
+    __atomic_store_8(^mut d, 0x0123_4567_89AB_CDEF, 5);
+    __atomic_store_16(^mut e, 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210, 5);
+    @expect(__atomic_load_1(^mut a, 5) == 0xA5);
+    @expect(__atomic_load_2(^mut b, 5) == 0xBEEF);
+    @expect(__atomic_load_4(^mut c, 5) == 0xDEADBEEF);
+    @expect(__atomic_load_8(^mut d, 5) == 0x0123_4567_89AB_CDEF);
+    @expect(__atomic_load_16(^mut e, 5) == 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210);
+}
+
+test "sized exchanges return the old value" {
+    let mut a: u8 = 1;
+    let mut e: u128 = 1;
+    @expect(__atomic_exchange_1(^mut a, 2, 5) == 1);
+    @expect(a == 2);
+    @expect(__atomic_exchange_16(^mut e, 2, 5) == 1);
+    @expect(e == 2);
+}
+
+test "sized compare-exchanges swap on a match and report the value on a mismatch" {
+    let mut x: u32 = 5;
+    let mut expected: u32 = 5;
+    @expect(__atomic_compare_exchange_4(^mut x, ^mut expected, 9, 5, 5) == 1);
+    @expect(x == 9);
+    @expect(__atomic_compare_exchange_4(^mut x, ^mut expected, 7, 5, 5) == 0);
+    @expect(x == 9);
+    @expect(expected == 9);
+
+    let mut y: u128 = 5;
+    let mut expected_y: u128 = 5;
+    @expect(__atomic_compare_exchange_16(^mut y, ^mut expected_y, 9, 5, 5) == 1);
+    @expect(y == 9);
+    @expect(__atomic_compare_exchange_16(^mut y, ^mut expected_y, 7, 5, 5) == 0);
+    @expect(y == 9);
+    @expect(expected_y == 9);
+}
+
+/// One fetch op, natively or through `wide_update` on a 4-byte word
+@[testing] const fetch = fn(
+    comptime T: type,
+    comptime wide: bool,
+    comptime op: AtomicRmwOp,
+    ptr: ^mut T,
+    val: T,
+): T {
+    return if comptime (wide) wide_update(T, 4, op, ptr, val) else fetch_op_n(T, op, ptr, val, 5);
+};
+
+/// Checks every fetch op on `T`
+@[testing] const check_fetch_ops = fn(comptime T: type, comptime wide: bool): void {
+    const high = @as(T, 1) << (@bitSizeOf(T) - 1);
+    let mut x: T = 10;
+    @expect(fetch(T, wide, .add, ^mut x, 5) == 10);
+    @expect(x == 15);
+    @expect(fetch(T, wide, .sub, ^mut x, 20) == 15);
+    @expect(x == 15 -% 20);
+    x = 0b1100;
+    @expect(fetch(T, wide, .band, ^mut x, 0b1010) == 0b1100);
+    @expect(x == 0b1000);
+    @expect(fetch(T, wide, .bor, ^mut x, 0b0011) == 0b1000);
+    @expect(x == 0b1011);
+    @expect(fetch(T, wide, .bxor, ^mut x, 0b0110) == 0b1011);
+    @expect(x == 0b1101);
+    @expect(fetch(T, wide, .nand, ^mut x, 0b0101) == 0b1101);
+    @expect(x == ~@as(T, 0b0101));
+    @expect(fetch(T, wide, .xchg, ^mut x, 3) == ~@as(T, 0b0101));
+    @expect(x == 3);
+
+    // A set high bit must compare as large, which a signed max/min would get backwards
+    @expect(fetch(T, wide, .umax, ^mut x, high) == 3);
+    @expect(x == high);
+    @expect(fetch(T, wide, .umax, ^mut x, 3) == high);
+    @expect(x == high);
+    @expect(fetch(T, wide, .umin, ^mut x, 3) == high);
+    @expect(x == 3);
+    @expect(fetch(T, wide, .umin, ^mut x, high) == 3);
+    @expect(x == 3);
+};
+
+test "fetch ops at every width" {
+    check_fetch_ops(u8, false);
+    check_fetch_ops(u16, false);
+    check_fetch_ops(u32, false);
+    check_fetch_ops(u64, false);
+    check_fetch_ops(u128, false);
+}
+
+test "exported fetch wrappers forward their op" {
+    let mut x: u16 = 0x8000;
+    @expect(__atomic_fetch_umax_2(^mut x, 1, 5) == 0x8000);
+    @expect(x == 0x8000);
+    @expect(__atomic_fetch_umin_2(^mut x, 1, 5) == 0x8000);
+    @expect(x == 1);
+}
+
+test "wide_update emulates narrow fetch ops with a CAS on the containing word" {
+    check_fetch_ops(u8, true);
+    check_fetch_ops(u16, true);
+}
+
+test "wide_update leaves the rest of the word untouched at every offset" {
+    let mut words: [2]mut u32 = undefined;
+    let bytes = @ptrCast(^mut u8, words.ptr);
+    for (0..4) |off| {
+        for (0..8) |k| {
+            bytes[k] = @truncate(u8, 0x10 + k);
+        }
+        @expect(wide_update(u8, 4, .add, bytes + off, 0x40) == @truncate(u8, 0x10 + off));
+        for (0..8) |k| {
+            let want: u8 = if (k == off) @truncate(u8, 0x50 + k) else @truncate(u8, 0x10 + k);
+            @expect(bytes[k] == want);
+        }
+    }
+    for (0..2) |half| {
+        let off = half * 2;
+        for (0..8) |k| {
+            bytes[k] = @truncate(u8, 0x10 + k);
+        }
+        let halves = @ptrCast(^mut u16, bytes + off);
+        let before = *halves;
+        @expect(wide_update(u16, 4, .xchg, halves, 0xABCD) == before);
+        @expect(*halves == 0xABCD);
+        for (0..8) |k| {
+            if (k != off and k != off + 1) {
+                @expect(bytes[k] == @truncate(u8, 0x10 + k));
+            }
+        }
+    }
+}
