@@ -340,6 +340,11 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
     auto&       pool{comp_.constants()};
     const auto& value{pool.value_at(index)};
     auto&       type{*value.type};
+    if (const auto agg{value.data.as_opt<ip::aggregate_value>()};
+        agg && type.get_kind() == gs::type_kind::SLICE) {
+        return materialize_slice(*agg, type, src);
+    }
+
     if (const auto agg{value.data.as_opt<ip::aggregate_value>()}) {
         const auto slot{builder_.emit_alloca(type)};
         for (usize i{0}; i < agg->elements.size(); ++i) {
@@ -405,6 +410,39 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
     }
 
     return constant(index, type);
+}
+
+auto analyzer::materialize_slice(const ip::aggregate_value& agg, gs::type& type, const source& src)
+    -> result<gir::value> {
+    // A compile-time slice is backed by a stack array of its elements
+    const auto& slice{type.get_data().as<gs::types::slice>()};
+    auto&       elem{slice.underlying};
+    auto&       backing{comp_.ctx().get_array(elem.is_constant() ? gs::types::mut::CONSTANT
+                                                                 : gs::types::mut::MUTABLE,
+                                              slice.null_terminated,
+                                              agg.elements.size(),
+                                              elem)};
+    const auto  slot{builder_.emit_alloca(backing)};
+    for (usize i{0}; i < agg.elements.size(); ++i) {
+        const auto at{
+            builder_.emit_get_element_ptr(gir::value{slot, backing}, {usize_constant(i)}, elem)};
+        const auto element{
+            agg.elements[i].value_or(comp_.constants().intern(ip::undefined_value{}, elem))};
+        builder_.emit_store(gir::value{at, elem}, TRY(as_runtime(element, src))).is_initializer =
+            true;
+    }
+
+    if (slice.null_terminated) {
+        const auto at{builder_.emit_get_element_ptr(
+            gir::value{slot, backing}, {usize_constant(agg.elements.size())}, elem)};
+        builder_
+            .emit_store(gir::value{at, elem},
+                        constant(comp_.constants().intern(ip::zero_value{}, elem), elem))
+            .is_initializer = true;
+    }
+
+    const auto decayed{TRY(slice_of_array(gir::value{slot, backing}, backing))};
+    return gir::value{decayed.data, type};
 }
 
 } // namespace ghoti::uir::sema

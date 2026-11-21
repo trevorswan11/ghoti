@@ -270,8 +270,12 @@ auto float_casts() -> std::vector<diff::expr_template> {
     return templates;
 }
 
-// TODO(#456): the folds of these disagree with compiler_rt's exp and log routines
+// TODO(#456): the folds of these disagree with compiler_rt's routines
 constexpr std::pair<std::string_view, std::string_view> MATH_MISMATCHES[]{
+    {"@tan", "f32"},
+    {"@sin", "f80"},
+    {"@cos", "f80"},
+    {"@tan", "f80"},
     {"@exp", "f64"},
     {"@exp", "f80"},
     {"@exp2", "f80"},

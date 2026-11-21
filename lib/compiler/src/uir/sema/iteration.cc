@@ -200,7 +200,7 @@ auto analyzer::run_for(inst_id                                   inst,
         stdx::option<big_int>    start;
         bool                     descending{false};
         gsl::not_null<gs::type*> elem;
-        std::vector<ip::index>   elements;
+        std::vector<operand>     elements;
     };
     std::vector<source_values> sources;
     stdx::option<usize>        length;
@@ -236,17 +236,47 @@ auto analyzer::run_for(inst_id                                   inst,
             continue;
         }
 
-        const auto  given{TRY(resolve_value(iterable_ref, src))};
-        const auto  container{TRY(require_comptime(given, src))};
+        const auto given{TRY(resolve_value(iterable_ref, src))};
+
+        // A pack lists the values it was bound to, which may be runtime ones
+        if (const auto pack{given.as_opt<pack_ref>()}) {
+            source_values values{.start      = stdx::none,
+                                 .descending = false,
+                                 .elem       = &builtin(gs::type_kind::VOID_),
+                                 .elements   = packs_[pack->index]};
+            bound_by(values.elements.size());
+            sources.emplace_back(std::move(values));
+            continue;
+        }
+
+        // A global aggregate is its value here
+        const auto global{given.as_opt<global_const>()};
+        const auto known{global ? stdx::option<ip::index>{global->value} : comptime_value(given)};
+        if (!is_comptime() && !known) {
+            return comp_.unsupported(u_, src, "an `unroll for` over a runtime container");
+        }
+
+        const auto  container{known ? *known : TRY(require_comptime(given, src))};
         const auto& value{pool.value_at(container)};
         const auto  agg{value.data.as_opt<ip::aggregate_value>()};
-        const auto arr{value.type ? value.type->get_data().as_opt<gs::types::array>() : stdx::none};
-        if (!agg || !arr) { return comp_.unsupported(u_, src, "a comptime `for` over this value"); }
+        const auto  text{value.data.as_opt<std::string>()};
+        const auto  elem{value.type ? element_type_of(*value.type) : stdx::none};
+        if ((!agg && !text) || !elem) {
+            return comp_.unsupported(u_, src, "a comptime `for` over this value");
+        }
+
         source_values values{
-            .start = stdx::none, .descending = false, .elem = &arr->underlying, .elements = {}};
-        for (const auto element : agg->elements) {
-            values.elements.emplace_back(
-                element.value_or(pool.intern(ip::undefined_value{}, arr->underlying)));
+            .start = stdx::none, .descending = false, .elem = &*elem, .elements = {}};
+        if (text) {
+            for (const auto byte : *text) {
+                values.elements.emplace_back(operand{
+                    intern_int(pool, big_int{static_cast<u128>(static_cast<u8>(byte))}, *elem)});
+            }
+        } else {
+            for (const auto element : agg->elements) {
+                values.elements.emplace_back(
+                    operand{element.value_or(pool.intern(ip::undefined_value{}, *elem))});
+            }
         }
 
         bound_by(values.elements.size());
@@ -295,6 +325,19 @@ auto analyzer::run_for(inst_id                                   inst,
     return run_block(inst, else_body);
 }
 
+auto analyzer::jumped_to(inst_id loop) const -> bool {
+    // A loop's body is lowered after it, so every jump to it follows it
+    for (u32 i{std::to_underlying(loop) + 1}; i < mod().instruction_count(); ++i) {
+        const auto t{mod().tag_of(inst_id{i})};
+        if (t != tag::break_to && t != tag::repeat) { continue; }
+        const auto& d{mod().data_of(inst_id{i})};
+        const auto  target{t == tag::break_to ? d.bin.lhs : d.un.operand};
+        if (target == inst_ref(loop)) { return true; }
+    }
+
+    return false;
+}
+
 auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -303,7 +346,10 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     const auto iterables{rec.refs_field()};
     const auto body{rec.body_field()};
     const auto else_body{rec.body_field()};
-    if ((loop_flags & flags::UNROLL) != 0) { return comp_.unsupported(u_, src, "an `unroll for`"); }
+    const bool unrolled{(loop_flags & flags::UNROLL) != 0};
+    if (unrolled && !is_comptime() && jumped_to(inst)) {
+        return comp_.unsupported(u_, src, "a runtime `break` or `continue` in an `unroll for`");
+    }
 
     // The names the body binds, by the iterable each comes from
     std::vector<stdx::option<inst_id>> binds(iterables.size());
@@ -321,7 +367,8 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
         if (slot < binds.size()) { binds[slot] = i; }
     }
 
-    if (is_comptime()) { return run_for(inst, iterables, binds, body, else_body); }
+    // An unrolled loop runs its body once per element where it stands, at runtime too
+    if (is_comptime() || unrolled) { return run_for(inst, iterables, binds, body, else_body); }
     const auto branch{runtime_branch()};
 
     auto&                 usize_type{builtin(gs::type_kind::USIZE)};

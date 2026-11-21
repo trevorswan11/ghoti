@@ -116,8 +116,8 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     }
 
     if (from.get_kind() == gs::type_kind::ARRAY && target.get_kind() == gs::type_kind::SLICE) {
-        if (comptime_value(op) && is_comptime()) {
-            return comp_.unsupported(u_, src, "a slice of a compile-time array");
+        if (const auto known{comptime_value(op)}; known && is_comptime()) {
+            return comptime_slice_of(*known, from, target);
         }
 
         if (!comptime_value(op)) {
@@ -237,14 +237,43 @@ auto analyzer::array_as_slice(const gir::value& address, gs::type& from, gs::typ
         return stdx::none;
     }
 
-    auto&      ctx{comp_.ctx()};
-    const auto mut{from.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
-    auto&      ptr_type{ctx.get_pointer(mut, arr.underlying)};
-    auto&      slice_type{ctx.get_slice(mut, arr.null_terminated, arr.underlying)};
-    auto&      usize_type{builtin(gs::type_kind::USIZE)};
-    const auto slot{builder_.emit_alloca(slice_type)};
-    const auto elem0{builder_.emit_get_element_ptr(address, {usize_constant(0)}, ptr_type)};
-    const auto ptr_field{builder_.emit_get_element_ptr(
+    return operand{TRY(slice_of_array(address, from))};
+}
+
+auto analyzer::comptime_slice_of(ip::index array, gs::type& from, gs::type& target)
+    -> stdx::option<operand> {
+    const auto& arr{from.get_data().as<gs::types::array>()};
+    const auto& slice{target.get_data().as<gs::types::slice>()};
+    if (!gs::is_same_unqualified(arr.underlying, slice.underlying) ||
+        (slice.null_terminated && !arr.null_terminated) ||
+        (!target.is_constant() && from.is_constant())) {
+        return stdx::none;
+    }
+
+    // A compile-time slice holds its elements, as the array did
+    auto&       pool{comp_.constants()};
+    const auto& data{pool.value_at(array).data};
+    if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+        return operand{pool.intern(ip::aggregate_value{*agg}, target)};
+    }
+
+    if (const auto text{data.as_opt<std::string>()}) {
+        return operand{pool.intern(std::string{*text}, target)};
+    }
+
+    return stdx::none;
+}
+
+auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> result<gir::value> {
+    const auto& arr{from.get_data().as<gs::types::array>()};
+    auto&       ctx{comp_.ctx()};
+    const auto  mut{from.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
+    auto&       ptr_type{ctx.get_pointer(mut, arr.underlying)};
+    auto&       slice_type{ctx.get_slice(mut, arr.null_terminated, arr.underlying)};
+    auto&       usize_type{builtin(gs::type_kind::USIZE)};
+    const auto  slot{builder_.emit_alloca(slice_type)};
+    const auto  elem0{builder_.emit_get_element_ptr(address, {usize_constant(0)}, ptr_type)};
+    const auto  ptr_field{builder_.emit_get_element_ptr(
         gir::value{slot, slice_type}, {usize_constant(SLICE_PTR_FIELD)}, ptr_type)};
     builder_.emit_store(gir::value{ptr_field, ptr_type}, gir::value{elem0, ptr_type})
         .is_initializer = true;
@@ -252,8 +281,7 @@ auto analyzer::array_as_slice(const gir::value& address, gs::type& from, gs::typ
         gir::value{slot, slice_type}, {usize_constant(SLICE_LEN_FIELD)}, usize_type)};
     builder_.emit_store(gir::value{len_field, usize_type}, usize_constant(arr.len)).is_initializer =
         true;
-    return operand{
-        gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type}};
+    return gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type};
 }
 
 auto analyzer::coerce_to(const operand&  op,

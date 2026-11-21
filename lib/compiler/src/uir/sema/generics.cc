@@ -121,7 +121,7 @@ auto compilation::is_generic(const unit& u, inst_id func) const -> bool {
         const auto type_body{p.body_field()};
         p.skip_body();
         const auto param_flags{p.u32_field()};
-        return (param_flags & flags::PARAM_COMPTIME) != 0 ||
+        return (param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK)) != 0 ||
                is_generic_type(written_type(m, type_body)) || is_auto_pattern(m, type_body);
     });
 }
@@ -331,8 +331,35 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             continue;
         }
 
-        if ((param_flags & flags::PARAM_PACK) != 0 || modifier != 0) {
-            return comp_.unsupported(*g.owner, param_src, "a pack or modified parameter");
+        if (modifier != 0) {
+            return comp_.unsupported(*g.owner, param_src, "a modified parameter");
+        }
+
+        // A pack takes every argument left, each in a GIR parameter of its own
+        if ((param_flags & flags::PARAM_PACK) != 0) {
+            if ((param_flags & flags::PARAM_COMPTIME) != 0 || i + 1 != params.size()) {
+                return comp_.unsupported(*g.owner, param_src, "a comptime or leading pack");
+            }
+
+            const bool              untyped{type_body.empty() ||
+                                            written_type(m, type_body) == well_known::auto_type};
+            stdx::option<gs::type&> declared;
+            if (!untyped) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
+            for (usize j{i}; j < args.size(); ++j) {
+                auto& type{declared ? *declared : inferred_type(args[j].value)};
+                if (!gs::is_value_type(type.get_kind()) ||
+                    gs::is_comptime_numeric(type.get_kind())) {
+                    return comp_.unsupported(*g.owner, param_src, "a pack of comptime-only values");
+                }
+
+                binding.key.args.emplace_back(interned_type(type));
+                binding.slots.emplace_back(&type);
+                binding.mangled_params.emplace_back(comp_.mangle_type(type));
+            }
+
+            binding.bindings.emplace_back<param_binding>(
+                {.value = stdx::none, .has_slot = true, .pack_size = args.size() - i});
+            break;
         }
 
         const auto&             arg{args[i].value};
@@ -435,15 +462,14 @@ auto analyzer::call_generic(generic_fn&           g,
         p.skip_str().skip_body().skip_body();
         return (p.u32_field() & flags::PARAM_PACK) != 0;
     })};
-    if (has_pack) {
-        return comp_.unsupported(u_, src, "a call of a function with a pack parameter");
-    }
-    if (args.size() != param_count) {
-        return comp_.report(
-            u_,
-            callee_src,
-            gs::error::ARITY_MISMATCH,
-            fmt::format("Expected {} arguments, found {}", param_count, args.size()));
+    if (has_pack ? args.size() + 1 < param_count : args.size() != param_count) {
+        return comp_.report(u_,
+                            callee_src,
+                            gs::error::ARITY_MISMATCH,
+                            fmt::format("Expected {}{} arguments, found {}",
+                                        has_pack ? "at least " : "",
+                                        has_pack ? param_count - 1 : param_count,
+                                        args.size()));
     }
 
     auto  binding{TRY(bind_generic(g, args, src))};
@@ -451,8 +477,15 @@ auto analyzer::call_generic(generic_fn&           g,
 
     // Each argument a parameter's slot takes, with a type parameter's left undefined
     std::vector<operand> values;
-    for (usize i{0}; i < args.size(); ++i) {
+    for (usize i{0}; i < target.bindings.size(); ++i) {
         const auto& bound{target.bindings[i]};
+        if (bound.pack_size) {
+            for (usize j{i}; j < args.size(); ++j) {
+                values.emplace_back(std::move(args[j].value));
+            }
+            break;
+        }
+
         if (!bound.has_slot) { continue; }
         if (bound.value) {
             values.emplace_back(

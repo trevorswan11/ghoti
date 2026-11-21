@@ -300,6 +300,12 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
         return declaration_use(TRY(module_member(*m, name, src)), false, src);
     }
 
+    if (const auto pack{object.as_opt<pack_ref>()}) {
+        if (name != "len") { return comp_.unsupported(u_, src, "a field of a pack"); }
+        return operand{comp_.constants().intern(u64{packs_[pack->index].size()},
+                                                builtin(gs::type_kind::USIZE))};
+    }
+
     if (const auto index{comptime_value(object)}) {
         if (comp_.constants().is_type(*index)) {
             return member_of(comp_.constants().type_at(*index), name, src);
@@ -504,6 +510,7 @@ auto analyzer::analyze_elem_val(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     const auto  object{TRY(resolve(d.bin.lhs, src))};
+    if (const auto pack{object.as_opt<pack_ref>()}) { return pack_elem(*pack, d.bin.rhs, src); }
     if (const auto index{comptime_value(object)}) {
         if (const auto at{comptime_value(TRY(resolve_value(d.bin.rhs, src)))}) {
             return comptime_elem(*index, *at, src);
@@ -675,6 +682,11 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
     }
 
     if (const auto agg{value.data.as_opt<ip::aggregate_value>()};
+        agg && type.get_kind() == gs::type_kind::SLICE && name == "len") {
+        return pool.intern(u64{agg->elements.size()}, builtin(gs::type_kind::USIZE));
+    }
+
+    if (const auto agg{value.data.as_opt<ip::aggregate_value>()};
         agg && type.get_kind() == gs::type_kind::STRUCT) {
         const auto index{TRY(field_index(type, name, src))};
         const auto element{agg->elements[index]};
@@ -700,23 +712,57 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
     return comp_.unsupported(u_, src, fmt::format("a field of a comptime `{}`", type.to_string()));
 }
 
+auto element_type_of(gs::type& t) -> stdx::option<gs::type&> {
+    if (const auto arr{t.get_data().as_opt<gs::types::array>()}) { return arr->underlying; }
+    if (const auto slice{t.get_data().as_opt<gs::types::slice>()}) { return slice->underlying; }
+    return stdx::none;
+}
+
+auto analyzer::pack_elem(pack_ref pack, ref at_ref, const source& src) -> result<operand> {
+    const auto at{comptime_value(TRY(resolve_value(at_ref, src)))};
+    const auto exact{at ? int_of(comp_.constants().value_at(*at)) : stdx::none};
+    const auto small{exact ? exact->to_i128() : stdx::none};
+    if (!small) { return comp_.unsupported(u_, src, "a pack indexed at runtime"); }
+    const auto& elements{packs_[pack.index]};
+    if (*small < 0 || *small >= static_cast<i128>(elements.size())) {
+        return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
+    }
+
+    // A runtime value read out of a pack is copied through a slot of its own
+    const auto& element{elements[static_cast<usize>(*small)]};
+    const auto  value{element.as_opt<gir::value>()};
+    if (!value || is_comptime()) { return element; }
+    auto&      type{*value->type};
+    const auto slot{builder_.emit_alloca(type)};
+    builder_.emit_store(gir::value{slot, type}, *value);
+    return operand{gir::value{builder_.emit_load(gir::value{slot, type}, type), type}};
+}
+
 auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) -> result<operand> {
     auto&       pool{comp_.constants()};
     const auto& value{pool.value_at(object)};
     const auto  agg{value.data.as_opt<ip::aggregate_value>()};
+    const auto  text{value.data.as_opt<std::string>()};
     const auto  index{int_of(pool.value_at(at))};
-    if (!agg || !index || !value.type || !value.type->get_data().is<gs::types::array>()) {
+    const auto  elem_type{value.type ? element_type_of(*value.type) : stdx::none};
+    if ((!agg && !text) || !index || !elem_type) {
         return comp_.unsupported(u_, src, "indexing this comptime value");
     }
 
     const auto small{index->to_i128()};
-    if (!small || *small < 0 || *small >= static_cast<i128>(agg->elements.size())) {
+    const auto count{agg ? agg->elements.size() : text->size()};
+    if (!small || *small < 0 || *small >= static_cast<i128>(count)) {
         return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
     }
 
-    const auto element{agg->elements[static_cast<usize>(*small)]};
-    auto&      elem_type{value.type->get_data().as<gs::types::array>().underlying};
-    return element.value_or(pool.intern(ip::undefined_value{}, elem_type));
+    // A string's elements are its bytes
+    const auto at_index{static_cast<usize>(*small)};
+    if (text) {
+        return intern_int(
+            pool, big_int{static_cast<u128>(static_cast<u8>((*text)[at_index]))}, *elem_type);
+    }
+    const auto element{agg->elements[at_index]};
+    return element.value_or(pool.intern(ip::undefined_value{}, *elem_type));
 }
 
 } // namespace ghoti::uir::sema

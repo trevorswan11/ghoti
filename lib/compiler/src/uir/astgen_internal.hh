@@ -295,6 +295,7 @@ class astgen {
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::asm_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::cfg_value_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::function_expr& node) -> ref;
+    [[nodiscard]] auto type_of(source src, const ast::call_expr& node) -> ref;
     [[nodiscard]] auto call_args(const ast::call_expr& call)
         -> std::pair<std::vector<ref>, std::vector<u32>>;
     [[nodiscard]] auto builtin_call(source                src,

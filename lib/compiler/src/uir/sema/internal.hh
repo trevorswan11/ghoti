@@ -16,6 +16,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/gir/builder.hh"
@@ -29,6 +30,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/pattern.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
@@ -162,6 +164,11 @@ struct cast_ref {
     inst_id inst;
 };
 
+// A pack parameter's values, held by the analysis that bound them
+struct pack_ref {
+    u32 index;
+};
+
 // What analyzing an instruction yields
 using operand = stdx::variant<ip::index,      // a comptime value
                               gir::value,     // a runtime value
@@ -176,7 +183,8 @@ using operand = stdx::variant<ip::index,      // a comptime value
                               enum_literal,   // an untyped `.name` literal
                               global_const,   // a module-level aggregate `const`
                               module_ref,     // an imported module
-                              cast_ref>;      // a cast waiting for its target type
+                              cast_ref,       // a cast waiting for its target type
+                              pack_ref>;      // a pack parameter's values
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -237,6 +245,8 @@ struct param_binding {
     stdx::option<ip::index> value;
     // Whether it has a GIR parameter, which a type parameter keeps though its value is known
     bool has_slot;
+    // A pack's GIR parameters, one per value it holds
+    stdx::option<usize> pack_size{};
 };
 
 // A function's signature, and the GIR function its body is analyzed into
@@ -268,6 +278,29 @@ struct instance {
     stdx::option<ast::type_modifier::modifier> self_modifier{};
     // The type whose namespace declares the function
     stdx::option<nominal&> scope{};
+    // Its folded attributes, once known
+    stdx::option<gs::resolved_attributes> attributes{};
+};
+
+// One `@[...]` entry with the operands of its arguments
+struct attribute_item {
+    ast::attribute_kind kind;
+    std::vector<ref>    args;
+    source              src;
+    inst_id             inst;
+};
+
+// One field of a reflection struct being built
+struct info_field {
+    std::string_view name;
+    ip::index        value;
+};
+
+// What an attribute list annotates
+struct attribute_site {
+    ast::attribute_target     target;
+    bool                      returns_void{false};
+    stdx::option<const decl&> declared_by{};
 };
 
 // A function declaration with comptime, `auto` or `type` parameters
@@ -796,6 +829,9 @@ class analyzer {
     [[nodiscard]] auto analyze_decl(decl_id decl) -> result<operand>;
     // Resolves a nominal type's fields, or an enum's values
     [[nodiscard]] auto resolve_fields(nominal& n) -> result<void>;
+    // Folds an attribute list into what codegen reads, checking each against `site`
+    [[nodiscard]] auto fold_attributes(gsl::span<const inst_id> body, const attribute_site& site)
+        -> result<gs::resolved_attributes>;
 
     // The comptime value of `op`, none when it is only known at runtime
     [[nodiscard]] auto comptime_value(const operand& op) const -> stdx::option<ip::index>;
@@ -956,6 +992,7 @@ class analyzer {
     // `^T`, `&T` and `[]T`
     [[nodiscard]] auto analyze_elem_type(inst_id inst, tag t) -> result<operand>;
     [[nodiscard]] auto analyze_array_type(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_fn_type(inst_id inst) -> result<operand>;
     // An array length, which must be known at compile time
     [[nodiscard]] auto array_length(ref len_ref, const source& src) -> result<usize>;
 
@@ -983,6 +1020,8 @@ class analyzer {
                                      std::string_view         name,
                                      const source& src) -> result<gsl::not_null<gs::type*>>;
     // The enum's variant `name` as a constant
+    // The variant an enum constant names, none for any other constant
+    [[nodiscard]] auto variant_name(ip::index value) -> stdx::option<std::string_view>;
     [[nodiscard]] auto enum_constant(gs::type& enum_type, std::string_view name, const source& src)
         -> result<operand>;
     // `T.name`: an enum variant, or a member declaration
@@ -1030,6 +1069,8 @@ class analyzer {
         -> result<place>;
     [[nodiscard]] auto comptime_field(ip::index object, std::string_view name, const source& src)
         -> result<operand>;
+    // The value of a pack at a compile-time index
+    [[nodiscard]] auto pack_elem(pack_ref pack, ref at_ref, const source& src) -> result<operand>;
     [[nodiscard]] auto comptime_elem(ip::index object, ip::index at, const source& src)
         -> result<operand>;
 
@@ -1045,6 +1086,8 @@ class analyzer {
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
     // A `for` at compile time, binding each iteration's values as constants
+    // Whether a `break` or `continue` names `loop`
+    [[nodiscard]] auto jumped_to(inst_id loop) const -> bool;
     [[nodiscard]] auto run_for(inst_id                                   inst,
                                gsl::span<const ref>                      iterables,
                                const std::vector<stdx::option<inst_id>>& binds,
@@ -1102,6 +1145,9 @@ class analyzer {
         -> result<operand>;
     // Builds a folded aggregate constant into runtime storage
     [[nodiscard]] auto materialize(ip::index index, const source& src) -> result<gir::value>;
+    [[nodiscard]] auto materialize_slice(const ip::aggregate_value& agg,
+                                         gs::type&                  type,
+                                         const source&              src) -> result<gir::value>;
 
     // Runtime safety (safety.cc)
     [[nodiscard]] auto usize_constant(u64 value) -> gir::value;
@@ -1163,6 +1209,12 @@ class analyzer {
     // The array of type `from` at `address` viewed as a slice of its elements
     [[nodiscard]] auto array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
         -> result<stdx::option<operand>>;
+    // A known array as a compile-time slice of the same elements, none when the types disagree
+    [[nodiscard]] auto comptime_slice_of(ip::index array, gs::type& from, gs::type& target)
+        -> stdx::option<operand>;
+    // The slice viewing all of the array at `address`
+    [[nodiscard]] auto slice_of_array(const gir::value& address, gs::type& from)
+        -> result<gir::value>;
     [[nodiscard]] auto as_runtime(const operand& op, const source& src) -> result<gir::value>;
     [[nodiscard]] auto materialize_merge(merge_ref m, gs::type& type, const source& src)
         -> result<gir::value>;
@@ -1287,8 +1339,70 @@ class analyzer {
                                    const call_arg&   arg,
                                    const source&     src) -> result<void>;
 
+    // Attributes (attributes.cc)
+    [[nodiscard]] auto attribute_items(gsl::span<const inst_id> body)
+        -> result<std::vector<attribute_item>>;
+    [[nodiscard]] auto attribute_arg_src(ref arg, const source& fallback) const -> const source&;
+    [[nodiscard]] auto attribute_value(ref arg, stdx::option<gs::type&> expect, const source& src)
+        -> stdx::option<ip::index>;
+    [[nodiscard]] auto attribute_bool(const attribute_item& item) -> bool;
+    [[nodiscard]] auto attribute_variant(const attribute_item& item,
+                                         ref                   arg,
+                                         std::string_view enum_name) -> stdx::option<std::string>;
+    [[nodiscard]] auto attribute_alignment(const attribute_item& item) -> stdx::option<u64>;
+    [[nodiscard]] auto attribute_visibility(const attribute_item& item)
+        -> stdx::option<ast::symbol_visibility>;
+    [[nodiscard]] auto attribute_features(const attribute_item& item) -> std::vector<std::string>;
+    auto               check_deprecation_message(const attribute_item& item) -> void;
+    auto check_visibility_linkage(gsl::span<const attribute_item> items, const attribute_site& site)
+        -> void;
+    auto report_misplaced(const attribute_item& item, const attribute_site& site) -> void;
+
     // Builtins (builtins.cc)
     [[nodiscard]] auto analyze_builtin(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_type_of(inst_id inst) -> result<operand>;
+
+    // Reflection (reflection.cc)
+    [[nodiscard]] auto builtin_type_info(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto type_info(gs::type&                                    type,
+                                 stdx::option<const gs::resolved_attributes&> declared,
+                                 const source& src) -> result<ip::index>;
+    [[nodiscard]] auto function_info(gs::type&                                    type,
+                                     stdx::option<const gs::resolved_attributes&> declared,
+                                     const source& src) -> result<ip::index>;
+    [[nodiscard]] auto enum_info(gs::type& type, const source& src) -> result<ip::index>;
+    [[nodiscard]] auto struct_info(gs::type& type, const source& src) -> result<ip::index>;
+    [[nodiscard]] auto union_info(gs::type& type, const source& src) -> result<ip::index>;
+    // A prelude struct `type_name` with the given fields set
+    [[nodiscard]] auto info_struct(std::string_view            type_name,
+                                   gsl::span<const info_field> fields,
+                                   const source&               src) -> result<ip::index>;
+    // `builtin.TypeInfo` with `tag` active, a void payload when none is given
+    [[nodiscard]] auto info_union(std::string_view        tag,
+                                  stdx::option<ip::index> payload,
+                                  const source&           src) -> result<ip::index>;
+    [[nodiscard]] auto info_variant(std::string_view enum_name,
+                                    std::string_view variant,
+                                    const source&    src) -> result<ip::index>;
+    [[nodiscard]] auto info_slice(std::string_view       elem_name,
+                                  std::vector<ip::index> elements,
+                                  const source&          src) -> result<ip::index>;
+    [[nodiscard]] auto info_name(std::string_view name) -> ip::index;
+    [[nodiscard]] auto info_bool(bool value) -> ip::index;
+    [[nodiscard]] auto info_int(u64 value, gs::type& type) -> ip::index;
+    // Field `index`'s default folded at compile time, none when it has none or it doesn't fold
+    [[nodiscard]] auto field_default_value(gs::type& type, usize index, const source& src)
+        -> result<stdx::option<ip::index>>;
+    [[nodiscard]] auto builtin_bit_size(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_type_name(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_tag_name(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // The value `body` yields, analyzed without emitting anything that would run
+    [[nodiscard]] auto unevaluated(gsl::span<const inst_id> body, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto builtin_compile_error(gsl::span<const ref> args, const source& src)
         -> result<operand>;
     [[nodiscard]] auto builtin_limit(gsl::span<const ref> args, const source& src, bool recursion)
@@ -1353,10 +1467,14 @@ class analyzer {
     [[nodiscard]] auto declares_type(const decl& d) const -> bool;
     // A module-level or member declaration's GIR symbol
     [[nodiscard]] auto global_symbol(decl_id decl, const source& src) -> result<std::string>;
-    [[nodiscard]] auto analyze_global(decl_id                 decl,
-                                      const operand&          value,
-                                      stdx::option<gs::type&> declared,
-                                      const source&           src) -> result<operand>;
+    [[nodiscard]] auto analyze_global(decl_id                        decl,
+                                      const operand&                 value,
+                                      stdx::option<gs::type&>        declared,
+                                      const gs::resolved_attributes& attrs,
+                                      const source&                  src) -> result<operand>;
+    // Folds a module-level declaration's own attributes once its value is known
+    [[nodiscard]] auto decl_attributes(const decl& d, const operand& value)
+        -> result<gs::resolved_attributes>;
 
     // GIR glue (emit.cc)
     [[nodiscard]] auto is_comptime() const noexcept -> bool {
@@ -1393,6 +1511,7 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, gir::value> bool_slots_;
     std::vector<target>                               targets_;
     std::vector<pending_merge>                        merges_;
+    std::vector<std::vector<operand>>                 packs_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // The values `capture` instructions read, and the type whose namespace holds the body
@@ -1448,6 +1567,12 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 
 // `value` as a `type` constant, at the narrowest integer width that holds it
 [[nodiscard]] auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index;
+
+// What an array or slice holds
+[[nodiscard]] auto element_type_of(gs::type& t) -> stdx::option<gs::type&>;
+
+// Whether `d`'s value is the function literal `func` itself
+[[nodiscard]] auto declares_literal(const module_t& m, const decl& d, inst_id func) -> bool;
 
 // An element as a container of `constant` mutability holds it. A pointer, reference or slice keeps
 // its own mutability, which is its pointee's

@@ -253,8 +253,9 @@ TEST_CASE("Target enum comparison folds against a bare member", "[uir]") {
 
 TEST_CASE("MulAdd and TagName constant eval", "[uir]") {
     check_later_phase("const v_mul_add = @mulAdd(i32, 2, 3, 4);", "@mulAdd");
-    check_later_phase("const Color = enum { RED, GREEN, BLUE }; const tag = @tagName(Color.GREEN);",
-                      "@tagName");
+    const auto run{accepted("const Color = enum { RED, GREEN, BLUE };\n"
+                            "const tag = @tagName(Color.GREEN);\nconst len = tag.len;")};
+    CHECK(run.int_value("len") == 5);
 }
 
 TEST_CASE("Const symbol reference propagation constant eval", "[uir]") {
@@ -567,15 +568,15 @@ TEST_CASE("Const eval unreachable in match expression", "[uir]") {
 }
 
 TEST_CASE("`unroll for` iterating over `[]u8` parameter", "[uir]") {
-    check_later_phase(R"(
+    const auto run{accepted(R"(
         const parse_usize = fn(comptime digits: []u8): usize {
             comptime let mut n: usize = 0;
             unroll for (digits) |c| { n = n * 10 + @intCast(usize, c - '0'); }
             return n;
         };
         const parsed = parse_usize("42");
-    )",
-                      "a slice of a compile-time array");
+    )")};
+    CHECK(run.int_value("parsed") == 42);
 }
 
 TEST_CASE("`loop` infinite loop expression in `const_eval`", "[uir]") {

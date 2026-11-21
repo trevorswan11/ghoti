@@ -136,6 +136,8 @@ constexpr std::array LEGACY_BUG_TESTS{
     // The old evaluator can't run a call returning an untyped module-level `const` as a float, so
     // `@intFromFloat(i32, as_float())` stays at runtime
     std::string_view{"A later global is typed on its own, not by the `return` that first reads it"},
+    // A compile-time slice global read at runtime stores its backing array into the slice's slot
+    std::string_view{"A compile-time slice used at runtime is backed by a stack array"},
 };
 
 [[nodiscard]] auto shows_legacy_bug() -> bool {
@@ -311,7 +313,7 @@ auto uir_gir(std::string_view source) -> std::string {
     return normalize_gir(dump_with_flags(*out.gir));
 }
 
-auto report_uir_diff(const uir_diff& diff) -> void {
+auto report_uir_diff(const uir_diff& diff, std::string_view label) -> void {
     const auto path{get_env("GHOTI_TEST_UIR_DIFF_REPORT")};
     if (!path) { return; }
     std::ofstream out{std::string{*path}, std::ios::app | std::ios::binary};
@@ -320,7 +322,8 @@ auto report_uir_diff(const uir_diff& diff) -> void {
     fmt::println(out,
                  "{}\t{}\t{}",
                  uir_diff_status_name(diff.status),
-                 Catch::getResultCapture().getCurrentTestName(),
+                 label.empty() ? Catch::getResultCapture().getCurrentTestName()
+                               : std::string{label},
                  flat);
 }
 

@@ -37,7 +37,8 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     rec.skip_str();
-    const auto              type_ref{written_type_of(rec.ref_field())};
+    const auto type_ref{written_type_of(rec.ref_field())};
+    if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
     stdx::option<gs::type&> type;
     if (type_ref) { type.emplace(*TRY(resolve_type(*type_ref, src))); }
 
@@ -111,7 +112,9 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     rec.skip_str();
     const auto type_ref{written_type_of(rec.ref_field())};
-    const auto init{TRY(resolve_value(*rec.ref_field(), src))};
+    const auto init_ref{*rec.ref_field()};
+    if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
+    const auto init{TRY(resolve_value(init_ref, src))};
     if (init.is<function_ref>()) {
         return comp_.unsupported(u_, src, "a function bound to a `let`");
     }
@@ -157,6 +160,7 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     const auto  name{rec.str_field()};
     const auto  type_ref{written_type_of(rec.ref_field())};
     const auto  body{rec.body_field()};
+    if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
     const auto& init_src{body.empty() ? src : src_of(body.back())};
 
     auto value{[&] {

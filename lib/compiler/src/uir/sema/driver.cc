@@ -148,7 +148,11 @@ auto compilation::analyze_roots() -> void {
                 if (ctx_.testing) { DISCARD(unsupported(u, *d.node, "a `test` block")); }
                 break;
             case decl_kind::IMPL:     analyze_impl_roots(u, decl); break;
-            case decl_kind::COMPTIME: DISCARD(unsupported(u, *d.node, "a `comptime` block")); break;
+            case decl_kind::COMPTIME: {
+                analyzer block{*this, u};
+                DISCARD(block.eval_comptime(u.uir->body(d.value_body)));
+                break;
+            }
             }
 
             if (stopped_at_) { return; }

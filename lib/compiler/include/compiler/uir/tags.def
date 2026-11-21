@@ -90,6 +90,7 @@ UIR_TAG(range, PL)
 UIR_TAG(call, PL)
 UIR_TAG(field_call, PL)           // `obj.name(args)`: a method or a callable field
 UIR_TAG(builtin, PL)              // `@name(args)`, dispatched on its `builtin_t`
+UIR_TAG(type_of, PL)              // `@TypeOf(args)`: each operand in a body that never runs
 UIR_TAG(asm_expr, PL)
 
 // Control flow

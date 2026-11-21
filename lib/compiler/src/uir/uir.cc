@@ -74,6 +74,7 @@ constexpr auto ASM_OPTIONS{
 constexpr std::array CAPTURE_ITEMS{field{REF, "value"}, field{U32, "by_ref"}, field{STR, "name"}};
 constexpr std::array DECL_ITEMS{field{DECL, "decl"}};
 constexpr std::array NAME_ITEMS{field{STR, "name"}};
+constexpr std::array OPERAND_BODY_ITEMS{field{BODY, "operand"}};
 constexpr std::array BINDING_ITEMS{field{STR, "name"}, field{REF, "type"}};
 constexpr std::array STRUCT_FIELD_ITEMS{field{STR, "name"},
                                         field{U32, "flags", {}, PUBLIC_FLAGS},
@@ -146,9 +147,11 @@ constexpr std::array PARAM{field{STR, "name"},
                            field{U32, "modifier", {}, {}, describe_modifier}};
 constexpr std::array BIND{
     field{STR, "name"}, field{U32, "slot"}, field{U32, "modifier", {}, {}, describe_modifier}};
-constexpr std::array ALLOC{field{STR, "name"}, field{REF, "type"}};
-constexpr std::array LET_VALUE{field{STR, "name"}, field{REF, "type"}, field{REF, "init"}};
-constexpr std::array CONST_LOCAL{field{STR, "name"}, field{REF, "type"}, field{BODY, "value"}};
+constexpr std::array ALLOC{field{STR, "name"}, field{REF, "type"}, field{BODY, "attrs"}};
+constexpr std::array LET_VALUE{
+    field{STR, "name"}, field{REF, "type"}, field{REF, "init"}, field{BODY, "attrs"}};
+constexpr std::array CONST_LOCAL{
+    field{STR, "name"}, field{REF, "type"}, field{BODY, "value"}, field{BODY, "attrs"}};
 constexpr std::array REF_OF{field{REF, "operand"}, field{U32, "flags", {}, PTR_FLAGS}};
 constexpr std::array INIT_STRUCT{field{REF, "type"}, field{LIST, "fields", INIT_ITEMS}};
 constexpr std::array INIT_ARRAY{field{REF, "type"}, field{REFS, "values"}};
@@ -167,6 +170,7 @@ constexpr std::array FIELD_CALL{field{REF, "object"},
                                 field{REFS, "args"},
                                 field{WORDS, "pack_mask"}};
 constexpr std::array BUILTIN{field{U32, "builtin", {}, {}, describe_builtin}, field{REFS, "args"}};
+constexpr std::array TYPE_OF{field{LIST, "operands", OPERAND_BODY_ITEMS}};
 constexpr std::array ASM{field{STR, "template"},
                          field{REF, "result_type"},
                          field{LIST, "outputs", ASM_OPERAND_ITEMS},
@@ -311,6 +315,7 @@ auto schema_of(tag t) noexcept -> gsl::span<const field> {
     case tag::call:            return CALL;
     case tag::field_call:      return FIELD_CALL;
     case tag::builtin:         return BUILTIN;
+    case tag::type_of:         return TYPE_OF;
     case tag::asm_expr:        return ASM;
     case tag::block:           return BLOCK;
     case tag::block_comptime:  return BLOCK_COMPTIME;

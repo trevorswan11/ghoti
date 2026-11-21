@@ -1,18 +1,22 @@
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/uir/uir.hh"
@@ -53,6 +57,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::SET_EVAL_RECURSION_LIMIT: return builtin_limit(args, src, true);
     case builtin_t::SET_EVAL_UNROLL_LIMIT:    return builtin_limit(args, src, false);
     case builtin_t::SIZE_OF:                  return builtin_layout(args, src, true);
+    case builtin_t::BIT_SIZE_OF:              return builtin_bit_size(args, src);
+    case builtin_t::TYPE_NAME:                return builtin_type_name(args, src);
+    case builtin_t::TAG_NAME:                 return builtin_tag_name(args, src);
+    case builtin_t::TYPE_INFO:                return builtin_type_info(args, src);
     case builtin_t::ALIGN_OF:                 return builtin_layout(args, src, false);
     case builtin_t::ASSERT:
     case builtin_t::VERIFY:                   return builtin_assert(args, src);
@@ -80,6 +88,58 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     }
 
     return comp_.unsupported(u_, src, fmt::format("the `{}` builtin", syntax::builtin_name(which)));
+}
+
+auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    const auto  count{rec.count()};
+
+    std::vector<gs::peer_operand> peers;
+    std::vector<source>           sources;
+    for (u32 i{0}; i < count; ++i) {
+        const auto body{rec.body_field()};
+        const auto value{TRY(unevaluated(body, src))};
+        auto&      type{type_of(value)};
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        peers.emplace_back<gs::peer_operand>({.type = &type});
+        sources.emplace_back(body.empty() ? src : src_of(body.back()));
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto peer{gs::peer_type(ctx, peers)};
+    if (!peer) {
+        return comp_.report(
+            u_,
+            sources[peer.error().second],
+            gs::error::NO_PEER_TYPE,
+            fmt::format("'@TypeOf': {}", gs::peer_error_message(ctx, peers, peer.error())));
+    }
+
+    return interned_type(**peer);
+}
+
+auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> result<operand> {
+    // A runtime body's operand is analyzed into a function no one emits
+    if (is_comptime() || !gir_fn_) {
+        const auto out{TRY(analyze_body(body))};
+        if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
+        return *out.yielded;
+    }
+
+    gir::function scratch{
+        comp_.ctx().arena, comp_.constants(), std::string{}, builtin(gs::type_kind::VOID_)};
+    const auto outer_fn{gir_fn_};
+    const auto outer_segment{builder_.get_segment()};
+    const auto restore{gsl::finally([&] {
+        gir_fn_ = outer_fn;
+        builder_.set_insert_point(*outer_fn, *outer_segment);
+    })};
+    gir_fn_.emplace(scratch);
+    builder_.set_insert_point(scratch, scratch.add_segment());
+    const auto out{TRY(analyze_body(body))};
+    if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
+    return *out.yielded;
 }
 
 auto analyzer::builtin_compile_error(gsl::span<const ref> args, const source& src)
@@ -118,6 +178,77 @@ auto analyzer::builtin_layout(gsl::span<const ref> args, const source& src, bool
     const usize bytes{size ? gir::size_of(type, layout) : gir::align_of(type, layout)};
     return intern_int(
         comp_.constants(), big_int{static_cast<u128>(bytes)}, builtin(gs::type_kind::COMPTIME_INT));
+}
+
+auto analyzer::builtin_bit_size(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "a layout builtin's arity"); }
+    auto& type{*TRY(resolve_type(args.front(), src))};
+    TRY(layout_ready(type, src));
+    const auto layout{codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str)};
+    const auto ptr_bits{static_cast<u32>(layout.ptr_bytes) * 8};
+    const auto kind{type.get_kind()};
+    const auto bits{[&] -> u64 {
+        if (kind == gs::type_kind::INT) { return gs::int_width(type); }
+        if (kind == gs::type_kind::ISIZE || kind == gs::type_kind::USIZE) { return ptr_bits; }
+        if (kind == gs::type_kind::BOOL) { return 1; }
+        if (gs::is_float(kind)) { return gs::float_bits(kind); }
+        if (const auto st{type.get_data().as_opt<gs::types::struct_t>()};
+            st && st->is_bit_packed()) {
+            if (const auto n{gs::packed_backing_bits(*st, ptr_bits)}) { return *n; }
+        }
+
+        if (const auto ut{type.get_data().as_opt<gs::types::union_t>()};
+            ut && ut->is_bit_packed()) {
+            if (const auto n{gs::packed_union_backing_bits(*ut, ptr_bits)}) { return *n; }
+        }
+
+        return static_cast<u64>(gir::size_of(type, layout)) * 8;
+    }()};
+    return intern_int(
+        comp_.constants(), big_int{static_cast<u128>(bits)}, builtin(gs::type_kind::COMPTIME_INT));
+}
+
+auto analyzer::builtin_type_name(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "a `@typeName` of this arity"); }
+    auto&       type{*TRY(resolve_type(args.front(), src))};
+    auto&       ctx{comp_.ctx()};
+    std::string name{ctx.type_display_name(type)};
+    auto& array{ctx.get_array(gs::types::mut::CONSTANT, true, name.size(), ctx.get_int(8, false))};
+    return comp_.constants().intern(std::move(name), array);
+}
+
+auto analyzer::builtin_tag_name(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "a `@tagName` of this arity"); }
+    const auto value{TRY(resolve_value(args.front(), src))};
+    auto&      ctx{comp_.ctx()};
+    auto&      name_type{ctx.get_slice(gs::types::mut::CONSTANT, true, ctx.get_int(8, false))};
+    if (const auto literal{value.as_opt<enum_literal>()}) {
+        const auto name{mod().string(mod().data_of(literal->inst).str)};
+        return comp_.constants().intern(std::string{name}, name_type);
+    }
+
+    auto&      type{type_of(value)};
+    const auto tagged{type.get_data().as_opt<gs::types::union_t>()};
+    if (type.get_kind() != gs::type_kind::ENUM && (!tagged || tagged->is_untagged)) {
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("'@tagName' expects an enum or tagged union value; found '{}'",
+                        ctx.type_display_name(type)));
+    }
+
+    const auto index{comptime_value(value)};
+    if (!index) { return comp_.unsupported(u_, src, "a runtime `@tagName`"); }
+    const auto& data{comp_.constants().value_at(*index).data};
+    if (const auto un{data.as_opt<ip::union_value>()}) {
+        return comp_.constants().intern(std::string{un->active_field}, name_type);
+    }
+
+    const auto variant{variant_name(*index)};
+    if (!variant) { return comp_.unsupported(u_, src, "a `@tagName` of this value"); }
+    return comp_.constants().intern(std::string{*variant}, name_type);
 }
 
 auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {

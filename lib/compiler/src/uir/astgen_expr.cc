@@ -485,9 +485,26 @@ auto astgen::builtin_call(source                src,
                "'{}' may only be used inside a 'test' block or a `@[testing]` function",
                syntax::builtin_name(builtin));
     }
+    if (builtin == builtin_t::TYPE_OF) { return type_of(src, node); }
     auto [args, mask]{call_args(node)};
     return add_pl(
         tag::builtin, writer().u32_field(static_cast<u32>(builtin)).refs_field(args), src);
+}
+
+auto astgen::type_of(source src, const ast::call_expr& node) -> ref {
+    // Each operand is only ever typed, so it lowers into a body of its own
+    std::vector<std::vector<inst_id>> operands;
+    for (const auto& argument : node.arguments) {
+        auto&            body{operands.emplace_back()};
+        const body_guard guard{*this, body};
+        argument.visit([this](ast::expr_handle e) { yields(expr(e), ast::node_id{e}); },
+                       [this](ast::explicit_type_id t) { yields(type(t), t); });
+    }
+
+    auto record{writer()};
+    record.count(operands.size());
+    for (const auto& body : operands) { record.body_field(body); }
+    return add_pl(tag::type_of, record, src);
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::dot_expr& node) -> ref {
