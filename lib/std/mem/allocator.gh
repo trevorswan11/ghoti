@@ -200,7 +200,10 @@ pub const Allocator = struct {
     /// `mem` may have length 0, which makes a new allocation.
     ///
     /// This function only fails on out-of-memory conditions.
-    pub const realloc = fn(self, mem: []mut auto, new_len: usize): std.Result([]mut @TypeOf(mem[0]), AllocError) {
+    pub const realloc = fn(self, mem: []mut auto, new_len: usize): std.Result(
+        []mut @TypeOf(mem[0]),
+        AllocError
+    ) {
         const T = @TypeOf(mem[0]);
         if (mem.len == 0uz) {
             return self.alloc(T, new_len);
@@ -244,6 +247,7 @@ pub const Allocator = struct {
             ptr: ^mut T,
             len: usize,
         };
+
         let mut raw = Raw{ .ptr = new_buf.ptr, .len = slice.len };
         let z_slice = *(@ptrCast(^mut [:0]mut T, ^mut raw));
         return .of(z_slice);
