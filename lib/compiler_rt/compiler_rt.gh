@@ -16,6 +16,7 @@ import "trunc.gh" as _;
 import "int_from_float.gh" as _;
 import "mul.gh" as _;
 import "count0bits.gh" as _;
+import "fmod.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -191,4 +192,5 @@ test {
     import "int_from_float.gh";
     import "mul.gh";
     import "count0bits.gh";
+    import "fmod.gh";
 }

@@ -1,0 +1,409 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/fmod.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/fmodq_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/fmodx_test.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+const normalize = compiler_rt.normalize;
+
+comptime {
+    symbol(__fmodh, "__fmodh");
+    symbol(fmodf, "fmodf");
+    symbol(fmod, "fmod");
+    symbol(__fmodx, "__fmodx");
+    symbol(fmodq, "fmodf128");
+    symbol(fmodl, "fmodl");
+
+    @cfg (compiler_rt.is_windows_msvc) {
+        symbol(fmodf64x, "fmodf64x");
+    }
+}
+
+const __fmodh = fn(a: f16, b: f16) callconv(.c): f16 {
+    return fmod_f16(a, b);
+};
+
+@[inline(.always)] const fmod_f16 = fn(x: f16, y: f16): f16 {
+    // TODO: more efficient implementation
+    return @floatCast(fmod_f32(x, y));
+};
+
+test "fmod_f16" {
+    @expect(math.is_nan(fmod_f16(math.nan(f16), 1.0)));
+    @expect(math.is_nan(fmod_f16(math.inf(f16), 1.0)));
+    @expect(math.is_nan(fmod_f16(1.0, 0.0)));
+    @expect(math.is_negative_zero(fmod_f16(-0.0, 2.0)));
+    @expect(fmod_f16(-32.0, 10.0) == -2.0);
+    @expect(fmod_f16(32.0, -10.0) == 2.0);
+    @expect(fmod_f16(65504, 3.0) == 2.0);
+}
+
+const fmodf = fn(a: f32, b: f32) callconv(.c): f32 {
+    return fmod_f32(a, b);
+};
+
+@[inline(.always)] const fmod_f32 = fn(x: f32, y: f32): f32 {
+    return generic_fmod(f32, x, y);
+};
+
+test "fmod_f32" {
+    test_fmod_generic(f32);
+}
+
+const fmod = fn(a: f64, b: f64) callconv(.c): f64 {
+    return fmod_f64(a, b);
+};
+
+@[inline(.always)] const fmod_f64 = fn(x: f64, y: f64): f64 {
+    return generic_fmod(f64, x, y);
+};
+
+test "fmod_f64" {
+    test_fmod_generic(f64);
+}
+
+@[testing] const test_fmod_generic = fn(comptime T: type): void {
+    let f = if comptime (T == f32) fmod_f32 else fmod_f64;
+    let nan_val = math.nan(T);
+    let inf_val = math.inf(T);
+
+    @expect(math.is_nan(f(nan_val, 1.0)));
+    @expect(math.is_nan(f(1.0, nan_val)));
+    @expect(math.is_nan(f(inf_val, 1.0)));
+    @expect(math.is_nan(f(0.0, 0.0)));
+    @expect(math.is_nan(f(1.0, 0.0)));
+
+    @expect(math.is_positive_zero(f(0.0, 2.0)));
+    @expect(math.is_negative_zero(f(-0.0, 2.0)));
+
+    @expect(f(-32.0, 10.0) == -2.0);
+    @expect(f(-32.0, -10.0) == -2.0);
+    @expect(f(32.0, 10.0) == 2.0);
+    @expect(f(32.0, -10.0) == 2.0);
+
+    // Subnormal operands and results
+    let tiny = math.float_true_min(T);
+    @expect(f(7 * tiny, 2 * tiny) == tiny);
+    // The smallest normal is 2^23 (f32) or 2^52 (f64) times `tiny`, leaving 2 or 1 of it mod 3
+    @expect(f(math.float_min(T), 3 * tiny) == if comptime (T == f32) 2 * tiny else tiny);
+    @expect(f(1.0, inf_val) == 1.0);
+    @expect(f(math.float_max(T), 1.0) == 0.0);
+};
+
+@cfg (compiler_rt.is_windows_msvc) {
+    const fmodf64x = fn(a: f80, b: f80) callconv(.c): f80 {
+        return fmod_f80(a, b);
+    };
+}
+
+const __fmodx = fn(a: u80, b: u80) callconv(.c): u80 {
+    return @bitCast(fmod_f80(@bitCast(a), @bitCast(b)));
+};
+
+/// fmodx - floating modulo large, returns the remainder of division for f80 types
+/// Logic and flow heavily inspired by MUSL fmodl for 113 mantissa digits
+@[inline(.always)] const fmod_f80 = fn(a: f80, b: f80): f80 {
+    const T = f80;
+    const Z = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+
+    const significand_bits = math.float_mantissa_bits(T);
+    const fractional_bits = math.float_fractional_bits(T);
+    const exponent_bits = math.float_exponent_bits(T);
+
+    const sign_bit = @as(Z, 1) << (significand_bits + exponent_bits);
+    const max_exponent = (1 << exponent_bits) - 1;
+
+    let mut a_rep: Z = @bitCast(a);
+    let mut b_rep: Z = @bitCast(b);
+
+    let sign_a = a_rep & sign_bit;
+    let mut exp_a: i32 = @intCast((a_rep >> significand_bits) & max_exponent);
+    let mut exp_b: i32 = @intCast((b_rep >> significand_bits) & max_exponent);
+
+    // There are 3 cases where the answer is undefined, check for:
+    //   - fmodx(val, 0)
+    //   - fmodx(val, NaN)
+    //   - fmodx(inf, val)
+    // The sign on checked values does not matter.
+    // Doing (a * b) / (a * b) produces undefined results
+    // because the three cases always produce undefined calculations:
+    //   - 0 / 0
+    //   - val * NaN
+    //   - inf / inf
+    if (b == 0 or math.is_nan(b) or exp_a == max_exponent) {
+        return (a * b) / (a * b);
+    }
+
+    // Remove the sign from both
+    a_rep &= ~sign_bit;
+    b_rep &= ~sign_bit;
+    if (a_rep <= b_rep) {
+        if (a_rep == b_rep) return 0 * a;
+        return a;
+    }
+
+    if (exp_a == 0) exp_a = normalize(f80, &mut a_rep);
+    if (exp_b == 0) exp_b = normalize(f80, &mut b_rep);
+
+    let mut high_a: u64 = 0;
+    const high_b: u64 = 0;
+    let mut low_a: u64 = @truncate(a_rep);
+    let low_b: u64 = @truncate(b_rep);
+
+    while (exp_a > exp_b) : (exp_a -= 1) {
+        let mut high = high_a -% high_b;
+        let low = low_a -% low_b;
+        if (low_a < low_b) high -%= 1;
+        if (high >> 63 == 0) {
+            if ((high | low) == 0) return 0 * a;
+            high_a = 2 *% high + (low >> 63);
+            low_a = 2 *% low;
+        } else {
+            high_a = 2 *% high_a + (low_a >> 63);
+            low_a = 2 *% low_a;
+        }
+    }
+
+    let mut high = high_a -% high_b;
+    let low = low_a -% low_b;
+    if (low_a < low_b) high -%= 1;
+    if (high >> 63 == 0) {
+        if ((high | low) == 0) return 0 * a;
+        high_a = high;
+        low_a = low;
+    }
+
+    while ((low_a >> fractional_bits) == 0) {
+        low_a = 2 *% low_a;
+        exp_a -= 1;
+    }
+
+    // Combine the exponent with the sign and significand, normalize if happened to be denormalized
+    if (exp_a < -fractional_bits) {
+        return @bitCast(sign_a);
+    } else if (exp_a <= 0) {
+        return @bitCast((low_a >> @intCast(1 - exp_a)) | sign_a);
+    }
+    return @bitCast(low_a | (@as(Z, @as(u16, @intCast(exp_a))) << significand_bits) | sign_a);
+};
+
+test "fmod_f80" {
+    import "cases/fmod/fmodx.gh" as fmodx_cases;
+    for (fmodx_cases.cases) |case| {
+        @expect(fmod_f80(case.a, case.b) == case.expected);
+    }
+    @expect(math.is_negative_zero(fmod_f80(-0.0, 1.0)));
+
+    @expect(math.is_nan(fmod_f80(1.0, math.nan(f80))));
+    @expect(math.is_nan(fmod_f80(1.0, -math.nan(f80))));
+    @expect(math.is_nan(fmod_f80(math.nan(f80), 1.0)));
+    @expect(math.is_nan(fmod_f80(-math.nan(f80), 1.0)));
+
+    @expect(fmod_f80(1.0, math.inf(f80)) == 1.0);
+    @expect(fmod_f80(1.0, -math.inf(f80)) == 1.0);
+    @expect(math.is_nan(fmod_f80(math.inf(f80), 1.0)));
+    @expect(math.is_nan(fmod_f80(-math.inf(f80), 1.0)));
+}
+
+const fmodq = fn(a: f128, b: f128) callconv(.c): f128 {
+    return fmod_f128(a, b);
+};
+
+/// fmodq - floating modulo large, returns the remainder of division for f128 types
+/// Logic and flow heavily inspired by MUSL fmodl for 113 mantissa digits
+@[inline(.always)] const fmod_f128 = fn(a: f128, b: f128): f128 {
+    const sign_bit = @as(u128, 1) << 127;
+    const high_mask = math.max_int(u64) >> 16;
+
+    let a_rep = @bitCast(u128, a);
+    let b_rep = @bitCast(u128, b);
+    let sign_a = a_rep & sign_bit;
+    let mut exp_a = @intCast(i32, (a_rep >> 112) & 0x7fff);
+    let mut exp_b = @intCast(i32, (b_rep >> 112) & 0x7fff);
+
+    // There are 3 cases where the answer is undefined, check for:
+    //   - fmodq(val, 0)
+    //   - fmodq(val, NaN)
+    //   - fmodq(inf, val)
+    // The sign on checked values does not matter.
+    // Doing (a * b) / (a * b) produces undefined results
+    // because the three cases always produce undefined calculations:
+    //   - 0 / 0
+    //   - val * NaN
+    //   - inf / inf
+    if (b == 0 or math.is_nan(b) or exp_a == 0x7fff) {
+        return (a * b) / (a * b);
+    }
+
+    // Remove the sign from both
+    let mut amod = @bitCast(f128, a_rep & ~sign_bit);
+    let mut bmod = @bitCast(f128, b_rep & ~sign_bit);
+    if (amod <= bmod) {
+        if (amod == bmod) return 0 * a;
+        return a;
+    }
+
+    if (exp_a == 0) {
+        amod *= 0x1p120;
+        exp_a = @intCast(i32, @bitCast(u128, amod) >> 112) - 120;
+    }
+
+    if (exp_b == 0) {
+        bmod *= 0x1p120;
+        exp_b = @intCast(i32, @bitCast(u128, bmod) >> 112) - 120;
+    }
+
+    // OR in extra non-stored mantissa digit
+    let mut high_a: u64 = ((@truncate(u64, @bitCast(u128, amod) >> 64)) & high_mask) | (1 << 48);
+    let high_b: u64 = ((@truncate(u64, @bitCast(u128, bmod) >> 64)) & high_mask) | (1 << 48);
+    let mut low_a: u64 = @truncate(@bitCast(u128, amod));
+    let low_b: u64 = @truncate(@bitCast(u128, bmod));
+
+    while (exp_a > exp_b) : (exp_a -= 1) {
+        let mut high = high_a -% high_b;
+        let low = low_a -% low_b;
+        if (low_a < low_b) high -%= 1;
+        if (high >> 63 == 0) {
+            if ((high | low) == 0) return 0 * a;
+            high_a = 2 *% high + (low >> 63);
+            low_a = 2 *% low;
+        } else {
+            high_a = 2 *% high_a + (low_a >> 63);
+            low_a = 2 *% low_a;
+        }
+    }
+
+    let mut high = high_a -% high_b;
+    let low = low_a -% low_b;
+    if (low_a < low_b) high -%= 1;
+    if (high >> 63 == 0) {
+        if ((high | low) == 0) return 0 * a;
+        high_a = high;
+        low_a = low;
+    }
+
+    while (high_a >> 48 == 0) {
+        high_a = 2 *% high_a + (low_a >> 63);
+        low_a = 2 *% low_a;
+        exp_a -= 1;
+    }
+
+    // The integer bit at 48 sits where the exponent goes, so it's dropped here
+    let significand = @as(u128, high_a & high_mask) << 64 | low_a;
+
+    // Combine the exponent with the sign, normalize if happened to be denormalized
+    if (exp_a <= 0) {
+        let biased = @as(u128, @truncate(u16, @bitCast(u32, exp_a +% 120))) << 112;
+        return @bitCast(f128, significand | biased | sign_a) * 0x1p-120;
+    }
+    let biased = @as(u128, @truncate(u16, @bitCast(u32, exp_a))) << 112;
+    return @bitCast(significand | biased | sign_a);
+};
+
+test "fmod_f128" {
+    import "cases/fmod/fmodq.gh" as fmodq_cases;
+    for (fmodq_cases.cases) |case| {
+        @expect(fmod_f128(case.a, case.b) == case.expected);
+    }
+    @expect(math.is_negative_zero(fmod_f128(-0.0, 1.0)));
+
+    @expect(math.is_nan(fmod_f128(1.0, math.nan(f128))));
+    @expect(math.is_nan(fmod_f128(1.0, -math.nan(f128))));
+    @expect(math.is_nan(fmod_f128(math.nan(f128), 1.0)));
+    @expect(math.is_nan(fmod_f128(-math.nan(f128), 1.0)));
+
+    @expect(fmod_f128(1.0, math.inf(f128)) == 1.0);
+    @expect(fmod_f128(1.0, -math.inf(f128)) == 1.0);
+    @expect(math.is_nan(fmod_f128(math.inf(f128), 1.0)));
+    @expect(math.is_nan(fmod_f128(-math.inf(f128), 1.0)));
+}
+
+const fmodl = fn(a: c_longdouble, b: c_longdouble) callconv(.c): c_longdouble {
+    return match comptime (@typeInfo(c_longdouble).float.bits) {
+        64 => fmod_f64(a, b),
+        80 => fmod_f80(a, b),
+        128 => fmod_f128(a, b),
+        _ => unreachable,
+    };
+};
+
+@[inline(.always)] const generic_fmod = fn(comptime T: type, x: T, y: T): T {
+    comptime @assert(T == f32 or T == f64);
+    const bits = @typeInfo(T).float.bits;
+    const uint = @Int(.{ .signedness = .unsigned, .bits = bits });
+    const ShiftInt = math.Log2Int(uint);
+    const digits = math.float_mantissa_bits(T);
+    const exp_bits = math.float_exponent_bits(T) + 1;
+    const bits_minus_1 = bits - 1;
+    const mask = (1 << math.float_exponent_bits(T)) - 1;
+
+    let mut ux = @bitCast(uint, x);
+    let mut uy = @bitCast(uint, y);
+    let mut ex: i32 = @intCast((ux >> digits) & mask);
+    let mut ey: i32 = @intCast((uy >> digits) & mask);
+    let sx = ux & (@as(uint, 1) << bits_minus_1);
+    let mut i: uint = undefined;
+
+    if (uy << 1 == 0 or math.is_nan(@bitCast(T, uy)) or ex == mask) return (x * y) / (x * y);
+
+    if (ux << 1 <= uy << 1) {
+        if (ux << 1 == uy << 1) return 0 * x;
+        return x;
+    }
+
+    // normalize x and y
+    if (ex == 0) {
+        i = ux << exp_bits;
+        while (i >> bits_minus_1 == 0) {
+            ex -= 1;
+            i <<= 1;
+        }
+        ux <<= @intCast(ShiftInt, -ex + 1);
+    } else {
+        ux &= math.max_int(uint) >> exp_bits;
+        ux |= 1 << digits;
+    }
+    if (ey == 0) {
+        i = uy << exp_bits;
+        while (i >> bits_minus_1 == 0) {
+            ey -= 1;
+            i <<= 1;
+        }
+        uy <<= @intCast(ShiftInt, -ey + 1);
+    } else {
+        uy &= math.max_int(uint) >> exp_bits;
+        uy |= 1 << digits;
+    }
+
+    // x mod y
+    while (ex > ey) : (ex -= 1) {
+        i = ux -% uy;
+        if (i >> bits_minus_1 == 0) {
+            if (i == 0) return 0 * x;
+            ux = i;
+        }
+        ux <<= 1;
+    }
+    i = ux -% uy;
+    if (i >> bits_minus_1 == 0) {
+        if (i == 0) return 0 * x;
+        ux = i;
+    }
+    while (ux >> digits == 0) {
+        ux <<= 1;
+        ex -= 1;
+    }
+
+    // scale result up
+    if (ex > 0) {
+        ux -%= 1 << digits;
+        ux |= @as(uint, @bitCast(u32, ex)) << digits;
+    } else {
+        ux >>= @intCast(ShiftInt, -ex + 1);
+    }
+    return @bitCast(ux | sx);
+};
