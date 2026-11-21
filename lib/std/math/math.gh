@@ -181,6 +181,43 @@ test {
     import "ilogb.gh";
 }
 
+import "copysign.gh" as copysign_;
+pub const copysign = copysign_.copysign;
+
+test {
+    import "copysign.gh";
+}
+
+import "frexp.gh" as frexp_;
+pub const Frexp = frexp_.Frexp;
+pub const frexp = frexp_.frexp;
+
+test {
+    import "frexp.gh";
+}
+
+/// Shifts left. Overflowed bits are truncated.
+/// A negative shift amount results in a right shift.
+pub const shl = fn(comptime T: type, a: T, shift_amt: auto): T {
+    let is_shl = shift_amt >= 0;
+    let abs_shift_amt = @abs(shift_amt);
+    const info = @typeInfo(T).int;
+    if (abs_shift_amt < info.bits) {
+        let casted = @intCast(Log2Int(T), abs_shift_amt);
+        return if (is_shl) a << casted else a >> casted;
+    }
+    if (info.signedness == .unsigned or is_shl) return 0;
+    return a >> (info.bits - 1);
+};
+
+test "shl" {
+    @expect(shl(u32, 1, 0) == 1);
+    @expect(shl(u32, 1, 4) == 16);
+    @expect(shl(u32, 16, -2) == 4);
+    @expect(shl(u32, 1, 32) == 0);
+    @expect(shl(u32, 1, -32) == 0);
+}
+
 import "isinf.gh" as isinf;
 
 pub const is_inf = isinf.is_inf;

@@ -1,0 +1,152 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/math/frexp.zig
+import std;
+
+const math = std.math;
+
+pub const Frexp = fn(comptime T: type): type {
+    return struct {
+        pub significand: T,
+        pub exponent: i32,
+    };
+};
+
+/// Breaks x into a normalized fraction and an integral power of two.
+/// f == frac * 2^exp, with |frac| in the interval [0.5, 1).
+///
+/// Special Cases:
+///  - frexp(+-0)   = +-0, 0
+///  - frexp(+-inf) = +-inf, 0
+///  - frexp(nan)   = nan, undefined
+pub const frexp = fn(x: auto): Frexp(@TypeOf(x)) {
+    const T = @TypeOf(x);
+
+    const bits = @typeInfo(T).float.bits;
+    const Int = @Int(.{ .signedness = .unsigned, .bits = bits });
+
+    const exp_bits = math.float_exponent_bits(T);
+    const mant_bits = math.float_mantissa_bits(T);
+    const frac_bits = math.float_fractional_bits(T);
+    const exp_min = math.float_exponent_min(T);
+
+    const ExpInt = @Int(.{ .signedness = .unsigned, .bits = exp_bits });
+    const MantInt = @Int(.{ .signedness = .unsigned, .bits = mant_bits });
+    const FracInt = @Int(.{ .signedness = .unsigned, .bits = frac_bits });
+
+    const unreal_exponent = (1 << exp_bits) - 1;
+    const bias = (1 << (exp_bits - 1)) - 2;
+    const exp_mask = @as(Int, unreal_exponent << mant_bits);
+    const zero_exponent = @as(Int, bias << mant_bits);
+    const sign_mask = @as(Int, 1 << (bits - 1));
+    const not_exp = ~exp_mask;
+    const ones_place = @as(i32, mant_bits) - @as(i32, frac_bits);
+    const extra_denorm_shift = 1 - ones_place;
+
+    let mut result: Frexp(T) = undefined;
+    let mut v = @bitCast(Int, x);
+
+    let m: MantInt = @truncate(v);
+    let e: ExpInt = @truncate(v >> mant_bits);
+
+    const unreal_exp_val = @as(ExpInt, unreal_exponent);
+
+    if (e == 0) {
+        if (m != 0) {
+            // subnormal
+            let offset = @clz(m);
+            let shift = offset + extra_denorm_shift;
+
+            v &= sign_mask;
+            v |= zero_exponent;
+            v |= @as(Int, math.shl(MantInt, m, shift));
+
+            result.exponent = exp_min - @intCast(i32, offset) + ones_place;
+        } else {
+            // +-0 = (+-0, 0)
+            result.exponent = 0;
+        }
+    } else if (e == unreal_exp_val) {
+        // +-nan -> {+-nan, undefined}
+        result.exponent = undefined;
+
+        // +-inf -> {+-inf, 0}
+        if (@truncate(FracInt, v) == 0) {
+            result.exponent = 0;
+        }
+    } else {
+        // normal
+        v &= not_exp;
+        v |= zero_exponent;
+        result.exponent = @intCast(i32, e) - @as(i32, bias);
+    }
+
+    result.significand = @bitCast(T, v);
+    return result;
+};
+
+test "frexp" {
+    unroll for ([_]type{ f16, f32, f64, f80, f128 }) |T| {
+        const max_exponent = math.float_exponent_max(T) + 1;
+        const min_exponent = math.float_exponent_min(T) + 1;
+        const truemin_exponent = min_exponent - @intCast(i32, math.float_fractional_bits(T));
+
+        let mut result: Frexp(T) = undefined;
+        let mut x: T = undefined;
+
+        // basic usage
+        // value -> {significand, exponent},
+        // value == significand * (2 ^ exponent)
+        x = @as(T, 1234.5678);
+        result = frexp(x);
+        @expect(result.exponent == 11);
+        @expect(math.approx_eq_abs(T, @as(T, 0.602816), result.significand, @as(T, 1e-4)));
+        @expect(x == math.ldexp(result.significand, result.exponent));
+
+        // float maximum
+        x = math.float_max(T);
+        result = frexp(x);
+        @expect(result.exponent == max_exponent);
+        @expect(result.significand == @as(T, 1.0) - math.float_eps(T) / @as(T, 2.0));
+        @expect(x == math.ldexp(result.significand, result.exponent));
+
+        // float minimum
+        x = math.float_min(T);
+        result = frexp(x);
+        @expect(result.exponent == min_exponent);
+        @expect(result.significand == @as(T, 0.5));
+        @expect(x == math.ldexp(result.significand, result.exponent));
+
+        // float true minimum
+        // subnormal -> {normal, exponent}
+        x = math.float_true_min(T);
+        result = frexp(x);
+        @expect(result.exponent == truemin_exponent);
+        @expect(result.significand == @as(T, 0.5));
+        @expect(x == math.ldexp(result.significand, result.exponent));
+
+        // infinity -> {infinity, zero} (+)
+        result = frexp(math.inf(T));
+        @expect(result.exponent == 0);
+        @expect(math.is_positive_inf(result.significand));
+
+        // infinity -> {infinity, zero} (-)
+        result = frexp(-math.inf(T));
+        @expect(result.exponent == 0);
+        @expect(math.is_negative_inf(result.significand));
+
+        // zero -> {zero, zero} (+)
+        result = frexp(@as(T, 0.0));
+        @expect(result.exponent == 0);
+        @expect(math.is_positive_zero(result.significand));
+
+        // zero -> {zero, zero} (-)
+        result = frexp(@as(T, -0.0));
+        @expect(result.exponent == 0);
+        @expect(math.is_negative_zero(result.significand));
+
+        // nan -> {nan, undefined}
+        result = frexp(math.nan(T));
+        @expect(math.is_nan(result.significand));
+    }
+}
