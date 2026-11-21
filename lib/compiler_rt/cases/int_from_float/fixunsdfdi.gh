@@ -1,0 +1,31 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int_from_float_test.zig
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub a: f64, pub expected: u64 }{
+    .{ .a = 0.0,                    .expected = 0 },
+    .{ .a = 0.5,                    .expected = 0 },
+    .{ .a = 0.99,                   .expected = 0 },
+    .{ .a = 1.0,                    .expected = 1 },
+    .{ .a = 1.5,                    .expected = 1 },
+    .{ .a = 1.99,                   .expected = 1 },
+    .{ .a = 2.0,                    .expected = 2 },
+    .{ .a = 2.01,                   .expected = 2 },
+    .{ .a = -0.5,                   .expected = 0 },
+    .{ .a = -0.99,                  .expected = 0 },
+    .{ .a = -1.0,                   .expected = 0 },
+    .{ .a = -1.5,                   .expected = 0 },
+    .{ .a = -1.99,                  .expected = 0 },
+    .{ .a = -2.0,                   .expected = 0 },
+    .{ .a = -2.01,                  .expected = 0 },
+    .{ .a = 0x1.FFFFFEp+62,         .expected = 0x7FFFFF8000000000 },
+    .{ .a = 0x1.FFFFFCp+62,         .expected = 0x7FFFFF0000000000 },
+    .{ .a = -0x1.FFFFFEp+62,        .expected = 0 },
+    .{ .a = -0x1.FFFFFCp+62,        .expected = 0 },
+    .{ .a = 0x1.FFFFFFFFFFFFFp+63,  .expected = 0xFFFFFFFFFFFFF800 },
+    .{ .a = 0x1.0000000000000p+63,  .expected = 0x8000000000000000 },
+    .{ .a = 0x1.FFFFFFFFFFFFFp+62,  .expected = 0x7FFFFFFFFFFFFC00 },
+    .{ .a = 0x1.FFFFFFFFFFFFEp+62,  .expected = 0x7FFFFFFFFFFFF800 },
+    .{ .a = -0x1.FFFFFFFFFFFFFp+62, .expected = 0 },
+    .{ .a = -0x1.FFFFFFFFFFFFEp+62, .expected = 0 },
+};

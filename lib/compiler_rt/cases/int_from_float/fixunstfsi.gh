@@ -1,0 +1,18 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int_from_float_test.zig
+import std;
+
+const math = std.math;
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub a: f128, pub expected: u32 }{
+    .{ .a = math.inf(f128),          .expected = 0xffffffff },
+    .{ .a = 0,                       .expected = 0x0 },
+    .{ .a = 0x1.23456789abcdefp+5,   .expected = 0x24 },
+    .{ .a = 0x1.23456789abcdefp-3,   .expected = 0x0 },
+    .{ .a = 0x1.23456789abcdefp+20,  .expected = 0x123456 },
+    .{ .a = 0x1.23456789abcdefp+40,  .expected = 0xffffffff },
+    .{ .a = 0x1.23456789abcdefp+256, .expected = 0xffffffff },
+    .{ .a = -0x1.23456789abcdefp+3,  .expected = 0x0 },
+    .{ .a = 0x1p+32,                 .expected = 0xFFFFFFFF },
+};
