@@ -1,0 +1,210 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulXi3.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulXi3_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulo.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulosi4_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulodi4_test.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/muloti4_test.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__mulsi3, "__mulsi3");
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_lmul, "__aeabi_lmul");
+    } else {
+        symbol(__muldi3, "__muldi3");
+    }
+    symbol(__multi3, "__multi3");
+
+    @cfg (arch == .sparc) {
+        symbol(__mulsi3, ".umul");
+    }
+
+    symbol(__mulosi4, "__mulosi4");
+    symbol(__mulodi4, "__mulodi4");
+    symbol(__muloti4, "__muloti4");
+}
+
+const __mulsi3 = fn(a: i32, b: i32) callconv(.c): i32 {
+    return mul_shift_add(i32, a, b);
+};
+
+test "__mulsi3" {
+    import "cases/mul/mulsi3.gh" as mulsi3_cases;
+    for (mulsi3_cases.cases) |case| {
+        @expect(__mulsi3(case.a, case.b) == case.result);
+    }
+}
+
+const __muldi3 = fn(a: i64, b: i64) callconv(.c): i64 {
+    if comptime (@bitSizeOf(usize) >= 64) return mul_shift_add(i64, a, b);
+    return mul_x(i64, a, b);
+};
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_lmul = fn(a: i64, b: i64) callconv(.aapcs): i64 {
+        return mul_x(i64, a, b);
+    };
+}
+
+test "__muldi3" {
+    import "cases/mul/muldi3.gh" as muldi3_cases;
+    for (muldi3_cases.cases) |case| {
+        @expect(__muldi3(case.a, case.b) == case.expected);
+        @expect(mul_x(i64, case.a, case.b) == case.expected);
+        @expect(mul_shift_add(i64, case.a, case.b) == case.expected);
+    }
+}
+
+const __multi3 = fn(a: i128, b: i128) callconv(.c): i128 {
+    return mul_x(i128, a, b);
+};
+
+test "__multi3" {
+    import "cases/mul/multi3.gh" as multi3_cases;
+    for (multi3_cases.cases) |case| {
+        @expect(__multi3(case.a, case.b) == case.expected);
+    }
+}
+
+/// Shift-and-add multiplication, for targets with no multiply instruction at all
+@[inline(.always)] const mul_shift_add = fn(comptime T: type, a: T, b: T): T {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    let mut ua = @bitCast(U, a);
+    let mut ub = @bitCast(U, b);
+    let mut r: U = 0;
+
+    while (ua > 0) {
+        if ((ua & 1) != 0) r +%= ub;
+        ua >>= 1;
+        ub <<= 1;
+    }
+
+    return @bitCast(r);
+};
+
+/// The low `T` bits of `a * b`, from one double-width product of the low halves and the two
+/// cross products, whose high halves fall off the top
+@[inline(.always)] const mul_x = fn(comptime T: type, a: T, b: T): T {
+    const Half = compiler_rt.HalveInt(T, false).HalfT;
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    const half_bits = @bitSizeOf(Half);
+
+    let x: U = @bitCast(a);
+    let y: U = @bitCast(b);
+    let x_lo: Half = @truncate(x);
+    let x_hi: Half = @truncate(x >> half_bits);
+    let y_lo: Half = @truncate(y);
+    let y_hi: Half = @truncate(y >> half_bits);
+
+    let mut hi: Half = undefined;
+    let mut lo: Half = undefined;
+    compiler_rt.wide_multiply(Half, x_lo, y_lo, &mut hi, &mut lo);
+    hi +%= x_hi *% y_lo +% x_lo *% y_hi;
+    return @bitCast(@as(U, hi) << half_bits | lo);
+};
+
+// mulo - multiplication overflow
+// * return a*%b.
+// * return if a*b overflows => 1 else => 0
+// - mulo_xi4_generic_small as default
+// - mulo_xi4_generic_fast for 2*bitsize <= usize
+
+@[inline(.always)]
+const mulo_xi4_generic_small = fn(comptime ST: type, a: ST, b: ST, overflow: ^mut c_int): ST {
+    *overflow = 0;
+    const min = math.min_int(ST);
+
+    // LLVM turns the wrapping product below, with the check after it, back into a call to
+    // `__muloti4` on WASM. Calling the lower-level routine for the product directly avoids it.
+    let res: ST = if comptime (ST == i128 and @targetFamily() == .wasm) __multi3(a, b) else a *% b;
+
+    // Hacker's Delight section Overflow subsection Multiplication
+    // case a=-2^{31}, b=-1 problem, because
+    // on some machines a*b = -2^{31} with overflow
+    // Then -2^{31}/-1 overflows and any result is possible.
+    // => check with a<0 and b=-2^{31}
+    if ((a < 0 and b == min) or (a != 0 and @divTrunc(res, a) != b)) {
+        *overflow = 1;
+    }
+    return res;
+};
+
+@[inline(.always)]
+const mulo_xi4_generic_fast = fn(comptime ST: type, a: ST, b: ST, overflow: ^mut c_int): ST {
+    *overflow = 0;
+    const EST = @Int(.{ .signedness = .signed, .bits = 2 * @bitSizeOf(ST) });
+    const min = math.min_int(ST);
+    const max = math.max_int(ST);
+    let res = @as(EST, a) * @as(EST, b);
+    // invariant: -2^{bitwidth(EST)} < res < 2^{bitwidth(EST)-1}
+    if (res < min or max < res) {
+        *overflow = 1;
+    }
+    return @truncate(res);
+};
+
+@[inline(.always)] const mulo_xi4 = fn(comptime ST: type, a: ST, b: ST, overflow: ^mut c_int): ST {
+    if comptime (2 * @bitSizeOf(ST) <= @bitSizeOf(usize)) {
+        return mulo_xi4_generic_fast(ST, a, b, overflow);
+    }
+    return mulo_xi4_generic_small(ST, a, b, overflow);
+};
+
+const __mulosi4 = fn(a: i32, b: i32, overflow: ^mut c_int) callconv(.c): i32 {
+    return mulo_xi4(i32, a, b, overflow);
+};
+
+const __mulodi4 = fn(a: i64, b: i64, overflow: ^mut c_int) callconv(.c): i64 {
+    return mulo_xi4(i64, a, b, overflow);
+};
+
+const __muloti4 = fn(a: i128, b: i128, overflow: ^mut c_int) callconv(.c): i128 {
+    return mulo_xi4(i128, a, b, overflow);
+};
+
+/// Checks one `mulo` case against both implementations, whichever the target picks
+@[testing] const test_mulo = fn(
+    comptime ST: type,
+    actual: extern fn(a: ST, b: ST, overflow: ^mut c_int) callconv(.c): ST,
+    case: auto,
+): void {
+    let mut overflow: c_int = undefined;
+    let x = actual(case.a, case.b, ^mut overflow);
+    @expect(overflow == case.expected_overflow);
+    @expect(case.expected_overflow != 0 or x == case.expected);
+
+    let small = mulo_xi4_generic_small(ST, case.a, case.b, ^mut overflow);
+    @expect(overflow == case.expected_overflow);
+    @expect(case.expected_overflow != 0 or small == case.expected);
+
+    let fast = mulo_xi4_generic_fast(ST, case.a, case.b, ^mut overflow);
+    @expect(overflow == case.expected_overflow);
+    @expect(case.expected_overflow != 0 or fast == case.expected);
+};
+
+test "__mulosi4" {
+    import "cases/mul/mulosi4.gh" as mulosi4_cases;
+    for (mulosi4_cases.cases) |case| {
+        test_mulo(i32, __mulosi4, case);
+    }
+}
+
+test "__mulodi4" {
+    import "cases/mul/mulodi4.gh" as mulodi4_cases;
+    for (mulodi4_cases.cases) |case| {
+        test_mulo(i64, __mulodi4, case);
+    }
+}
+
+test "__muloti4" {
+    import "cases/mul/muloti4.gh" as muloti4_cases;
+    for (muloti4_cases.cases) |case| {
+        test_mulo(i128, __muloti4, case);
+    }
+}
