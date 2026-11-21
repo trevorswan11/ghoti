@@ -30,6 +30,7 @@ import "fma.gh" as _;
 import "fmin.gh" as _;
 import "fmax.gh" as _;
 import "round.gh" as _;
+import "atomics.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -220,4 +221,5 @@ test {
     import "fmin.gh";
     import "fmax.gh";
     import "round.gh";
+    import "atomics.gh";
 }
