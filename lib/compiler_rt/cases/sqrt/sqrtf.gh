@@ -1,0 +1,29 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/sqrt.zig
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub x: f32, pub expected: f32 }{
+    // sqrt(+max) is finite
+    .{ .x = 0x1.FFFFFEp127, .expected = 0x1.FFFFFEp63 },
+    // sqrt(4)=2
+    .{ .x = 0x1p2,          .expected = 0x1p1 },
+    // sqrt(x) for x=1, 1±ulp
+    .{ .x = 0x1p0,          .expected = 0x1p0 },
+    .{ .x = 0x1.000002p0,   .expected = 0x1p0 },
+    .{ .x = 0x1.FFFFFEp-1,  .expected = 0x1.FFFFFEp-1 },
+    // sqrt(+min) is non-zero
+    .{ .x = 0x1p-126,       .expected = 0x1p-63 },
+    // sqrt(min subnormal) is non-zero
+    .{ .x = 0x0.000002p-126, .expected = 0x1.6a09e6p-75 },
+    // random arguments
+    .{ .x = 0x1.4DD57Ep77,  .expected = 0x1.9D6DA8p38 },
+    .{ .x = 0x1.871848p102, .expected = 0x1.3C6AFAp51 },
+    .{ .x = 0x1.A1D748p-112, .expected = 0x1.470EFCp-56 },
+    .{ .x = 0x1.E626C2p18,  .expected = 0x1.60C80Ep9 },
+    .{ .x = 0x1.E80E66p-29, .expected = 0x1.F3E282p-15 },
+    .{ .x = 0x1.B47204p89,  .expected = 0x1.D8B732p44 },
+    .{ .x = 0x1.77F45p15,   .expected = 0x1.B6BC3Ap7 },
+    .{ .x = 0x1.AD5F5p-48,  .expected = 0x1.4B8A72p-24 },
+    .{ .x = 0x1.91A39p-76,  .expected = 0x1.40A7A8p-38 },
+    .{ .x = 0x1.DAE088p79,  .expected = 0x1.ED16DCp39 },
+};
