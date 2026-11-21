@@ -89,6 +89,22 @@ TEST_CASE("A range used as a value stops as unsupported", "[uir]") {
     CHECK(run.out().stopped_at->what == "a range used as a value");
 }
 
+TEST_CASE("A range a for iterates is known whatever its other iterables lower to", "[uir]") {
+    // The second iterable holds a `for` of its own, lowered before the outer one
+    const auto run{helpers::uir_accepted(R"(
+        pub const f = fn(): i32 {
+            let arr: [3]i32 = .{ 1, 1, 1 };
+            let mut sum: i32 = 0;
+            for (0..3, blk: {
+                for (0..3) |_| {}
+                break :blk arr;
+            }) |_, v| { sum += v; }
+            return sum;
+        };
+    )")};
+    CHECK(run.gir().contains("fn f"));
+}
+
 TEST_CASE("An integer cast to an enum checks it lands on a variant", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const E = enum : u8 { a = 1, b = 4 };

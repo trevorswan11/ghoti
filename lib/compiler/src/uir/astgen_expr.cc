@@ -531,9 +531,13 @@ auto astgen::lower_node(ast::node_id id, const ast::index_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::range_expr& node) -> ref {
+    return range(id, node, 0);
+}
+
+auto astgen::range(ast::node_id id, const ast::range_expr& node, u32 bits) -> ref {
     const auto lo{optional_expr(node.lhs)};
     const auto hi{optional_expr(node.rhs)};
-    const u32  bits{id.get_token_type() == token_type_t::DOT_DOT_EQ ? flags::INCLUSIVE : 0U};
+    if (id.get_token_type() == token_type_t::DOT_DOT_EQ) { bits |= flags::INCLUSIVE; }
     return add_pl(tag::range, writer().ref_field(lo).ref_field(hi).u32_field(bits), id);
 }
 
@@ -980,7 +984,11 @@ auto astgen::lower_node(ast::node_id id, const ast::infinite_loop_expr& node) ->
 
 auto astgen::lower_node(ast::node_id id, const ast::for_loop_expr& node) -> ref {
     std::vector<ref> iterables;
-    for (const auto iterable : node.iterables) { iterables.emplace_back(expr(iterable)); }
+    for (const auto iterable : node.iterables) {
+        const auto bounds{ast_.get_as_opt<ast::range_expr>(iterable)};
+        iterables.emplace_back(bounds ? range(ast::node_id{iterable}, *bounds, flags::FOR_RANGE)
+                                      : expr(iterable));
+    }
     const auto inst{begin_loop(id, true)};
     const auto label{loop_label()};
 
