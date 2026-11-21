@@ -117,4 +117,48 @@ TEST_CASE("@typeInfo and @Union carry a union's tag enum") {
     )") == 0);
 }
 
+TEST_CASE("A tagged union's payload slot takes its most aligned member's alignment") {
+    // Layout queries agree with the stride LLVM gives an array of the union
+    CHECK(helpers::compile_and_run(R"(
+        const N = union(enum) { a: u8, b: i32 };
+        const L = union(enum) { a: u8, b: i64 };
+        const Q = union(enum) { a: u8, b: f128 };
+        const E = union(enum) { a: void, b: void };
+        pub const main = fn(): i32 {
+            if comptime (@sizeOf(N) != 8 or @alignOf(N) != 4) { return 1; }
+            if comptime (@sizeOf(L) != 16 or @alignOf(L) != 8) { return 2; }
+            if comptime (@sizeOf(Q) != 32 or @alignOf(Q) != 16) { return 3; }
+            if comptime (@sizeOf(E) != 4 or @alignOf(E) != 4) { return 4; }
+            let ls: [2]L = .{ .{ .a = 1 }, .{ .b = 2 } };
+            let qs: [2]Q = .{ .{ .a = 1 }, .{ .b = 2.0 } };
+            if (@intFromPtr(^ls[1]) - @intFromPtr(^ls[0]) != @sizeOf(L)) { return 5; }
+            if (@intFromPtr(^qs[1]) - @intFromPtr(^qs[0]) != @sizeOf(Q)) { return 6; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("A tagged union round trips an f128 payload") {
+    CHECK(helpers::compile_and_run(R"(
+        const Opt = union(enum) { some: f128, none: void };
+        const check = fn(x: f128): Opt {
+            if (x <= 0.0) { return .{ .some = x }; }
+            return .{ .none = {} };
+        };
+        const Wide = union(enum) { a: u8, b: f128, c: i64 };
+        let mut global: Wide = .{ .b = 2.5 };
+        pub const main = fn(): i32 {
+            let got = match (check(-1.5)) { .some => |v| v, .none => 0.0 };
+            if (got != -1.5) { return 1; }
+            if (match (check(3.0)) { .some => true, .none => false }) { return 2; }
+            let mut w: Wide = .{ .c = 7 };
+            w = global;
+            global = .{ .b = -4.0 };
+            let a = match (w) { .b => |v| v, _ => 0.0 };
+            let b = match (global) { .b => |v| v, _ => 0.0 };
+            return if (a == 2.5 and b == -4.0) 0 else 3;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

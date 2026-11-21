@@ -1110,27 +1110,26 @@ auto llvm_lowering::const_to_llvm(ip::index at, llvm::Type* ty) -> llvm::Constan
         auto* tag_c{llvm::ConstantInt::get(st->getElementType(0), active_idx)};
         if (st->getNumElements() == 1) { return llvm::ConstantStruct::get(st, {tag_c}); }
 
-        auto* payload_arr_ty{llvm::dyn_cast<llvm::ArrayType>(st->getElementType(1))};
-        if (!payload_arr_ty) {
-            return llvm::ConstantStruct::get(
-                st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
-        }
-
-        // An aggregate payload is lowered as its own type and then read back as payload bytes
+        // An aggregate payload is lowered as its own type and then read back as payload storage
+        const auto& dl{llvm_module_->getDataLayout()};
+        auto*       payload_ty{st->getElementType(1)};
         if (!un->payload.empty() && active_idx < ud->fields.size() &&
             is_aggregate_constant(un->payload.front())) {
             auto* member{
                 const_to_llvm(un->payload.front(), types_.translate(*ud->fields[active_idx]))};
             return llvm::ConstantStruct::get(
-                st,
-                {tag_c,
-                 reinterpret_constant(member, payload_arr_ty, 0, llvm_module_->getDataLayout())});
+                st, {tag_c, reinterpret_constant(member, payload_ty, 0, dl)});
         }
-        const auto payload_len{static_cast<usize>(payload_arr_ty->getNumElements())};
+
+        // A scalar payload is encoded as bytes, which an aligned payload slot reads back as words
+        const auto payload_len{static_cast<usize>(dl.getTypeAllocSize(payload_ty).getFixedValue())};
         const auto bytes{un->payload.empty()
                              ? std::string(payload_len, '\0')
                              : union_payload_bytes(un->payload.front(), payload_len)};
-        auto*      payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
+        llvm::Constant* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
+        if (payload_c->getType() != payload_ty) {
+            payload_c = reinterpret_constant(payload_c, payload_ty, 0, dl);
+        }
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
     if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
