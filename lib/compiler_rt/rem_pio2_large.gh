@@ -207,7 +207,7 @@ pub const rem_pio2_large = fn(x: []f64, y: []mut f64, e0: i32, nx: i32, prec: us
 
     jz = jk;
 
-    recompute: while (true) {
+    recompute: loop {
         // distill q[] into iq[] reversingly
         i = 0;
         j = jz;
