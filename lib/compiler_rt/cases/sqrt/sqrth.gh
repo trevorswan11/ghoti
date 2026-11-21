@@ -1,0 +1,29 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/sqrt.zig
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub x: f16, pub expected: f16 }{
+    // sqrt(+max) is finite
+    .{ .x = 0x1.FFCp15, .expected = 0x1.FFCp7 },
+    // sqrt(4)=2
+    .{ .x = 0x1p2,      .expected = 0x1p1 },
+    // sqrt(x) for x=1, 1±ulp
+    .{ .x = 0x1p0,      .expected = 0x1p0 },
+    .{ .x = 0x1.004p0,  .expected = 0x1p0 },
+    .{ .x = 0x1.FF8p-1, .expected = 0x1.FFCp-1 },
+    // sqrt(+min) is non-zero
+    .{ .x = 0x1p-14,    .expected = 0x1p-7 },
+    // sqrt(min subnormal) is non-zero
+    .{ .x = 0x0.004p-14, .expected = 0x1p-12 },
+    // random arguments
+    .{ .x = 0x1.1p14,   .expected = 0x1.08p7 },
+    .{ .x = 0x1.C9p-12, .expected = 0x1.56p-6 },
+    .{ .x = 0x1.CE8p-7, .expected = 0x1.E68p-4 },
+    .{ .x = 0x1.134p-7, .expected = 0x1.778p-4 },
+    .{ .x = 0x1.E9Cp-10, .expected = 0x1.62p-5 },
+    .{ .x = 0x1.3Dp9,   .expected = 0x1.92Cp4 },
+    .{ .x = 0x1.AA4p8,  .expected = 0x1.4A4p4 },
+    .{ .x = 0x1.8A8p4,  .expected = 0x1.3DCp2 },
+    .{ .x = 0x1.8Fp-7,  .expected = 0x1.C4p-4 },
+    .{ .x = 0x1.584p-11, .expected = 0x1.A3Cp-6 },
+};
