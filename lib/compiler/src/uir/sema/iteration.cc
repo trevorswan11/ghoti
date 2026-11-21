@@ -44,9 +44,19 @@ struct range_bounds {
 } // namespace
 
 auto analyzer::analyze_range(inst_id inst) -> result<operand> {
-    // A range only means something to the `for` that reads it
-    DISCARD(inst);
-    return void_value();
+    // A range only means something to the `for` that reads it, lowered right after its iterables
+    constexpr u32 LOOKAHEAD{256};
+    const auto    first{std::to_underlying(inst) + 1};
+    const auto    last{std::min(mod().instruction_count(), first + LOOKAHEAD)};
+    for (u32 i{first}; i < last; ++i) {
+        if (mod().tag_of(inst_id{i}) != tag::for_iter) { continue; }
+        auto rec{record(inst_id{i})};
+        rec.skip_str().skip_u32();
+        if (std::ranges::contains(rec.refs_field(), inst_ref(inst))) { return void_value(); }
+        break;
+    }
+
+    return comp_.unsupported(u_, src_of(inst), "a range used as a value");
 }
 
 auto analyzer::analyze_bind(inst_id inst) -> result<operand> {

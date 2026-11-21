@@ -56,7 +56,13 @@ auto astgen::type_inner(ast::explicit_type_id id) -> ref {
     using ast::explicit_type_kind;
     switch (id.get_kind()) {
     case explicit_type_kind::IDENT: {
+        // A raw `@"i64"` names the declaration it spells, as it does where a value is written
         const auto& ident{ast_.get_as<ast::identifier_expr>(id)};
+        if (id.get_token_type() == syntax::token_type_t::IDENT &&
+            lookup(ident.name).is<lookup_hit>()) {
+            return identifier(id, ast_.location_of(id), ident.name, use::VALUE).value;
+        }
+
         if (const auto prim{primitive_named(ident.name, id.get_token_type(), id)}) { return *prim; }
         if (const auto builtin{id.get_builtin()}) {
             return add_un(tag::builtin_ref, {}, static_cast<u32>(*builtin), id);

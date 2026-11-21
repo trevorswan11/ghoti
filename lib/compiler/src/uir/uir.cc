@@ -101,7 +101,7 @@ constexpr std::array IMPL_BOUND_ITEMS{field{U32, "param"}, field{REFS, "interfac
 constexpr std::array INT_LIT{
     field{WORDS, "limbs"}, field{U32, "width"}, field{U32, "flags", {}, INT_FLAGS}};
 constexpr std::array FLOAT_LIT{field{WORDS, "bits"}, field{U32, "width"}};
-constexpr std::array BOOL_OP{field{REF, "lhs"}, field{BODY, "rhs"}};
+constexpr std::array BOOL_OP{field{REF, "lhs"}, field{BODY, "rhs"}, field{U32, "lhs_start"}};
 constexpr std::array INT_TYPE{field{U32, "bits"}, field{U32, "flags", {}, SIGNED_FLAGS}};
 constexpr std::array ELEM_TYPE{field{REF, "elem"}, field{U32, "flags", {}, PTR_FLAGS}};
 constexpr std::array ARRAY_TYPE{

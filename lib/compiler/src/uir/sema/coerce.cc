@@ -70,6 +70,16 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         return enum_constant(target, mod().string(mod().data_of(literal->inst).str), src);
     }
 
+    // A cast's target is the type it is used as, unless that has no width of its own
+    if (const auto cast{op.as_opt<cast_ref>()}) {
+        if (target.get_kind() == gs::type_kind::AUTO ||
+            gs::is_comptime_numeric(target.get_kind())) {
+            return operand{TRY(cast_target_inferred(*cast, stdx::none))};
+        }
+
+        return operand{TRY(cast_target_inferred(*cast, target))};
+    }
+
     if (const auto init{op.as_opt<anon_init>()}) {
         const auto kind{target.get_kind()};
         if (kind != gs::type_kind::STRUCT && kind != gs::type_kind::UNION &&
@@ -250,6 +260,18 @@ auto analyzer::coerce_to(const operand&  op,
                          gs::type&       target,
                          const source&   src,
                          const use_site& site) -> result<operand> {
+    // A runtime integer converted to another integer type folds when it is known at compile time
+    if (const auto value{op.as_opt<gir::value>()};
+        value && site.from && !is_comptime() && value->type &&
+        gs::is_integer(value->type->get_kind()) && gs::is_integer(target.get_kind()) &&
+        !gs::is_same_unqualified(*value->type, target)) {
+        if (const auto known{TRY(speculated_value(*site.from, src))}) {
+            if (auto coerced{TRY(coerce(operand{*known}, target, src))}) {
+                return std::move(*coerced);
+            }
+        }
+    }
+
     if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
@@ -296,6 +318,7 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
 }
 
 auto analyzer::concrete(const operand& op, const source& src) -> result<operand> {
+    if (const auto cast{op.as_opt<cast_ref>()}) { return cast_target_inferred(*cast, stdx::none); }
     if (const auto m{op.as_opt<merge_ref>()}) {
         if (is_untyped_literal(merges_[m->index].arrivals.front().value)) {
             return comp_.unsupported(u_, src, "an untyped literal with no type to take");

@@ -296,6 +296,9 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     const auto  object_ref{*rec.ref_field()};
     const auto  name{rec.str_field()};
     const auto  object{TRY(resolve(object_ref, src))};
+    if (const auto m{object.as_opt<module_ref>()}) {
+        return declaration_use(TRY(module_member(*m, name, src)), false, src);
+    }
 
     if (const auto index{comptime_value(object)}) {
         if (comp_.constants().is_type(*index)) {
@@ -339,10 +342,12 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
     const auto  name{rec.str_field()};
     const bool  assigned{(rec.u32_field() & flags::ASSIGNED) != 0};
     const auto  object{TRY(resolve(object_ref, src))};
-
-    // `T.member` names the member's own storage
-    if (const auto index{comptime_value(object)}; index && comp_.constants().is_type(*index)) {
-        const auto member{TRY(member_of(comp_.constants().type_at(*index), name, src))};
+    // `T.member` and `module.member` name the member's own storage
+    const auto index{comptime_value(object)};
+    const auto m{object.as_opt<module_ref>()};
+    if (m || (index && comp_.constants().is_type(*index))) {
+        const auto member{TRY(m ? module_member(*m, name, src)
+                                : member_of(comp_.constants().type_at(*index), name, src))};
         if (is_comptime()) {
             if (const auto g{member.as_opt<global_const>()}) { return g->value; }
             return member;
@@ -359,13 +364,17 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return member;
     }
 
-    if (is_comptime() || object.is<comptime_place>()) {
-        return comp_.unsupported(u_, src, "a field of comptime memory");
-    }
-
     // A field of a compile-time value is known, so reading it needs no storage
     if (const auto known{comptime_value(object)}; known && !assigned) {
         return comptime_field(*known, name, src);
+    }
+
+    if (const auto g{object.as_opt<global_const>()}; g && is_comptime() && !assigned) {
+        return comptime_field(g->value, name, src);
+    }
+
+    if (is_comptime() || object.is<comptime_place>()) {
+        return comp_.unsupported(u_, src, "a field of comptime memory");
     }
 
     const auto base{TRY(address_of(object_ref, src))};
@@ -517,7 +526,17 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object_ref{*rec.ref_field()};
     const auto  index_ref{*rec.ref_field()};
-    if (is_comptime() || TRY(resolve(object_ref, src)).is<comptime_place>()) {
+    const auto  object{TRY(resolve(object_ref, src))};
+
+    // An element of a known value read at compile time is that element
+    if (is_comptime()) {
+        const auto global{object.as_opt<global_const>()};
+        const auto known{global ? stdx::option<ip::index>{global->value} : comptime_value(object)};
+        const auto at{known ? comptime_value(TRY(resolve_value(index_ref, src))) : stdx::none};
+        if (known && at) { return comptime_elem(*known, *at, src); }
+    }
+
+    if (is_comptime() || object.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "an element of comptime memory");
     }
 

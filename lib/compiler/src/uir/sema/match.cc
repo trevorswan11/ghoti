@@ -105,6 +105,11 @@ auto analyzer::pattern_value(gsl::span<const inst_id> body, gs::type& type, cons
     }
 
     const auto known{TRY(value)};
+    if (type.get_kind() == gs::type_kind::ARRAY &&
+        type_of(known).get_kind() == gs::type_kind::ARRAY) {
+        return comp_.unsupported(u_, src, "an array pattern");
+    }
+
     const auto typed{TRY(coerce_to(known, type, src, {.what = use_site::kind::STORE}))};
     return require_comptime(typed, src);
 }

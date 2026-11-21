@@ -130,6 +130,9 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     if (type_ref) {
         declared.emplace(*TRY(resolve_type(*type_ref, src)));
         value = TRY(coerce_to(init, *declared, src, {.what = use_site::kind::STORE}));
+    } else if (init.is<cast_ref>()) {
+        // An untyped binding gives a one-argument cast no target to take
+        value = TRY(concrete(init, src));
     }
 
     if (is_comptime()) { return value; }
@@ -182,6 +185,9 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         }
 
         yielded = TRY(std::move(typed));
+    } else if (yielded.is<cast_ref>()) {
+        const auto scope{comptime_scope()};
+        yielded = TRY(concrete(yielded, init_src));
     }
 
     const auto known{comptime_value(yielded)};
@@ -314,14 +320,19 @@ auto analyzer::analyze_decl_val(inst_id inst, bool as_place) -> result<operand> 
     const auto&   src{src_of(inst)};
     const decl_id decl{mod().data_of(inst).un.aux};
     const auto&   d{mod().decl_at(decl)};
-    if (d.kind != decl_kind::VALUE) {
-        return comp_.unsupported(u_, src, "a use of an import or other non-value declaration");
+    if (d.kind != decl_kind::VALUE && d.kind != decl_kind::IMPORT) {
+        return comp_.unsupported(u_, src, "a use of a non-value declaration");
     }
 
     // A sibling member of a ctor instance's type is that instance's
     const bool in_scope{scope_ && d.owner == scope_->inst};
     const auto value{TRY(in_scope ? comp_.analyze_member(*scope_, decl, src)
                                   : comp_.analyze_decl(u_, decl, src))};
+    return declaration_use(value, as_place, src);
+}
+
+auto analyzer::declaration_use(const operand& value, bool as_place, const source& src)
+    -> result<operand> {
     const auto global{value.as_opt<global_ref>()};
     if (!global) {
         if (as_place) {
@@ -348,7 +359,7 @@ auto analyzer::analyze_decl_val(inst_id inst, bool as_place) -> result<operand> 
 auto analyzer::analyze_discard(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
-    if (value.is<merge_ref>()) { DISCARD(TRY(concrete(value, src))); }
+    if (value.is<merge_ref>() || value.is<cast_ref>()) { DISCARD(TRY(concrete(value, src))); }
     return void_value();
 }
 

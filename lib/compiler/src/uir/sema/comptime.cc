@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bit>
 #include <ranges>
 #include <string>
@@ -18,6 +19,7 @@
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/diagnostic.hh"
@@ -104,28 +106,29 @@ auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
     if (!s.runtime_site) { runtime_site_.reset(); }
 }
 
-auto compilation::bool_parent(const unit& u, inst_id inst) -> stdx::option<inst_id> {
-    if (bool_parents_.size() <= u.index) { bool_parents_.resize(u.index + 1); }
-    auto& parents{bool_parents_[u.index]};
-    if (!parents) {
-        auto&       built{parents.emplace()};
+auto compilation::bool_ops_starting_at(const unit& u, inst_id inst) -> gsl::span<const inst_id> {
+    if (bool_starts_.size() <= u.index) { bool_starts_.resize(u.index + 1); }
+    auto& starts{bool_starts_[u.index]};
+    if (!starts) {
+        auto&       built{starts.emplace()};
         const auto& m{*u.uir};
         for (u32 i{0}; i < m.instruction_count(); ++i) {
             const inst_id at{i};
             const auto    t{m.tag_of(at)};
             if (t != tag::bool_and && t != tag::bool_or) { continue; }
             record_reader rec{m, m.data_of(at).pl.extra};
-            const auto    lhs{as_inst(*rec.ref_field())};
-            if (!lhs) { continue; }
-            const auto lhs_tag{m.tag_of(*lhs)};
-            if (lhs_tag == tag::bool_and || lhs_tag == tag::bool_or) {
-                built.insert_or_assign(*lhs, at);
+            rec.skip_ref().skip_body();
+            if (const auto start{rec.u32_field()}; start != 0) {
+                built[inst_id{start - 1}].emplace_back(at);
             }
         }
+
+        // An enclosing `and` / `or` is lowered after the ones its left side holds
+        for (auto& [start, ops] : built) { std::ranges::sort(ops, std::ranges::greater{}); }
     }
 
-    const auto found{parents->find(inst)};
-    if (found == parents->end()) { return stdx::none; }
+    const auto found{starts->find(inst)};
+    if (found == starts->end()) { return {}; }
     return found->second;
 }
 
@@ -272,7 +275,39 @@ namespace {
         return refs;
     }
     case tag::elem_val: return std::vector{d.bin.lhs, d.bin.rhs};
-    case tag::slice:    {
+    case tag::load:     return std::vector{d.un.operand};
+
+    // A cast computes nothing but its value
+    case tag::builtin:  {
+        record_reader rec{m, d.pl.extra};
+        switch (static_cast<syntax::builtin_t>(rec.u32_field())) {
+        case syntax::builtin_t::INT_CAST:
+        case syntax::builtin_t::TRUNCATE:
+        case syntax::builtin_t::BIT_CAST:
+        case syntax::builtin_t::INT_FROM_BOOL:
+        case syntax::builtin_t::BOOL_FROM_INT:
+        case syntax::builtin_t::FROM_BACKING_INT:
+        case syntax::builtin_t::BACKING_INT:
+        case syntax::builtin_t::INT_FROM_FLOAT:
+        case syntax::builtin_t::FLOAT_FROM_INT:
+        case syntax::builtin_t::FLOAT_CAST:
+        case syntax::builtin_t::AS:               {
+            const auto args{rec.refs_field()};
+            return std::vector<ref>{args.begin(), args.end()};
+        }
+        default: return stdx::none;
+        }
+    }
+    case tag::elem_ptr: {
+        record_reader rec{m, d.pl.extra};
+        const auto    object{*rec.ref_field()};
+        return std::vector{object, *rec.ref_field()};
+    }
+    case tag::field_ptr: {
+        record_reader rec{m, d.pl.extra};
+        return std::vector{*rec.ref_field()};
+    }
+    case tag::slice: {
         record_reader    rec{m, d.pl.extra};
         std::vector<ref> refs{*rec.ref_field()};
         for (const auto bound : {rec.ref_field(), rec.ref_field()}) {
@@ -331,8 +366,11 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     // An aggregate global is its value at compile time, as is a comptime parameter's slot
     if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
     if (const auto s{found->second.as_opt<slot_value>()}; s && s->known) { return *s->known; }
+    // A field or element address is computed again on its object's compile-time value
+    const auto t{mod().tag_of(*inst)};
+    const bool address{found->second.is<place>() && (t == tag::field_ptr || t == tag::elem_ptr)};
     if (!found->second.is<gir::value>() && !found->second.is<merge_ref>() &&
-        !found->second.is<slot_value>()) {
+        !found->second.is<slot_value>() && !address) {
         return found->second;
     }
 

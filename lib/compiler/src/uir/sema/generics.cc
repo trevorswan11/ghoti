@@ -131,8 +131,15 @@ auto compilation::declare_generic(const unit&           u,
                                   inst_id               func,
                                   const member_context& member) -> result<operand> {
     const auto& d{u.uir->decl_at(decl)};
-    auto        name{TRY(member_symbol(u, decl, func, member))};
-    auto&       fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
+
+    // A template's instances are numbered apart from a same-named template's, never qualified,
+    // and one a ctor instance declares names that instance after its arguments
+    const bool in_instance{member.scope && member.scope->in_call && member.symbol.empty() &&
+                           member.symbol_prefix == member.scope->symbol_prefix};
+    const bool unprefixed{in_instance || (member.symbol.empty() && member.symbol_prefix.empty())};
+    auto       name{unprefixed ? std::string{u.uir->string(d.name)}
+                               : TRY(member_symbol(u, decl, func, member))};
+    auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
         .func      = func,
@@ -141,6 +148,7 @@ auto compilation::declare_generic(const unit&           u,
         .captures  = member.captures,
         .self_type = member.self_type,
         .scope     = member.scope,
+        .enclosing = in_instance ? stdx::option<gs::type&>{*member.scope->type} : stdx::none,
     }))};
     return generic_ref{&fn};
 }
@@ -199,6 +207,16 @@ auto compilation::mangle_type(const gs::type& t) -> std::string {
     }
 }
 
+auto compilation::versioned_name(const generic_fn& g) -> std::string {
+    // Every instance of a type declares the same template, written once
+    auto&      owners{generic_versions_[g.name]};
+    const auto written{std::pair{g.owner->index, g.func}};
+    const auto found{std::ranges::find(owners, written)};
+    const auto index{static_cast<usize>(found - owners.begin())};
+    if (found == owners.end()) { owners.emplace_back(written); }
+    return index == 0 ? g.name : fmt::format("{}_v{}", g.name, index + 1);
+}
+
 auto compilation::instance_for(generic_fn& g, generic_binding binding)
     -> result<gsl::not_null<instance*>> {
     if (const auto found{instances_by_key_.find(binding.key)}; found != instances_by_key_.end()) {
@@ -210,10 +228,18 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
     for (usize i{0}; i < binding.slots.size(); ++i) { span[i] = binding.slots[i]; }
     auto& fn_type{ctx_.get_function(span, ret, false, ast::calling_convention::C, false)};
 
-    auto  symbol{fmt::format("{}__{}{}",
-                             g.name,
-                             fmt::join(binding.mangled_params, "_"),
-                             fmt::join(binding.comptime_suffixes, ""))};
+    auto symbol{fmt::format("{}__{}{}",
+                            versioned_name(g),
+                            fmt::join(binding.mangled_params, "_"),
+                            fmt::join(binding.comptime_suffixes, ""))};
+    if (g.enclosing) { symbol += fmt::format("_in_{}", mangle_type(*g.enclosing)); }
+
+    // Bindings that mangle alike share one instance, such as `&T` and `&mut T` for a `&mut? auto`
+    if (const auto same{instances_by_symbol_.find(symbol)}; same != instances_by_symbol_.end()) {
+        instances_by_key_.emplace(std::move(binding.key), same->second);
+        return same->second;
+    }
+
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
         .owner         = g.owner,
         .decl          = g.decl,
@@ -234,6 +260,7 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
         .self_modifier = binding.self_modifier,
     }))};
     instances_by_key_.emplace(std::move(binding.key), &fn);
+    instances_by_symbol_.emplace(fn.symbol, &fn);
 
     request_body(fn);
     return &fn;
@@ -370,6 +397,10 @@ auto analyzer::comptime_argument(const call_arg&         arg,
                                  stdx::option<gs::type&> declared,
                                  const use_site&         use,
                                  const source&           src) -> result<ip::index> {
+    if (!declared && arg.value.is<enum_literal>()) {
+        return comp_.unsupported(u_, src, "an enum literal bound to an untyped comptime parameter");
+    }
+
     auto known{[&] -> result<operand> {
         const auto scope{comptime_scope()};
         auto       value{arg.value};
@@ -448,6 +479,16 @@ auto analyzer::call_generic(generic_fn&           g,
 auto analyzer::matched_type(gs::type& declared, const operand& arg, const source& src)
     -> result<gsl::not_null<gs::type*>> {
     if (declared.get_kind() == gs::type_kind::AUTO) { return &inferred_type(arg); }
+
+    // `[n]auto` takes the argument's element type, its length still checked by the coercion
+    if (const auto arr{declared.get_data().as_opt<gs::types::array>()};
+        arr && arr->underlying.get_kind() == gs::type_kind::AUTO) {
+        const auto given{type_of(arg).get_data().as_opt<gs::types::array>()};
+        if (!given) { return &declared; }
+        return &comp_.ctx().get_array(
+            declared.get_key().get_mut(), given->null_terminated, arr->len, given->underlying);
+    }
+
     const auto leaf{element_of(declared)};
     if (!leaf || leaf->get_kind() != gs::type_kind::AUTO) { return &declared; }
 

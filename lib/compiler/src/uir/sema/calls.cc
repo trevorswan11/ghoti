@@ -31,19 +31,26 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
 
     const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
     const auto callee{TRY(resolve_value(callee_ref, src))};
+    return call_operand(callee, args, src, callee_src.value_or(src));
+}
+
+auto analyzer::call_operand(const operand&       callee,
+                            gsl::span<const ref> args,
+                            const source&        src,
+                            const source&        callee_src) -> result<operand> {
     if (const auto generic{callee.as_opt<generic_ref>()}) {
         std::vector<call_arg> values;
         for (const auto arg : args) {
             values.emplace_back(call_arg{.value = TRY(resolve_value(arg, src)), .written = arg});
         }
 
-        return call_generic(*generic->fn, std::move(values), src, callee_src.value_or(src));
+        return call_generic(*generic->fn, std::move(values), src, callee_src);
     }
 
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a value"); }
 
-    return call_function(*fn->fn, args, src, callee_src.value_or(src), false);
+    return call_function(*fn->fn, args, src, callee_src, false);
 }
 
 auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
@@ -61,6 +68,13 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     }
 
     const auto object{TRY(resolve(object_ref, src))};
+
+    // A module's function is called like one declared here
+    if (const auto m{object.as_opt<module_ref>()}) {
+        const auto member{TRY(module_member(*m, name, src))};
+        return call_operand(member, args, src, src);
+    }
+
     const auto index{comptime_value(object)};
     if (!index || !comp_.constants().is_type(*index)) {
         if (const auto through_vtable{TRY(call_dyn(object, name, args, src))}) {

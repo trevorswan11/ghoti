@@ -259,10 +259,21 @@ auto astgen::expr(ast::expr_handle h) -> ref {
         return add_str(tag::str, ast_.get_as<ast::string_expr>(id).value, id);
     case node_kind::INT_LITERAL_EXPRESSION:   return int_literal(id);
     case node_kind::FLOAT_LITERAL_EXPRESSION: {
+        // A suffixed literal rounds once into its own format, straight from its digits
         const auto& lit{ast_.get_as<ast::float_literal_expr>(id)};
-        return add_pl(tag::float_lit,
-                      writer().words_field(limbs_of(lit.value.bits())).u32_field(lit.width),
-                      id);
+        const auto  format{[&] {
+            switch (lit.width) {
+            case 16: return float_format::HALF;
+            case 32: return float_format::SINGLE;
+            case 64: return float_format::DOUBLE;
+            case 80: return float_format::X87;
+            default: return float_format::QUAD;
+            }
+        }()};
+        return add_pl(
+            tag::float_lit,
+            writer().words_field(limbs_of(lit.value_in(format).bits())).u32_field(lit.width),
+            id);
     }
     case node_kind::BOOL_EXPRESSION:
         return to_ref(id.get_token_type() == token_type_t::BOOLEAN_TRUE ? well_known::bool_true
@@ -380,9 +391,12 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
 auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
     const auto op{id.get_token_type()};
     if (op == token_type_t::BOOLEAN_AND || op == token_type_t::BOOLEAN_OR) {
+        // The first instruction the left side lowers to, offset by one so zero means none
+        const auto before{out_.instruction_count()};
         const auto lhs{expr(node.lhs)};
+        const u32  lhs_start{out_.instruction_count() > before ? before + 1 : 0};
         return add_pl(op == token_type_t::BOOLEAN_AND ? tag::bool_and : tag::bool_or,
-                      writer().ref_field(lhs).body_field(value_body(node.rhs)),
+                      writer().ref_field(lhs).body_field(value_body(node.rhs)).u32_field(lhs_start),
                       id);
     }
     const auto lhs{expr(node.lhs)};

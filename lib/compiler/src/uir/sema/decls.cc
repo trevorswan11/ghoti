@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 #include <gsl/pointers>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -165,47 +166,143 @@ auto compilation::symbol_for(const unit& u, decl_id decl, const source& src)
     -> result<std::string> {
     const auto& d{u.uir->decl_at(decl)};
     std::string name{u.uir->string(d.name)};
-    const auto [it, fresh]{symbols_.try_emplace(name, u.index, decl)};
+
+    // A name declared with storage in more than one scope is qualified by the scope declaring it,
+    // unless an outside contract fixes it or it is the program's entry point
+    const bool fixed{d.has(decl_flags::EXTERN) || d.has(decl_flags::EXPORT) ||
+                     d.has(decl_flags::WEAK) || d.link_name.len != 0};
+    const bool entry{u.source.get() == prog_.root.get() && !d.owner && name == ctx_.user_main_name};
+    naming_.emplace_back(u.index, decl);
+    const auto named{gsl::finally([this] { naming_.pop_back(); })};
+    auto       symbol{!fixed && !entry && TRY(collides(name, u, src))
+                          ? fmt::format("m{}.{}", scope_number(u, d.owner), name)
+                          : name};
+
+    const auto [it, fresh]{symbols_.try_emplace(symbol, u.index, decl)};
     if (!fresh && it->second != std::pair{u.index, decl}) {
-        return unsupported(u, src, "two declarations with one name in different scopes");
+        return unsupported(u, src, "two declarations named by one symbol");
     }
 
-    // A name declared twice anywhere in the program is qualified per scope, which UIR can't yet
-    const bool  fixed{d.has(decl_flags::EXTERN) || d.has(decl_flags::EXPORT) ||
-                      d.has(decl_flags::WEAK) || d.link_name.len != 0};
-    const auto& names{declared_names()};
-    const auto  declared{names.find(name)};
-    if (!fixed && declared != names.end() && declared->second > 1) {
-        return unsupported(u, src, "a name the program declares in more than one scope");
-    }
-
-    return name;
+    return symbol;
 }
 
-auto compilation::declared_names() -> const ankerl::unordered_dense::map<std::string, u32>& {
-    if (declared_names_) { return *declared_names_; }
-    auto&      counts{declared_names_.emplace()};
-    const auto count{[&](const unit& u, decl_id decl) {
-        const auto& d{u.uir->decl_at(decl)};
-        if (d.kind != decl_kind::VALUE || declared_nominal(u, d)) { return; }
-        counts[std::string{u.uir->string(d.name)}] += 1;
+auto compilation::scoped_symbol(const unit&           scope,
+                                stdx::option<inst_id> owner,
+                                std::string_view      name,
+                                const unit&           user,
+                                const source&         use) -> result<std::string> {
+    const std::string plain{name};
+    if (!TRY(collides(plain, user, use))) { return plain; }
+    return fmt::format("m{}.{}", scope_number(scope, owner), name);
+}
+
+auto compilation::scope_number(const unit& u, stdx::option<inst_id> owner) -> u32 {
+    const u64 key{
+        (static_cast<u64>(u.index) << 32U) |
+        owner.transform([](inst_id i) { return u64{std::to_underlying(i)} + 1; }).value_or(0)};
+    const auto next{static_cast<u32>(scope_numbers_.size())};
+    return scope_numbers_.try_emplace(key, next).first->second;
+}
+
+auto compilation::collides(const std::string& name, const unit& user, const source& use)
+    -> result<bool> {
+    auto&      names{*TRY(declared_names(user, use))};
+    const auto found{names.candidates.find(name)};
+    if (found == names.candidates.end() || names.weak.contains(name)) { return false; }
+
+    // A declaration that may lack storage only counts once its value shows it has some, while one
+    // being named has storage since its symbol is asked for
+    const auto is_named{[&](const name_candidate& c) {
+        return std::ranges::contains(naming_, std::pair{c.unit, c.decl});
+    }};
+    u32        count{0};
+    for (const auto& c : found->second) { count += c.certain || is_named(c) ? 1 : 0; }
+    if (count > 1 || found->second.size() < 2) { return count > 1; }
+    for (const auto& c : found->second) {
+        if (c.certain || is_named(c)) { continue; }
+        const auto& u{units_[c.unit]};
+        auto&       state{decls_[c.unit][std::to_underlying(c.decl)]};
+        if (state.status == decl_status::IN_PROGRESS) {
+            return unsupported(user, use, "a name whose qualification depends on its own value");
+        }
+
+        DISCARD(analyze_decl(u, c.decl, *u.uir->decl_at(c.decl).node));
+        if (stopped_at_) { return stdx::err{stop::UNSUPPORTED}; }
+        count += decls_[c.unit][std::to_underlying(c.decl)].has_storage ? 1 : 0;
+    }
+
+    return count > 1;
+}
+
+auto compilation::declared_names(const unit& user, const source& use)
+    -> result<gsl::not_null<scoped_names*>> {
+    if (declared_names_) { return &*declared_names_; }
+    auto&      names{declared_names_.emplace()};
+    const auto note{[&](const unit& u, decl_id decl, bool certain) {
+        names.candidates[std::string{u.uir->string(u.uir->decl_at(decl).name)}].emplace_back(
+            name_candidate{.unit = u.index, .decl = decl, .certain = certain});
     }};
 
-    // Module-level declarations, the members of module-level types and every impl's members
+    // A function or `let mut` always has storage, a `const` only when its value isn't a type, and
+    // an aggregate's members are declared in a scope of their own
+    const auto scan{[&](this const auto& self, const unit& u, decl_id decl) -> void {
+        const auto& d{u.uir->decl_at(decl)};
+        if (d.kind != decl_kind::VALUE || !d.value_body) { return; }
+        const auto name{u.uir->string(d.name)};
+        if (d.has(decl_flags::WEAK)) { names.weak.emplace(name); }
+        if (declares_function(u, d) || d.has(decl_flags::MUT)) {
+            note(u, decl, true);
+            return;
+        }
+
+        const auto owner{declared_nominal(u, d)};
+        if (!owner) {
+            note(u, decl, false);
+            return;
+        }
+
+        if (u.uir->tag_of(*owner) == tag::interface_decl) { return; }
+        if (const auto ns{u.uir->namespace_of(*owner)}) {
+            for (const auto member : ns->decls) { self(u, member); }
+        }
+    }};
     for (const auto& u : units_) {
-        for (const auto decl : u.uir->root_namespace().decls) {
-            const auto& d{u.uir->decl_at(decl)};
-            const auto  owner{d.kind == decl_kind::IMPL ? impl_inst_of(u, d)
-                                                        : declared_nominal(u, d)};
-            if (d.kind == decl_kind::VALUE) { count(u, decl); }
-            if (!owner) { continue; }
-            if (const auto ns{u.uir->namespace_of(*owner)}) {
-                for (const auto member : ns->decls) { count(u, member); }
+        for (const auto decl : u.uir->root_namespace().decls) { scan(u, decl); }
+    }
+
+    // An impl's methods are its interface's, or its own when it implements none
+    for (const auto entry : impls_) {
+        const auto& u{*entry->owner};
+        if (const auto iface{TRY(impl_interface(*entry))}) {
+            const auto n{nominal_of(*iface)};
+            if (!n) { return unsupported(user, use, "an impl of an interface UIR didn't declare"); }
+            for (const auto& method : interface_methods(*n)) {
+                names.candidates[std::string{method.name}].emplace_back(
+                    name_candidate{.unit = u.index, .decl = entry->decl, .certain = true});
+            }
+
+            continue;
+        }
+
+        if (const auto ns{u.uir->namespace_of(entry->inst)}) {
+            for (const auto member : ns->decls) {
+                const auto& d{u.uir->decl_at(member)};
+                if (d.kind == decl_kind::VALUE && declares_function(u, d)) {
+                    note(u, member, true);
+                }
             }
         }
     }
 
-    return *declared_names_;
+    return &names;
+}
+
+auto compilation::declares_function(const unit& u, const decl& d) -> bool {
+    const auto body{u.uir->body(d.value_body)};
+    if (body.empty() || u.uir->tag_of(body.back()) != tag::yield) { return false; }
+    const auto yielded{as_inst(u.uir->data_of(body.back()).un.operand)};
+    return yielded &&
+           (u.uir->tag_of(*yielded) == tag::func || u.uir->tag_of(*yielded) == tag::closure);
 }
 
 auto compilation::declared_nominal(const unit& u, const decl& d) -> stdx::option<inst_id> {
@@ -220,12 +317,6 @@ auto compilation::declared_nominal(const unit& u, const decl& d) -> stdx::option
     case tag::interface_decl: return yielded;
     default:                  return stdx::none;
     }
-}
-
-auto compilation::impl_inst_of(const unit& u, const decl& d) -> stdx::option<inst_id> {
-    const auto body{u.uir->body(d.value_body)};
-    if (body.empty() || u.uir->tag_of(body.back()) != tag::yield) { return stdx::none; }
-    return as_inst(u.uir->data_of(body.back()).un.operand);
 }
 
 auto holds_types(const gs::type& type) -> bool {
@@ -367,7 +458,11 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     const auto& d{mod().decl_at(decl)};
     ASSERT(d.node, "a module-level declaration has a source node");
     const source src{*d.node};
-    const bool   comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
+    if (d.kind == decl_kind::IMPORT) {
+        return comp_.import_target(u_, *d.import, mod().string(d.name), src);
+    }
+
+    const bool comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
     if ((d.flags & ~HANDLED_FLAGS) != decl_flags::NONE || comptime_mut ||
         d.extern_target.len != 0 || d.link_name.len != 0) {
         return comp_.unsupported(u_, src, "an extern, export, weak or comptime declaration");
@@ -394,6 +489,13 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     }
 
     if (!value) { return stdx::err{value.error()}; }
+
+    // A module alias has no storage
+    if (value->is<module_ref>()) {
+        if (declared) { return comp_.unsupported(u_, src, "a module stored in a typed global"); }
+        return *value;
+    }
+
     if (value->is<function_ref>() || value->is<generic_ref>()) {
         if (declared) {
             return comp_.unsupported(u_, src, "a function declaration with an explicit type");
@@ -431,7 +533,11 @@ auto analyzer::analyze_global(decl_id                 decl,
     const auto& d{mod().decl_at(decl)};
     const auto  constant_index{comptime_value(value)};
     if (!constant_index) {
-        if (value.is<anon_init>() || value.is<enum_literal>()) {
+        if (is_untyped_literal(value)) {
+            if (!declared && value.is<cast_ref>()) {
+                return analyze_global(decl, TRY(concrete(value, src)), declared, src);
+            }
+
             if (!declared) {
                 return comp_.unsupported(u_, src, "an untyped literal as a global's value");
             }
@@ -461,10 +567,10 @@ auto analyzer::analyze_global(decl_id                 decl,
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
 
-        // Only a module-level alias is listed
+        // Only a module-level alias is listed, by its name alone since it claims no symbol
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
         if (!declared && !declares_type(d) && module_level) {
-            comp_.gir().add_type(TRY(global_symbol(decl, src)), pool.type_at(*constant_index));
+            comp_.gir().add_type(std::string{mod().string(d.name)}, pool.type_at(*constant_index));
         }
 
         return value;
@@ -497,6 +603,7 @@ auto analyzer::analyze_global(decl_id                 decl,
                                         compilation::linkage_of(d))};
     if (is_aggregate) { global.const_init.emplace(index); }
     global.is_weak = d.has(decl_flags::WEAK);
+    comp_.note_storage(u_, decl);
     if (!is_mutable && !is_aggregate) { return stored; }
     const auto& symbol{comp_.own_symbol(u_, decl, global.name)};
     if (!is_mutable) { return global_const{.symbol = &symbol, .type = &type, .value = index}; }

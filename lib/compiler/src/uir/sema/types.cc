@@ -5,6 +5,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/primitive.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
@@ -70,16 +71,20 @@ auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
     const auto  width{rec.u32_field()};
     const auto  bits{rec.u32_field()};
     const auto& src{src_of(inst)};
-    if ((bits & (flags::INT_BIG | flags::INT_CHAR)) != 0) {
-        return comp_.unsupported(u_, src, "a character or wider-than-128-bit literal");
+    if ((bits & flags::INT_BIG) != 0) {
+        return comp_.unsupported(u_, src, "an integer literal wider than 128 bits");
     }
 
     const big_int value{limbs_value(limbs)};
     const bool    is_signed{(bits & flags::INT_SIGNED) != 0};
     auto&         ctx{comp_.ctx()};
     const bool    sized{(bits & flags::INT_SIZE) != 0};
+
+    // An unsuffixed character is an untyped integer that defaults to a code point's width
     if (!sized && width == 0) {
-        return intern_int(comp_.constants(), value, builtin(gs::type_kind::COMPTIME_INT));
+        auto& untyped{(bits & flags::INT_CHAR) != 0 ? ctx.get_char_constant()
+                                                    : builtin(gs::type_kind::COMPTIME_INT)};
+        return intern_int(comp_.constants(), value, untyped);
     }
 
     auto& type{sized ? builtin(is_signed ? gs::type_kind::ISIZE : gs::type_kind::USIZE)
@@ -97,7 +102,21 @@ auto analyzer::analyze_float_lit(inst_id inst) -> result<operand> {
     auto       rec{record(inst)};
     const auto bits{f128::from_bits(limbs_value(rec.words_field()))};
     const auto width{rec.u32_field()};
-    auto&      type{[&] -> gs::type& {
+
+    // An untyped literal is kept in quad precision, which would round it twice into a narrower
+    // format whose nearest value its digits decide differently
+    const auto node{src_of(inst).as_opt<ast::node_id>()};
+    const auto lit{width == 0 && node ? u_.source->ast.get_as_opt<ast::float_literal_expr>(*node)
+                                      : stdx::none};
+    if (lit) {
+        for (const auto format : {float_format::HALF, float_format::SINGLE, float_format::DOUBLE}) {
+            if (!(lit->value_in(format) == bits.round_to(format))) {
+                return comp_.unsupported(
+                    u_, src_of(inst), "an untyped float literal that rounds twice when narrowed");
+            }
+        }
+    }
+    auto& type{[&] -> gs::type& {
         switch (width) {
         case 16:  return builtin(gs::type_kind::F16);
         case 32:  return builtin(gs::type_kind::F32);

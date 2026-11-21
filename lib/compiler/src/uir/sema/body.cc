@@ -162,6 +162,7 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             return flow{.yielded = TRY(resolve(d.un.operand, src_of(inst)))};
         }
 
+        if (!is_comptime()) { start_bool_ops(inst); }
         auto value{analyze_inst(inst)};
         if (!value) {
             // A failed instruction poisons only what uses it, so later root causes still report
@@ -226,6 +227,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
 
     case tag::decl_val:        return analyze_decl_val(inst, false);
     case tag::decl_ref:        return analyze_decl_val(inst, true);
+    case tag::import:          return analyze_import(inst);
     case tag::alloc_mut:       return analyze_alloc_mut(inst, false);
     case tag::alloc_comptime:  return analyze_alloc_mut(inst, true);
     case tag::let_value:       return analyze_let_value(inst);
@@ -343,6 +345,9 @@ auto analyzer::well_known_operand(well_known w, const source& src) -> result<ope
         return pool.intern(ip::undefined_value{}, builtin(gs::type_kind::UNDEFINED));
     case well_known::nullptr_value:
         return pool.intern(ip::nullptr_value{}, builtin(gs::type_kind::NULLPTR));
+    case well_known::builtin_module:
+        if (const auto prelude{comp_.prelude_module()}) { return *prelude; }
+        break;
     default: break;
     }
 
@@ -373,7 +378,9 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const slot_value& s) -> gs::type& { return *s.type; },
         [&](anon_init) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
         [&](enum_literal) -> gs::type& { return builtin(gs::type_kind::ENUM_LITERAL); },
-        [](const global_const& g) -> gs::type& { return *g.type; });
+        [](const global_const& g) -> gs::type& { return *g.type; },
+        [&](const module_ref&) -> gs::type& { return builtin(gs::type_kind::VOID_); },
+        [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)
