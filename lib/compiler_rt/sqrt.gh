@@ -14,6 +14,10 @@ comptime {
     symbol(__sqrtx, "__sqrtx");
     symbol(sqrtq, "sqrtf128");
     symbol(sqrtl, "sqrtl");
+
+    @cfg (compiler_rt.is_windows_msvc) {
+        symbol(sqrtf64x, "sqrtf64x");
+    }
 }
 
 const __sqrth = fn(x: f16) callconv(.c): f16 {
@@ -267,6 +271,12 @@ test "sqrt_f64" {
     @expect(math.is_nan(sqrt_f64(-0x1p-1074)));
     @expect(math.is_nan(sqrt_f64(-0x1p0)));
     @expect(math.is_nan(sqrt_f64(-math.inf(f64))));
+}
+
+@cfg (compiler_rt.is_windows_msvc) {
+    const sqrtf64x = fn(x: f80) callconv(.c): f80 {
+        return sqrt_f80(x);
+    };
 }
 
 const __sqrtx = fn(x: u80) callconv(.c): u80 {
