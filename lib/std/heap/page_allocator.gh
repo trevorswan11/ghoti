@@ -218,3 +218,21 @@ test "PageAllocator: dupe duplicates slice memory" {
         .err => @expect(false, "PageAllocator.dupe failed"),
     }
 }
+
+test "PageAllocator: dupeZ duplicates slice memory with null termination" {
+    let allocator = std.heap.page_allocator;
+    let msg: []u8 = "hello world";
+    match (allocator.dupeZ(u8, msg)) {
+        .ok => |zmsg| {
+            defer allocator.free(zmsg);
+            @expect(zmsg.len == 11uz);
+            @expect(zmsg[0] == 'h' and zmsg[10] == 'd');
+            @expect(zmsg.ptr[11] == 0u8);
+            // Also test assignability to [:0]u8
+            let s: [:0]u8 = zmsg;
+            @expect(s.len == 11uz);
+            @expect(s.ptr[11] == 0u8);
+        },
+        .err => @expect(false, "PageAllocator.dupeZ failed"),
+    }
+}
