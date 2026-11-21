@@ -1,0 +1,191 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/log_f128.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+
+pub const log2size = 7;
+pub const size = 1 << log2size;
+
+/// Filter out special cases for log in bases {e,2,10}.
+///
+/// If x is finite and positive, returns empty.
+/// Returns the appropriate NaN or inf otherwise.
+pub const special_cases = fn(x: f128): std.Option(f128) {
+    if (!math.is_finite(x)) {
+        if (math.is_nan(x)) {
+            @cfg (compiler_rt.want_float_exceptions) {
+                if (math.is_snan(x)) math.raise_invalid();
+            }
+            return .of(math.nan(f128));
+        }
+        if (math.is_positive_inf(x)) return .of(x);
+    }
+    if (x <= 0.0) {
+        if (x >= 0.0) {
+            @cfg (compiler_rt.want_float_exceptions) {
+                math.raise_div_by_zero();
+            }
+            return .of(-math.inf(f128));
+        }
+        @cfg (compiler_rt.want_float_exceptions) {
+            math.raise_invalid();
+        }
+        return .of(math.nan(f128));
+    }
+
+    return .empty;
+};
+
+pub const Frexp128 = struct {
+    pub significand: f128,
+    pub exponent: i32,
+};
+
+/// Returns (f, k) such that x = f * 2^k and f in [1,2).
+/// Asserts that x is finite and positive.
+pub const frexp2 = fn(x: f128): Frexp128 {
+    @assert(math.is_finite(x));
+    @assert(x > 0.0);
+
+    let bits = @bitCast(u128, x);
+    let uexp = @intCast(i32, bits >> 112);
+
+    @assert(uexp >= 0);
+
+    if (uexp == 0) {
+        let shift = @intCast(u7, @clz(bits) - 15);
+
+        let exp = -@as(i32, shift) - 0x3ffe;
+        let frac = @bitCast(f128, (bits << shift) | (@as(u128, 0x3fff) << 112));
+        return .{ .significand = frac, .exponent = exp };
+    }
+
+    let exp = uexp - 0x3fff;
+    let frac = @bitCast(f128, (@as(u128, 0x3fff) << 112) | ((bits << 16) >> 16));
+    return .{ .significand = frac, .exponent = exp };
+};
+
+pub const Proc1Poly = struct {
+    pub a1: f128,
+    pub a3: f128,
+    pub a5: f128,
+    pub a7: f128,
+    pub a9: f64,
+    pub a11: f64,
+};
+
+pub const Proc1HiLo = struct {
+    pub hi: f128,
+    pub lo: f128,
+};
+
+pub const Proc1 = struct {
+    pub poly: Proc1Poly,
+    pub tab: [size + 1]Proc1HiLo,
+
+    pub const Poly = Proc1Poly;
+    pub const HiLo = Proc1HiLo;
+};
+
+pub const proc1 = fn(comptime p: Proc1, x: f128): f128 {
+    let ym = frexp2(x);
+    let y = ym.significand;
+    let m = ym.exponent;
+
+    let F0 = @floor(math.ldexp(y, log2size) + 0.5);
+    let j0 = @intFromFloat(usize, F0);
+    let j = j0 - size;
+    let F = math.ldexp(F0, -log2size);
+    let f = y - F;
+
+    let u = (f + f) / (y + F);
+    let v = u * u;
+    let v64 = @floatCast(f64, v);
+
+    let p9 = p.poly.a9 + v64 * p.poly.a11;
+    let p7 = p.poly.a7 + v * p9;
+    let p5 = p.poly.a5 + v * p7;
+    let p3 = p.poly.a3 + v * p5;
+
+    let q = u * v * p3;
+
+    let xm = @floatFromInt(f128, m);
+    let l_hi = xm * p.tab[128].hi + p.tab[j].hi;
+    let l_lo = xm * p.tab[128].lo + p.tab[j].lo;
+
+    if comptime (p.poly.a1 == 1.0) {
+        return l_hi + (u + (q + l_lo));
+    } else {
+        return l_hi + (u * p.poly.a1 + (q + l_lo));
+    }
+};
+
+pub const Proc2Poly = struct {
+    pub b1_hi: f128,
+    pub b1_lo: f128,
+    pub b3: f128,
+    pub b5: f128,
+    pub b7: f128,
+    pub b9: f128,
+    pub b11: f128,
+    pub b13: f128,
+    pub b15: f64,
+    pub b17: f64,
+    pub b19: f64,
+};
+
+pub const Proc2 = struct {
+    pub poly: Proc2Poly,
+
+    // exp(-1 / 16) rounded down
+    pub const lo: f128 = 0.939413062813475786119710824622305;
+    // exp(1 / 16) rounded up
+    pub const hi: f128 = 1.0644944589178594295633905946428897;
+
+    pub const Poly = Proc2Poly;
+};
+
+pub const proc2 = fn(comptime p: Proc2, x: f128): f128 {
+    @assert(Proc2.lo < x and x < Proc2.hi);
+
+    let f = x - 1.0;
+    let g = 1.0 / (2.0 + f);
+    let u = 2.0 * f * g;
+    let v = u * u;
+    let uv = u * v;
+    let v64 = @floatCast(f64, v);
+
+    let p17 = p.poly.b17 + v64 * p.poly.b19;
+    let p15 = p.poly.b15 + v64 * p17;
+    let p13 = p.poly.b13 + v * p15;
+    let p11 = p.poly.b11 + v * p13;
+    let p9 = p.poly.b9 + v * p11;
+    let p7 = p.poly.b7 + v * p9;
+    let p5 = p.poly.b5 + v * p7;
+
+    let q_hi = uv * p.poly.b3;
+    let q_lo = uv * v * p5;
+
+    let f_hi: f128 = @floatCast(f128, @floatCast(f64, f));
+    let f_lo = f - f_hi;
+
+    let u_hi: f128 = @floatCast(f128, @floatCast(f64, u));
+    let u_lo = ((2.0 * (f - u_hi) - u_hi * f_hi) - u_hi * f_lo) * g;
+
+    if comptime (p.poly.b1_hi == 1.0 and p.poly.b1_lo == 0.0) {
+        return u_hi + (u_lo + (q_hi + q_lo));
+    }
+
+    // t = u * p.poly.b1
+    let t_hi = u_hi * p.poly.b1_hi;
+    let t_lo = u_lo * p.poly.b1_hi + u * p.poly.b1_lo;
+
+    // y = t + q
+    let y_hi = t_hi + q_hi;
+    let y_lo = t_lo + (t_hi - y_hi + q_hi) + q_lo;
+
+    return y_hi + y_lo;
+};
