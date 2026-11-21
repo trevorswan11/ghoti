@@ -1,0 +1,288 @@
+//! Ported from musl, which is licensed under the MIT license:
+//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+//!
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/roundf.c
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/round.c
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const mem = std.mem;
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__roundh, "__roundh");
+    symbol(roundf, "roundf");
+    symbol(round, "round");
+    symbol(__roundx, "__roundx");
+    symbol(roundq, "roundf128");
+    symbol(roundl, "roundl");
+
+    @cfg (compiler_rt.is_windows_msvc) {
+        symbol(roundf64x, "roundf64x");
+    }
+}
+
+const __roundh = fn(x: f16) callconv(.c): f16 {
+    return round_f16(x);
+};
+
+pub const round_f16 = fn(x: f16): f16 {
+    // TODO: more efficient implementation
+    return @floatCast(round_f32(@floatCast(x)));
+};
+
+const roundf = fn(x: f32) callconv(.c): f32 {
+    return round_f32(x);
+};
+
+pub const round_f32 = fn(x_: f32): f32 {
+    const f32_toint: f32 = 1.0 / math.float_eps(f32);
+
+    let mut x = x_;
+    let u: u32 = @bitCast(x);
+    let e = (u >> 23) & 0xff;
+    let mut y: f32 = undefined;
+
+    if (e >= 0x7f + 23) {
+        return x;
+    }
+    if (u >> 31 != 0) {
+        x = -x;
+    }
+    if (e < 0x7f - 1) {
+        @cfg (compiler_rt.want_float_exceptions) {
+            mem.do_not_optimize_away(x + f32_toint);
+        }
+        return 0.0 * @bitCast(f32, u);
+    }
+
+    y = x + f32_toint - f32_toint - x;
+    if (y > 0.5) {
+        y = y + x - 1.0;
+    } else if (y <= -0.5) {
+        y = y + x + 1.0;
+    } else {
+        y = y + x;
+    }
+
+    if (u >> 31 != 0) {
+        return -y;
+    } else {
+        return y;
+    }
+};
+
+const round = fn(x: f64) callconv(.c): f64 {
+    return round_f64(x);
+};
+
+pub const round_f64 = fn(x_: f64): f64 {
+    const f64_toint: f64 = 1.0 / math.float_eps(f64);
+
+    let mut x = x_;
+    let u: u64 = @bitCast(x);
+    let e = (u >> 52) & 0x7ff;
+    let mut y: f64 = undefined;
+
+    if (e >= 0x3ff + 52) {
+        return x;
+    }
+    if (u >> 63 != 0) {
+        x = -x;
+    }
+    if (e < 0x3ff - 1) {
+        @cfg (compiler_rt.want_float_exceptions) {
+            mem.do_not_optimize_away(x + f64_toint);
+        }
+        return 0.0 * @bitCast(f64, u);
+    }
+
+    y = x + f64_toint - f64_toint - x;
+    if (y > 0.5) {
+        y = y + x - 1.0;
+    } else if (y <= -0.5) {
+        y = y + x + 1.0;
+    } else {
+        y = y + x;
+    }
+
+    if (u >> 63 != 0) {
+        return -y;
+    } else {
+        return y;
+    }
+};
+
+@cfg (compiler_rt.is_windows_msvc) {
+    const roundf64x = fn(x: f80) callconv(.c): f80 {
+        return round_f80(x);
+    };
+}
+
+const __roundx = fn(x: u80) callconv(.c): u80 {
+    return @bitCast(round_f80(@bitCast(x)));
+};
+
+pub const round_f80 = fn(x: f80): f80 {
+    // TODO: more efficient implementation
+    return @floatCast(round_f128(@floatCast(x)));
+};
+
+const roundq = fn(x: f128) callconv(.c): f128 {
+    return round_f128(x);
+};
+
+pub const round_f128 = fn(x_: f128): f128 {
+    const f128_toint: f128 = 1.0 / math.float_eps(f128);
+
+    let mut x = x_;
+    let u: u128 = @bitCast(x);
+    let e = (u >> 112) & 0x7fff;
+    let mut y: f128 = undefined;
+
+    if (e >= 0x3fff + 112) {
+        return x;
+    }
+    if (u >> 127 != 0) {
+        x = -x;
+    }
+    if (e < 0x3fff - 1) {
+        @cfg (compiler_rt.want_float_exceptions) {
+            mem.do_not_optimize_away(x + f128_toint);
+        }
+        return 0.0 * @bitCast(f128, u);
+    }
+
+    y = x + f128_toint - f128_toint - x;
+    if (y > 0.5) {
+        y = y + x - 1.0;
+    } else if (y <= -0.5) {
+        y = y + x + 1.0;
+    } else {
+        y = y + x;
+    }
+
+    if (u >> 127 != 0) {
+        return -y;
+    } else {
+        return y;
+    }
+};
+
+pub const roundl = fn(x: c_longdouble) callconv(.c): c_longdouble {
+    return match comptime (@typeInfo(c_longdouble).float.bits) {
+        64 => round_f64(x),
+        80 => round_f80(x),
+        128 => round_f128(x),
+        _ => unreachable,
+    };
+};
+
+test "round_f16" {
+    @expect(round_f16(1.3) == 1.0);
+    @expect(round_f16(-1.3) == -1.0);
+    @expect(round_f16(1.8) == 2.0);
+    @expect(round_f16(-1.8) == -2.0);
+    @expect(round_f16(0.5) == 1.0);
+    @expect(round_f16(-0.5) == -1.0);
+    @expect(round_f16(1.5) == 2.0);
+    @expect(round_f16(-1.5) == -2.0);
+    @expect(math.is_positive_zero(round_f16(0.2)));
+    @expect(math.is_negative_zero(round_f16(-0.2)));
+    @expect(math.is_positive_zero(round_f16(0.0)));
+    @expect(math.is_negative_zero(round_f16(-0.0)));
+    @expect(math.is_positive_inf(round_f16(math.inf(f16))));
+    @expect(math.is_negative_inf(round_f16(-math.inf(f16))));
+    @expect(math.is_nan(round_f16(math.nan(f16))));
+}
+
+test "round_f32" {
+    @expect(round_f32(1.3) == 1.0);
+    @expect(round_f32(-1.3) == -1.0);
+    @expect(round_f32(1.8) == 2.0);
+    @expect(round_f32(-1.8) == -2.0);
+    @expect(round_f32(0.5) == 1.0);
+    @expect(round_f32(-0.5) == -1.0);
+    @expect(round_f32(1.5) == 2.0);
+    @expect(round_f32(-1.5) == -2.0);
+    @expect(math.is_positive_zero(round_f32(0.2)));
+    @expect(math.is_negative_zero(round_f32(-0.2)));
+    @expect(math.is_positive_zero(round_f32(0.0)));
+    @expect(math.is_negative_zero(round_f32(-0.0)));
+    @expect(math.is_positive_inf(round_f32(math.inf(f32))));
+    @expect(math.is_negative_inf(round_f32(-math.inf(f32))));
+    @expect(math.is_nan(round_f32(math.nan(f32))));
+}
+
+test "round_f64" {
+    @expect(round_f64(1.3) == 1.0);
+    @expect(round_f64(-1.3) == -1.0);
+    @expect(round_f64(1.8) == 2.0);
+    @expect(round_f64(-1.8) == -2.0);
+    @expect(round_f64(0.5) == 1.0);
+    @expect(round_f64(-0.5) == -1.0);
+    @expect(round_f64(1.5) == 2.0);
+    @expect(round_f64(-1.5) == -2.0);
+    @expect(math.is_positive_zero(round_f64(0.2)));
+    @expect(math.is_negative_zero(round_f64(-0.2)));
+    @expect(math.is_positive_zero(round_f64(0.0)));
+    @expect(math.is_negative_zero(round_f64(-0.0)));
+    @expect(math.is_positive_inf(round_f64(math.inf(f64))));
+    @expect(math.is_negative_inf(round_f64(-math.inf(f64))));
+    @expect(math.is_nan(round_f64(math.nan(f64))));
+}
+
+test "round_f80" {
+    @expect(round_f80(1.3) == 1.0);
+    @expect(round_f80(-1.3) == -1.0);
+    @expect(round_f80(1.8) == 2.0);
+    @expect(round_f80(-1.8) == -2.0);
+    @expect(round_f80(0.5) == 1.0);
+    @expect(round_f80(-0.5) == -1.0);
+    @expect(round_f80(1.5) == 2.0);
+    @expect(round_f80(-1.5) == -2.0);
+    @expect(math.is_positive_zero(round_f80(0.2)));
+    @expect(math.is_negative_zero(round_f80(-0.2)));
+    @expect(math.is_positive_zero(round_f80(0.0)));
+    @expect(math.is_negative_zero(round_f80(-0.0)));
+    @expect(math.is_positive_inf(round_f80(math.inf(f80))));
+    @expect(math.is_negative_inf(round_f80(-math.inf(f80))));
+    @expect(math.is_nan(round_f80(math.nan(f80))));
+}
+
+test "round_f128" {
+    @expect(round_f128(1.3) == 1.0);
+    @expect(round_f128(-1.3) == -1.0);
+    @expect(round_f128(1.8) == 2.0);
+    @expect(round_f128(-1.8) == -2.0);
+    @expect(round_f128(0.5) == 1.0);
+    @expect(round_f128(-0.5) == -1.0);
+    @expect(round_f128(1.5) == 2.0);
+    @expect(round_f128(-1.5) == -2.0);
+    @expect(math.is_positive_zero(round_f128(0.2)));
+    @expect(math.is_negative_zero(round_f128(-0.2)));
+    @expect(math.is_positive_zero(round_f128(0.0)));
+    @expect(math.is_negative_zero(round_f128(-0.0)));
+    @expect(math.is_positive_inf(round_f128(math.inf(f128))));
+    @expect(math.is_negative_inf(round_f128(-math.inf(f128))));
+    @expect(math.is_nan(round_f128(math.nan(f128))));
+}
+
+test "roundl" {
+    @expect(roundl(1.3) == 1.0);
+    @expect(roundl(-1.3) == -1.0);
+    @expect(roundl(1.8) == 2.0);
+    @expect(roundl(-1.8) == -2.0);
+    @expect(roundl(0.5) == 1.0);
+    @expect(roundl(-0.5) == -1.0);
+    @expect(roundl(1.5) == 2.0);
+    @expect(roundl(-1.5) == -2.0);
+    @expect(math.is_positive_zero(roundl(0.2)));
+    @expect(math.is_negative_zero(roundl(-0.2)));
+    @expect(math.is_positive_zero(roundl(0.0)));
+    @expect(math.is_negative_zero(roundl(-0.0)));
+    @expect(math.is_positive_inf(roundl(math.inf(c_longdouble))));
+    @expect(math.is_negative_inf(roundl(-math.inf(c_longdouble))));
+    @expect(math.is_nan(roundl(math.nan(c_longdouble))));
+}
