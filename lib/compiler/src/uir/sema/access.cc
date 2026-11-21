@@ -311,6 +311,18 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
             return member_of(comp_.constants().type_at(*index), name, src);
         }
 
+        // A runtime body reads a known string slice through a copy of it
+        const auto& known{comp_.constants().value_at(*index)};
+        const auto  slice_type{known.type};
+        if (!is_comptime() && known.data.is<std::string>() && slice_type &&
+            slice_type->get_kind() == gs::type_kind::SLICE) {
+            // Building the slice interns constants, which may move `known`
+            const auto built{TRY(as_runtime(object, src))};
+            const auto copy{spill(built, *slice_type, false)};
+            const auto field{TRY(field_place(copy, name, src))};
+            return operand{TRY(read(field, src))};
+        }
+
         return comptime_field(*index, name, src);
     }
 
@@ -511,7 +523,12 @@ auto analyzer::analyze_elem_val(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object{TRY(resolve(d.bin.lhs, src))};
     if (const auto pack{object.as_opt<pack_ref>()}) { return pack_elem(*pack, d.bin.rhs, src); }
-    if (const auto index{comptime_value(object)}) {
+
+    // A runtime body reads a string's bytes where the string is stored
+    const auto index{comptime_value(object)};
+    const bool text{index && !comp_.constants().is_type(*index) &&
+                    comp_.constants().value_at(*index).data.is<std::string>()};
+    if (index && (!text || is_comptime())) {
         if (const auto at{comptime_value(TRY(resolve_value(d.bin.rhs, src)))}) {
             return comptime_elem(*index, *at, src);
         }

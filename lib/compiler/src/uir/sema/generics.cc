@@ -240,17 +240,18 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
     }
 
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
-        .owner         = g.owner,
-        .decl          = g.decl,
-        .func          = g.func,
-        .symbol        = std::move(symbol),
-        .type          = &fn_type,
-        .params        = std::move(binding.slots),
-        .return_type   = &ret,
-        .linkage       = gir::linkage::INTERNAL,
-        .weak          = g.weak,
-        .queued        = false,
-        .comptime_only = ret.get_kind() == gs::type_kind::TYPE,
+        .owner       = g.owner,
+        .decl        = g.decl,
+        .func        = g.func,
+        .symbol      = std::move(symbol),
+        .type        = &fn_type,
+        .params      = std::move(binding.slots),
+        .return_type = &ret,
+        .linkage     = gir::linkage::INTERNAL,
+        .weak        = g.weak,
+        .queued      = false,
+        .comptime_only =
+            ret.get_kind() == gs::type_kind::TYPE || gs::is_comptime_numeric(ret.get_kind()),
         .bindings      = std::move(binding.bindings),
         .infers_return = binding.infers_return,
         .source_name   = std::string{g.owner->uir->string(g.owner->uir->decl_at(g.decl).name)},
@@ -386,7 +387,11 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 continue;
             }
 
-            binding.mangled_params.emplace_back(comp_.mangle_type(type));
+            // A string argument keeps its literal's array type in the symbol
+            const bool text{!comp_.constants().is_type(index) &&
+                            comp_.constants().value_at(index).data.is<std::string>() &&
+                            type_of(arg).get_kind() == gs::type_kind::ARRAY};
+            binding.mangled_params.emplace_back(comp_.mangle_type(text ? type_of(arg) : type));
             binding.comptime_suffixes.emplace_back(fmt::format(
                 "_cx{}", gir::const_value::from_interned(comp_.constants(), index).mangle()));
             continue;

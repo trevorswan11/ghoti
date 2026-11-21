@@ -1,5 +1,6 @@
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -62,8 +63,8 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TAG_NAME:                 return builtin_tag_name(args, src);
     case builtin_t::TYPE_INFO:                return builtin_type_info(args, src);
     case builtin_t::ALIGN_OF:                 return builtin_layout(args, src, false);
-    case builtin_t::ASSERT:
-    case builtin_t::VERIFY:                   return builtin_assert(args, src);
+    case builtin_t::ASSERT:                   return builtin_assert(args, src, false);
+    case builtin_t::VERIFY:                   return builtin_assert(args, src, true);
     case builtin_t::TRAP:                     return builtin_trap(src);
     case builtin_t::AS:                       return builtin_as(args, src);
     case builtin_t::THIS:                     return builtin_this(src);
@@ -100,8 +101,18 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
     for (u32 i{0}; i < count; ++i) {
         const auto body{rec.body_field()};
         const auto value{TRY(unevaluated(body, src))};
-        auto&      type{type_of(value)};
+
+        // A type operand's type is the type itself, as the old resolver gives it
+        const auto known{comptime_value(value)};
+        auto& type{known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
+                                                              : type_of(value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
+
+        // A signature naming an untyped parameter's type would take a type the old resolver doesn't
+        if (!fn_ && !declaring_ && gs::is_comptime_numeric(type.get_kind())) {
+            return comp_.unsupported(u_, src, "a signature's `@TypeOf` of an untyped value");
+        }
+
         peers.emplace_back<gs::peer_operand>({.type = &type});
         sources.emplace_back(body.empty() ? src : src_of(body.back()));
     }
@@ -120,8 +131,9 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
 }
 
 auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> result<operand> {
-    // A runtime body's operand is analyzed into a function no one emits
-    if (is_comptime() || !gir_fn_) {
+    // A runtime body's operand is analyzed into a function no one emits, even from a comptime
+    // part of that body, since only its type is wanted
+    if (!gir_fn_) {
         const auto out{TRY(analyze_body(body))};
         if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
         return *out.yielded;
@@ -135,6 +147,8 @@ auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> 
         gir_fn_ = outer_fn;
         builder_.set_insert_point(*outer_fn, *outer_segment);
     })};
+    const auto depth{std::exchange(comptime_depth_, 0)};
+    const auto restore_depth{gsl::finally([&] { comptime_depth_ = depth; })};
     gir_fn_.emplace(scratch);
     builder_.set_insert_point(scratch, scratch.add_segment());
     const auto out{TRY(analyze_body(body))};
@@ -362,19 +376,29 @@ auto analyzer::builtin_trap(const source& src) -> result<operand> {
     return void_value();
 }
 
-auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src) -> result<operand> {
+auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
+    -> result<operand> {
     if (!is_comptime()) { return comp_.unsupported(u_, src, "a runtime `@assert`"); }
     if (args.empty()) { return comp_.unsupported(u_, src, "an `@assert` without a condition"); }
     const auto cond{TRY(resolve_value(args.front(), src))};
-    if (!TRY(known_bool(cond, src))) {
-        return comp_.report(
-            u_,
-            src,
-            gs::error::COMPTIME_EVALUATION_FAILED,
-            std::string{string_literal(mod(), args, 1).value_or(DEFAULT_ASSERT_FAILURE)});
+    if (TRY(known_bool(cond, src))) { return void_value(); }
+
+    // Outside a call the old resolver folds the condition itself and reports it as static
+    if (!comp_.in_comptime_call()) {
+        const auto text{string_literal(mod(), args, 1)};
+        return comp_.report(u_,
+                            src,
+                            gs::error::STATIC_ASSERTION_FAILED,
+                            fmt::format("{} failed at compile time{}",
+                                        verify ? "@verify" : "@assert",
+                                        text ? fmt::format(": {}", *text) : std::string{}));
     }
 
-    return void_value();
+    return comp_.report(
+        u_,
+        src,
+        gs::error::COMPTIME_EVALUATION_FAILED,
+        std::string{string_literal(mod(), args, 1).value_or(DEFAULT_ASSERT_FAILURE)});
 }
 
 } // namespace ghoti::uir::sema

@@ -156,15 +156,15 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }};
     // A one-argument cast takes the type of the side it meets
     const auto cast_meets{[&](const operand& cast, const operand& other) {
-        return cast.is<cast_ref>() && !other.is<cast_ref>() && !is_untyped_literal(other);
+        return info.cls != op_class::SHIFT && cast.is<cast_ref>() && !other.is<cast_ref>() &&
+               !is_untyped_literal(other) && !gs::is_comptime_numeric(type_of(other).get_kind());
     }};
     if (cast_meets(lhs, rhs)) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
     } else if (cast_meets(rhs, lhs)) {
         rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
-    } else if (lhs.is<cast_ref>() || rhs.is<cast_ref>()) {
-        lhs = TRY(concrete(lhs, src));
-        rhs = TRY(concrete(rhs, src));
+    } else if (info.cls != op_class::SHIFT && (lhs.is<cast_ref>() || rhs.is<cast_ref>())) {
+        return comp_.unsupported(u_, src, "an inferred cast meeting an untyped value");
     }
 
     if (narrows_to(lhs, rhs)) {
@@ -293,7 +293,7 @@ auto analyzer::compare_pointers(const binary_info& info,
     // Known pointers are equal when they are the same address or both null
     const auto known_l{comptime_value(lhs)};
     const auto known_r{comptime_value(rhs)};
-    if (is_comptime() && known_l && known_r &&
+    if (is_comptime() && !gir_fn_ && known_l && known_r &&
         (info.kind == instruction_kind::EQ || info.kind == instruction_kind::NE)) {
         auto&       pool{comp_.constants()};
         const auto& ld{pool.value_at(*known_l).data};

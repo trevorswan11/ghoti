@@ -148,7 +148,7 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
     }
 
     // A compile-time evaluation would need comptime addresses
-    if (!gir_fn_) {
+    if (!gir_fn_ || is_comptime()) {
         return comp_.unsupported(u_, src, "a method taking its object's address at compile time");
     }
     TRY(require_runtime(src));

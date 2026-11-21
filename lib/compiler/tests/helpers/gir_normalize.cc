@@ -23,6 +23,14 @@ namespace ghoti::tests::helpers {
 
 namespace {
 
+// A store's value and destination, split at the last comma since a string value may hold one
+[[nodiscard]] auto store_args(std::string_view body) -> std::vector<std::string_view> {
+    const auto operands{stdx::string::substr(body, 6)};
+    const auto at{operands.rfind(", ")};
+    if (at == std::string_view::npos) { return {operands}; }
+    return {operands.substr(0, at), operands.substr(at + 2)};
+}
+
 struct segment_dump {
     u32                      id;
     std::vector<std::string> instructions;
@@ -543,7 +551,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
                     return std::string{t};
                 }));
                 if (body.starts_with("store ")) {
-                    const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                    const auto args{store_args(body)};
                     if (args.size() == 2 && args[1].starts_with('%') && args[0] != args[1]) {
                         ++stored_into[std::string{args[1]}];
                     }
@@ -578,7 +586,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
                 if (body.starts_with("get_element_ptr ") && !temps.empty()) {
                     temps.erase(temps.begin());
                 } else if (body.starts_with("store ")) {
-                    const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                    const auto args{store_args(body)};
                     if (args.size() == 2) { std::erase(temps, std::string{args[1]}); }
                 }
 
@@ -608,7 +616,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
             }
 
             if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 const auto root{args.size() == 2 ? roots.find(std::string{args[1]}) : roots.end()};
                 if (root != roots.end() && dead_roots.contains(root->second)) { return true; }
             }
@@ -621,7 +629,7 @@ auto drop_dead_slots(function_dump& fn) -> void {
             }
 
             if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() != 2 || !slots.contains(std::string{args[1]})) { return false; }
                 const auto found{uses.find(std::string{args[1]})};
                 const auto stores{stored_into.find(std::string{args[1]})};
@@ -664,7 +672,7 @@ auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
             if (body.starts_with("alloca ")) { continue; }
             if (!def.empty() && body.starts_with("load %")) { continue; }
             if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() == 2 && slots.contains(std::string{args[1]})) {
                     auto& use{slots[std::string{args[1]}]};
                     if (!is_constant_token(args[0]) || (use.value && *use.value != args[0])) {
@@ -718,7 +726,7 @@ auto forward_constant_slots(function_dump& fn, known_map& known) -> bool {
             }
 
             if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() == 2 && slot_of(args[1])) {
                     changed = true;
                     continue;
@@ -821,7 +829,7 @@ auto fold_constants(function_dump& fn) -> void {
             if (body.starts_with("alloca ")) { continue; }
             if (body.starts_with("load %")) { continue; }
             if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() == 2) { slots.erase(std::string{args[0]}); }
                 continue;
             }
@@ -865,7 +873,7 @@ auto fold_constants(function_dump& fn) -> void {
             if (body.starts_with("get_element_ptr ") && !temps.empty()) {
                 temps.erase(temps.begin());
             } else if (body.starts_with("store ")) {
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() == 2) { std::erase(temps, std::string{args[1]}); }
             }
 
@@ -921,7 +929,7 @@ auto sink_address_computations(function_dump& fn) -> void {
     // The slot a store's destination belongs to, when the store may wait for its next use
     const auto waiting_slot{[&](std::string_view body) -> stdx::option<std::string> {
         if (!body.starts_with("store ")) { return stdx::none; }
-        const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+        const auto args{store_args(body)};
         if (args.size() != 2) { return stdx::none; }
         const std::string dest{args[1]};
 
@@ -973,7 +981,7 @@ auto sink_address_computations(function_dump& fn) -> void {
             for (usize k{from + 1}; k < to; ++k) {
                 const auto body{split_definition(insts[k]).second};
                 if (!body.starts_with("store ")) { continue; }
-                const auto args{string_utils::split(stdx::string::substr(body, 6), ", ")};
+                const auto args{store_args(body)};
                 if (args.size() != 2) { return false; }
                 const auto written{slot_of(std::string{args[1]})};
                 if (!written || written == address) { return false; }

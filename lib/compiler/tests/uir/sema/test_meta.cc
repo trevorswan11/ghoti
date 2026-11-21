@@ -68,8 +68,8 @@ TEST_CASE("A module-level comptime block runs", "[uir]") {
         const N = 3;
         comptime { @assert(N == 4, "N must be 4"); }
     )")};
-    CHECK(run.codes() == std::vector{error::COMPTIME_EVALUATION_FAILED});
-    CHECK(run.messages().front() == "N must be 4");
+    CHECK(run.codes() == std::vector{error::STATIC_ASSERTION_FAILED});
+    CHECK(run.messages().front() == "@assert failed at compile time: N must be 4");
 }
 
 TEST_CASE("A compile-time slice reads like the array it views", "[uir]") {
@@ -125,7 +125,8 @@ TEST_CASE("@typeName, @tagName and @bitSizeOf fold at compile time", "[uir]") {
             const name = @typeName(Color);
             const tag = @tagName(Color.green);
             const active = @tagName(Shape{ .line = 4 });
-            return name.len + tag.len + active.len + @bitSizeOf(u24);
+            const total = name.len + tag.len + active.len + @bitSizeOf(u24);
+            return @intCast(total);
         };
     )")};
     INFO(diff.detail);
@@ -194,6 +195,17 @@ TEST_CASE("An `unroll for` repeats its body per element at runtime", "[uir]") {
     )")};
     INFO(diff.detail);
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A comptime_int built from reflected bits folds exactly", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        const max_unsigned = fn(comptime T: type): comptime_int {
+            const info = @typeInfo(T).int;
+            return (1 << info.bits) - 1;
+        };
+        const max64 = max_unsigned(u64) == 18446744073709551615;
+    )")};
+    CHECK(run.gir().contains("const max64: bool = true"));
 }
 
 } // namespace ghoti::tests

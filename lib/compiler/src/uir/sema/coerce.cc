@@ -116,7 +116,12 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     }
 
     if (from.get_kind() == gs::type_kind::ARRAY && target.get_kind() == gs::type_kind::SLICE) {
+        // A mutable slice would alias the array, which a compile-time slice value can't
         if (const auto known{comptime_value(op)}; known && is_comptime()) {
+            if (!target.is_constant()) {
+                return comp_.unsupported(u_, src, "a mutable slice of a compile-time array");
+            }
+
             return comptime_slice_of(*known, from, target);
         }
 
@@ -303,6 +308,17 @@ auto analyzer::coerce_to(const operand&  op,
     if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
+
+    // Functions as values arrive with erased callables and closures
+    const auto callable{[](const gs::type& t) {
+        const auto pointee{gs::pointee_of(t)};
+        return t.get_kind() == gs::type_kind::FUNCTION || t.get_kind() == gs::type_kind::CLOSURE ||
+               t.get_kind() == gs::type_kind::AUTO ||
+               (pointee && pointee->get_kind() == gs::type_kind::FUNCTION);
+    }};
+    if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
+        return comp_.unsupported(u_, src, "a conversion between function types");
+    }
     switch (site.what) {
     case use_site::kind::STORE:
         return comp_.report(u_,

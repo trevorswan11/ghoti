@@ -519,6 +519,11 @@ class compilation {
     module_member(const module_ref& m, std::string_view name, const unit& user, const source& src)
         -> result<operand>;
     [[nodiscard]] auto prelude_module() -> stdx::option<module_ref>;
+    // Whether a compile-time call is running
+    [[nodiscard]] auto in_comptime_call() const noexcept -> bool { return !calls_.empty(); }
+    [[nodiscard]] auto is_prelude(const unit& u) const noexcept -> bool {
+        return prelude_unit_ && u.index == *prelude_unit_;
+    }
 
     // Impls (impls.cc)
     auto register_impl(const unit& u, decl_id decl) -> void;
@@ -1409,7 +1414,7 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_layout(gsl::span<const ref> args, const source& src, bool size)
         -> result<operand>;
-    [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src)
+    [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;

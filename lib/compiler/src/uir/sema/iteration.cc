@@ -194,6 +194,9 @@ auto analyzer::run_for(inst_id                                   inst,
                        gsl::span<const inst_id>                  else_body) -> result<operand> {
     const auto& src{src_of(inst)};
     auto&       pool{comp_.constants()};
+    auto        loop_rec{record(inst)};
+    loop_rec.skip_str();
+    const bool unrolled{(loop_rec.u32_field() & flags::UNROLL) != 0};
 
     // Each iterable's values: a range counts from its start, a container lists its elements
     struct source_values {
@@ -220,8 +223,14 @@ auto analyzer::run_for(inst_id                                   inst,
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
-            auto&         elem{counter_type(r)};
-            const auto    start{r.lo ? TRY(known_int(*r.lo)) : big_int{i128{0}}};
+            // An unrolled range between untyped bounds counts in their default type
+            const auto untyped{[&](const stdx::option<operand>& bound) {
+                return bound && type_of(*bound).get_kind() == gs::type_kind::COMPTIME_INT;
+            }};
+            auto&      elem{unrolled && untyped(r.lo) && untyped(r.hi)
+                                ? comp_.ctx().default_concrete(builtin(gs::type_kind::COMPTIME_INT))
+                                : counter_type(r)};
+            const auto start{r.lo ? TRY(known_int(*r.lo)) : big_int{i128{0}}};
             source_values values{
                 .start = start, .descending = false, .elem = &elem, .elements = {}};
             if (r.hi) {
@@ -256,11 +265,14 @@ auto analyzer::run_for(inst_id                                   inst,
             return comp_.unsupported(u_, src, "an `unroll for` over a runtime container");
         }
 
-        const auto  container{known ? *known : TRY(require_comptime(given, src))};
+        const auto container{known ? *known : TRY(require_comptime(given, src))};
+        // Copied out, since interning the elements below may move the pool's entries
         const auto& value{pool.value_at(container)};
-        const auto  agg{value.data.as_opt<ip::aggregate_value>()};
-        const auto  text{value.data.as_opt<std::string>()};
-        const auto  elem{value.type ? element_type_of(*value.type) : stdx::none};
+        const auto  agg{value.data.as_opt<ip::aggregate_value>().transform(
+            [](const ip::aggregate_value& a) { return a; })};
+        const auto  text{
+            value.data.as_opt<std::string>().transform([](const std::string& t) { return t; })};
+        const auto elem{value.type ? element_type_of(*value.type) : stdx::none};
         if ((!agg && !text) || !elem) {
             return comp_.unsupported(u_, src, "a comptime `for` over this value");
         }

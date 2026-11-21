@@ -337,9 +337,11 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
 }
 
 auto analyzer::materialize(ip::index index, const source& src) -> result<gir::value> {
-    auto&       pool{comp_.constants()};
-    const auto& value{pool.value_at(index)};
-    auto&       type{*value.type};
+    auto& pool{comp_.constants()};
+
+    // A copy, since materializing interns constants, which may move the pool's entries
+    const ip::value value{pool.value_at(index)};
+    auto&           type{*value.type};
     if (const auto agg{value.data.as_opt<ip::aggregate_value>()};
         agg && type.get_kind() == gs::type_kind::SLICE) {
         return materialize_slice(*agg, type, src);

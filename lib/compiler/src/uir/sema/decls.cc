@@ -576,7 +576,7 @@ auto analyzer::analyze_global(decl_id                        decl,
 
         // Only a module-level alias is listed, by its name alone since it claims no symbol
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
-        if (!declared && !declares_type(d) && module_level) {
+        if (!declared && !declares_type(d) && module_level && !comp_.is_prelude(u_)) {
             comp_.gir().add_type(std::string{mod().string(d.name)}, pool.type_at(*constant_index));
         }
 
@@ -617,7 +617,9 @@ auto analyzer::analyze_global(decl_id                        decl,
     global.visibility = attrs.visibility;
     global.alignment  = attrs.alignment;
     comp_.note_storage(u_, decl);
-    if (!is_mutable && !is_aggregate) { return stored; }
+    // A string array is read where the global stores it, as an aggregate is
+    const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
+    if (!is_mutable && !is_aggregate && !text_array) { return stored; }
     const auto& symbol{comp_.own_symbol(u_, decl, global.name)};
     if (!is_mutable) { return global_const{.symbol = &symbol, .type = &type, .value = index}; }
     return global_ref{&symbol, &type};

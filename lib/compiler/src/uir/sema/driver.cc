@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/ip/index.hh"
@@ -149,8 +150,15 @@ auto compilation::analyze_roots() -> void {
                 break;
             case decl_kind::IMPL:     analyze_impl_roots(u, decl); break;
             case decl_kind::COMPTIME: {
+                // A top-level statement is only resolved by the old pipeline, never run
+                const auto body{u.uir->body(d.value_body)};
+                if (!u.source->ast.get_as_opt<ast::block_stmt>(*d.node)) {
+                    DISCARD(unsupported(u, *d.node, "a top-level statement"));
+                    break;
+                }
+
                 analyzer block{*this, u};
-                DISCARD(block.eval_comptime(u.uir->body(d.value_body)));
+                DISCARD(block.eval_comptime(body));
                 break;
             }
             }

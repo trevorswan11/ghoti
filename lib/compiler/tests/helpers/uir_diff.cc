@@ -104,9 +104,9 @@ namespace {
     return calls_folded_function(uir_text, legacy_text);
 }
 
-// The old dump without the parameterized impl methods UIR's dump doesn't define
-[[nodiscard]] auto without_unused_impl_methods(std::string_view legacy_text,
-                                               std::string_view uir_text) -> std::string {
+// The old dump without the impl methods and type-ctor members UIR analyzes on demand and never used
+[[nodiscard]] auto without_unused_on_demand(std::string_view legacy_text, std::string_view uir_text)
+    -> std::string {
     std::string kept;
     for (usize at{0}; at < legacy_text.size();) {
         const auto next{legacy_text.find("\nfn ", at + 1)};
@@ -114,9 +114,13 @@ namespace {
         const auto function{stdx::string::substr(legacy_text, at, end - at)};
         const auto header_end{function.find('(')};
         const auto name{stdx::string::substr(function, 0, header_end)};
-        const bool unused_impl_method{function.starts_with("fn pimpl#") &&
-                                      uir_text.find(name) == std::string_view::npos};
-        if (!unused_impl_method) { kept += function; }
+        // A type-ctor instance's member is `Ctor__args.member`, analyzed on demand too (Q5)
+        const auto mangled{name.find("__")};
+        const bool on_demand{function.starts_with("fn pimpl#") ||
+                             (mangled != std::string_view::npos &&
+                              name.find('.', mangled) != std::string_view::npos)};
+        const bool unused{on_demand && uir_text.find(name) == std::string_view::npos};
+        if (!unused) { kept += function; }
         at = end;
     }
 
@@ -260,7 +264,7 @@ auto diff_pipelines(mod::source_loader&          loader,
     if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
         return {.status = uir_diff_status::FOLD_PLACEMENT};
     }
-    if (without_unused_impl_methods(legacy_text, uir_text) == uir_text) {
+    if (without_unused_on_demand(legacy_text, uir_text) == uir_text) {
         return {.status = uir_diff_status::ON_USE_IMPL};
     }
     if (shows_legacy_bug()) { return {.status = uir_diff_status::LEGACY_BUG}; }
