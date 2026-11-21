@@ -1,0 +1,71 @@
+//! Ported from musl, which is licensed under the MIT license:
+//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
+//!
+//! https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2f.c
+import std;
+import "rem_pio2_large.gh" as rem_pio2_large_impl;
+
+const math = std.math;
+const rem_pio2_large = rem_pio2_large_impl.rem_pio2_large;
+
+const toint = 1.5 / math.float_eps(f64);
+// pi/4
+const pio4 = 0x1.921fb6p-1;
+// invpio2:  53 bits of 2/pi
+const invpio2 = 6.36619772367581382433e-01; // 0x3FE45F30, 0x6DC9C883
+// pio2_1:   first 25 bits of pi/2
+const pio2_1 = 1.57079631090164184570e+00; // 0x3FF921FB, 0x50000000
+// pio2_1t:  pi/2 - pio2_1
+const pio2_1t = 1.58932547735281966916e-08; // 0x3E5110b4, 0x611A6263
+
+/// Returns the remainder of x rem pi/2 in *y
+/// use double precision for everything except passing x
+/// use rem_pio2_large() for large x
+pub const rem_pio2f = fn(x: f32, y: &mut f64): i32 {
+    let mut tx: [1]mut f64 = undefined;
+    let mut ty: [1]mut f64 = undefined;
+    let mut fn_val: f64 = undefined;
+    let mut ix: u32 = undefined;
+    let mut n: i32 = undefined;
+    let mut sign: bool = undefined;
+    let mut e0: u32 = undefined;
+    let mut ui: u32 = undefined;
+
+    ui = @bitCast(x);
+    ix = ui & 0x7fffffff;
+
+    // 25+53 bit pi is good enough for medium size
+    if (ix < 0x4dc90fdb) { // |x| ~< 2^28*(pi/2), medium size
+        // Use a specialized rint() to get fn.
+        fn_val = @floatCast(f64, x) * invpio2 + toint - toint;
+        n = @intFromFloat(i32, fn_val);
+        y = @floatCast(f64, x) - fn_val * pio2_1 - fn_val * pio2_1t;
+        // Matters with directed rounding.
+        if (y < -pio4) {
+            n -= 1;
+            fn_val -= 1.0;
+            y = @floatCast(f64, x) - fn_val * pio2_1 - fn_val * pio2_1t;
+        } else if (y > pio4) {
+            n += 1;
+            fn_val += 1.0;
+            y = @floatCast(f64, x) - fn_val * pio2_1 - fn_val * pio2_1t;
+        }
+        return n;
+    }
+    if (ix >= 0x7f800000) { // x is inf or NaN
+        y = @floatCast(f64, x - x);
+        return 0;
+    }
+    // scale x into [2^23, 2^24-1]
+    sign = (ui >> 31) != 0;
+    e0 = (ix >> 23) - (0x7f + 23); // e0 = ilogb(|x|)-23, positive
+    ui = ix - (e0 << 23);
+    tx[0] = @floatCast(f64, @bitCast(f32, ui));
+    n = rem_pio2_large(tx[0..], ty[0..], @intCast(i32, e0), 1, 0);
+    if (sign) {
+        y = -ty[0];
+        return -n;
+    }
+    y = ty[0];
+    return n;
+};
