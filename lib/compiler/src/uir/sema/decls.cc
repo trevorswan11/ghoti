@@ -243,9 +243,8 @@ auto compilation::declared_names(const unit& user, const source& use)
             name_candidate{.unit = u.index, .decl = decl, .certain = certain});
     }};
 
-    // A function or `let mut` always has storage, a `const` only when its value isn't a type, and
-    // an aggregate's members are declared in a scope of their own
     const auto scan{[&](this const auto& self, const unit& u, decl_id decl) -> void {
+        // A function or `let mut` always has storage, a `const` only when its value isn't a type
         const auto& d{u.uir->decl_at(decl)};
         if (d.kind != decl_kind::VALUE || !d.value_body) { return; }
         const auto name{u.uir->string(d.name)};
@@ -261,6 +260,7 @@ auto compilation::declared_names(const unit& user, const source& use)
             return;
         }
 
+        // an aggregate's members are declared in a scope of their own
         if (u.uir->tag_of(*owner) == tag::interface_decl) { return; }
         if (const auto ns{u.uir->namespace_of(*owner)}) {
             for (const auto member : ns->decls) { self(u, member); }

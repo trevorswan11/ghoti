@@ -132,8 +132,7 @@ auto compilation::declare_generic(const unit&           u,
                                   const member_context& member) -> result<operand> {
     const auto& d{u.uir->decl_at(decl)};
 
-    // A template's instances are numbered apart from a same-named template's, never qualified,
-    // and one a ctor instance declares names that instance after its arguments
+    // A template's instances are numbered apart from a same-named template's, never qualified
     const bool in_instance{member.scope && member.scope->in_call && member.symbol.empty() &&
                            member.symbol_prefix == member.scope->symbol_prefix};
     const bool unprefixed{in_instance || (member.symbol.empty() && member.symbol_prefix.empty())};

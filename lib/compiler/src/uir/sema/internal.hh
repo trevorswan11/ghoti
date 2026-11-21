@@ -693,40 +693,39 @@ class compilation {
     auto add_call_notes(gs::diagnostic& d) const -> void;
 
   private:
-    gs::context&                                                      ctx_;
-    const program&                                                    prog_;
-    options                                                           opts_;
-    std::vector<unit>                                                 units_;
-    std::vector<std::vector<decl_state>>                              decls_;
+    gs::context&                         ctx_;
+    const program&                       prog_;
+    options                              opts_;
+    std::vector<unit>                    units_;
+    std::vector<std::vector<decl_state>> decls_;
     // Instances and nominals are referenced by address, so the arena keeps them in place
-    ghoti::arena                                                      arena_;
-    std::vector<gsl::not_null<instance*>>                             instances_;
-    std::vector<gsl::not_null<generic_fn*>>                           generics_;
-    std::vector<gsl::not_null<impl_entry*>>                           impls_;
+    ghoti::arena                            arena_;
+    std::vector<gsl::not_null<instance*>>   instances_;
+    std::vector<gsl::not_null<generic_fn*>> generics_;
+    std::vector<gsl::not_null<impl_entry*>> impls_;
     ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
         impl_instances_;
     ankerl::unordered_dense::map<instance_key, gsl::not_null<instance*>, instance_key_hash>
-                                                                      instances_by_key_;
+                                                                        instances_by_key_;
     ankerl::unordered_dense::map<std::string, gsl::not_null<instance*>> instances_by_symbol_;
-    std::vector<gsl::not_null<instance*>>                             queue_;
-    gir::module_t                                                     gir_;
-    gs::diagnostics                                                   diagnostics_;
-    stdx::option<sema::unsupported>                                   stopped_at_;
-    u32                                                               ptr_bits_;
-    std::vector<comptime_alloc>                                       allocs_;
-    std::vector<comptime_frame>                                       calls_;
-    ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash> memo_;
-    eval_limits                                                       limits_;
-    stdx::option<runtime_site>                                        runtime_site_;
-    u32                                                               next_frame_{0};
-    std::vector<gsl::not_null<nominal*>>                              nominals_;
-    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>  nominal_ids_;
+    std::vector<gsl::not_null<instance*>>                               queue_;
+    gir::module_t                                                       gir_;
+    gs::diagnostics                                                     diagnostics_;
+    stdx::option<sema::unsupported>                                     stopped_at_;
+    u32                                                                 ptr_bits_;
+    std::vector<comptime_alloc>                                         allocs_;
+    std::vector<comptime_frame>                                         calls_;
+    ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash>   memo_;
+    eval_limits                                                         limits_;
+    stdx::option<runtime_site>                                          runtime_site_;
+    u32                                                                 next_frame_{0};
+    std::vector<gsl::not_null<nominal*>>                                nominals_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>    nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
     stdx::option<lowered> prelude_;
     stdx::option<u32>     prelude_unit_;
-    // Per unit, the `and` / `or` ops by the first instruction of their left side, built on first
-    // use
+    // Per unit, the `and` / `or` ops by the first inst of their left side, built on first use
     std::vector<stdx::option<ankerl::unordered_dense::map<inst_id, std::vector<inst_id>>>>
         bool_starts_;
     // Each GIR symbol a declaration claimed, with the unit and declaration that claimed it
@@ -1229,8 +1228,7 @@ class analyzer {
     [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
     // A runtime condition's value when running it again at compile time knows it
     [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
-    // What `r` computes when run again at compile time, keeping nothing that records, none when
-    // it can't be known
+    // What `r` computes when run again at compile time, keeping nothing that records, if computable
     [[nodiscard]] auto speculated_value(ref r, const source& src)
         -> result<stdx::option<ip::index>>;
     [[nodiscard]] auto finish_merge(const std::vector<incoming>& arrivals,
@@ -1244,12 +1242,12 @@ class analyzer {
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
-    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     // Calls a function or generic `callee` evaluated to
     [[nodiscard]] auto call_operand(const operand&       callee,
                                     gsl::span<const ref> args,
                                     const source&        src,
                                     const source&        callee_src) -> result<operand>;
+    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     [[nodiscard]] auto call_function(instance&            target,
                                      gsl::span<const ref> args,
                                      const source&        src,
@@ -1404,8 +1402,8 @@ class analyzer {
     std::string             symbol_prefix_;
     u32                     frame_;
     u32                     runtime_depth_{0};
-    u32                alloc_base_;
-    stdx::option<jump> jump_;
+    u32                     alloc_base_;
+    stdx::option<jump>      jump_;
 };
 
 // Diagnostic messages shared across checks (messages.cc)

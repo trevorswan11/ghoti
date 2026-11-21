@@ -1,6 +1,5 @@
 #include <array>
 #include <compare>
-#include <ranges>
 #include <vector>
 
 #include <fmt/format.h>

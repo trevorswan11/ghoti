@@ -10,10 +10,13 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"

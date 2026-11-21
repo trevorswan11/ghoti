@@ -469,7 +469,7 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     const auto n{comp_.nominal_of(owner)};
     if (!n) { return comp_.unsupported(u_, src, "a member of a type UIR didn't declare"); }
-    // A use from another module is located at what it reaches, in that module
+    // A use from another module is located at what it reaches in that module
     const auto& owner_mod{*n->owner->uir};
     if (const auto ns{owner_mod.namespace_of(n->inst)}) {
         for (const auto decl : ns->decls) {
