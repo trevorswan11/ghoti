@@ -90,7 +90,6 @@ TEST_CASE("A range used as a value stops as unsupported", "[uir]") {
 }
 
 TEST_CASE("A range a for iterates is known whatever its other iterables lower to", "[uir]") {
-    // The second iterable holds a `for` of its own, lowered before the outer one
     const auto run{helpers::uir_accepted(R"(
         pub const f = fn(): i32 {
             let arr: [3]i32 = .{ 1, 1, 1 };
