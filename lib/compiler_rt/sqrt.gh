@@ -4,6 +4,539 @@
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
-const mem = std.mem;
 const math = std.math;
 const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__sqrth, "__sqrth");
+    symbol(sqrtf, "sqrtf");
+    symbol(sqrt, "sqrt");
+    symbol(__sqrtx, "__sqrtx");
+    symbol(sqrtq, "sqrtf128");
+    symbol(sqrtl, "sqrtl");
+}
+
+const __sqrth = fn(x: f16) callconv(.c): f16 {
+    return sqrt_f16(x);
+};
+
+pub const sqrt_f16 = fn(x: f16): f16 {
+    let mut ix: u16 = @bitCast(x);
+    let mut top: u16 = ix >> 10;
+
+    // special case handling.
+    if (top -% 0x01 >= 0x1F - 0x01) {
+        // x < 0x1p-14 or inf or nan.
+        if (ix & 0x7FFF == 0) return x;
+        if (ix == 0x7C00) return x;
+        if (ix > 0x7C00) return math.nan(f16);
+        // x is subnormal, normalize it.
+        ix = @bitCast(x * 0x1p10);
+        top = (ix >> 10) -% 10;
+    }
+
+    // argument reduction:
+    // x = 4^e m; with integer e, and m in [1, 4)
+    // m: fixed point representation [2.14]
+    // 2^e is the exponent part of the result.
+    let even = (top & 1) != 0;
+    let m: u16 = if (even) (ix << 4) & 0x7FFF else (ix << 5) | 0x8000;
+    top = (top +% 0x0F) >> 1;
+
+    // approximate r ~ 1/sqrt(m) and s ~ sqrt(m) when m in [1,4)
+    // the fixed point representations are
+    //   m: 2.14 r: 0.16, s: 2.14, d: 2.14, u: 2.14, three: 2.14
+    const three: u16 = 0xC000;
+    let i: usize = @intCast((ix >> 4) & 0x7F);
+    let r = rsqrt_tab[i];
+    // |r*sqrt(m) - 1| < 0x1p-8
+    let mut s: u16 = mul16(m, r);
+    // |s/sqrt(m) - 1| < 0x1p-8
+    let d: u16 = mul16(s, r);
+    let u: u16 = three - d;
+    s = mul16(s, u); // repr: 3.13
+    // -0x1.20p-13 < s/sqrt(m) - 1 < 0x7Dp-16
+    s = (s - 1) >> 3; // repr: 6.10
+    // s < sqrt(m) < s + 0x1.24p-10
+
+    // compute nearest rounded result:
+    // the nearest result to 10 bits is either s or s+0x1p-10,
+    // we can decide by comparing (2^10 s + 0.5)^2 to 2^20 m.
+    let d0 = (m << 6) -% s *% s;
+    let d1 = s -% d0;
+    let d2 = d1 +% s +% 1;
+    s += d1 >> 15;
+    s &= 0x03FF;
+    s |= top << 10;
+    let y: f16 = @bitCast(s);
+
+    // handle rounding modes and inexact exception:
+    // only (s+1)^2 == 2^6 m case is exact otherwise
+    // add a tiny value to cause the fenv effects.
+    if (d2 != 0) {
+        let mut tiny: u16 = 0x0001;
+        tiny |= (d1 ^ d2) & 0x8000;
+        let t: f16 = @bitCast(tiny);
+        return y + t;
+    }
+
+    return y;
+};
+
+test "sqrt_f16" {
+    import "cases/sqrt/sqrth.gh" as sqrth_cases;
+    for (sqrth_cases.cases) |case| {
+        @expect(sqrt_f16(case.x) == case.expected);
+    }
+    // sqrt(±0) is ±0
+    @expect(math.is_positive_zero(sqrt_f16(0x0.0p0)));
+    @expect(math.is_negative_zero(sqrt_f16(-0x0.0p0)));
+    // sqrt(inf) is inf
+    @expect(math.is_positive_inf(sqrt_f16(math.inf(f16))));
+    // sqrt(nan) is nan
+    @expect(math.is_nan(sqrt_f16(math.nan(f16))));
+    // sqrt(-ve) is nan
+    @expect(math.is_nan(sqrt_f16(-0x1p-14)));
+    @expect(math.is_nan(sqrt_f16(-0x1p+0)));
+    @expect(math.is_nan(sqrt_f16(-math.inf(f16))));
+}
+
+const sqrtf = fn(x: f32) callconv(.c): f32 {
+    return sqrt_f32(x);
+};
+
+pub const sqrt_f32 = fn(x: f32): f32 {
+    let mut ix: u32 = @bitCast(x);
+
+    if (ix < @as(u32, @bitCast(@as(f32, 0x1p-126))) or @as(u32, @bitCast(math.inf(f32))) <= ix) {
+        if (ix & 0x7fffffff == 0) return x;
+
+        if (ix == @as(u32, @bitCast(math.inf(f32)))) return x;
+
+        if (ix >
+            @as(
+                u32,
+                @bitCast(math.inf(f32)),
+            )) return if (compiler_rt.want_float_exceptions) (x - x) / 0.0 else math.nan(f32);
+
+        ix = @as(u32, @bitCast(@as(i32, @bitCast(x * 0x1p23)) - (23 << 23)));
+    }
+
+    let m: u32 = if (ix & 0x00800000 != 0) (ix << 7) & 0x7fffffff else (ix << 8) | 0x80000000;
+
+    let ey = ((ix >> 1) + (0x3f800000 >> 1)) & 0x7f800000;
+
+    const three: u32 = 0xc0000000;
+    let i: usize = @intCast((ix >> 17) & 0x7f);
+    let mut r: u32 = @as(u32, rsqrt_tab[i]) << 16;
+
+    let mut s: u32 = mul32(m, r);
+    let mut d: u32 = mul32(s, r);
+    let mut u: u32 = three - d;
+    r = mul32(r, u) << 1;
+    s = mul32(s, u) << 1;
+    d = mul32(s, r);
+    u = three - d;
+    s = mul32(s, u);
+    s = (s - 1) >> 6;
+
+    let d0 = (m << 16) -% s *% s;
+    let d1 = s -% d0;
+    let d2 = d1 +% s +% 1;
+    let y: f32 = @bitCast(((s + (d1 >> 31)) & 0x007fffff) | ey);
+
+    let tiny: u32 = if (d2 == 0) 0 else 0x01000000;
+    let t: f32 = @bitCast(tiny | ((d1 ^ d2) & 0x80000000));
+
+    return y + t;
+};
+
+test "sqrt_f32" {
+    import "cases/sqrt/sqrtf.gh" as sqrtf_cases;
+    for (sqrtf_cases.cases) |case| {
+        @expect(sqrt_f32(case.x) == case.expected);
+    }
+    // sqrt(±0) is ±0
+    @expect(math.is_positive_zero(sqrt_f32(0x0.0p0)));
+    @expect(math.is_negative_zero(sqrt_f32(-0x0.0p0)));
+    // sqrt(inf) is inf
+    @expect(math.is_positive_inf(sqrt_f32(math.inf(f32))));
+    // sqrt(nan) is nan
+    @expect(math.is_nan(sqrt_f32(math.nan(f32))));
+    // sqrt(-ve) is nan
+    @expect(math.is_nan(sqrt_f32(-0x1p-149)));
+    @expect(math.is_nan(sqrt_f32(-0x1p0)));
+    @expect(math.is_nan(sqrt_f32(-math.inf(f32))));
+}
+
+const sqrt = fn(x: f64) callconv(.c): f64 {
+    return sqrt_f64(x);
+};
+
+pub const sqrt_f64 = fn(x: f64): f64 {
+    let mut ix: u64 = @bitCast(x);
+    let mut top: u64 = ix >> 52;
+
+    // special case handling.
+    if (top -% 0x001 >= 0x7FF - 0x001) {
+        // x < 0x1p-1022 or inf or nan.
+        if (ix & 0x7FFF_FFFF_FFFF_FFFF == 0) return x;
+        if (ix == 0x7FF0_0000_0000_0000) return x;
+        if (ix >
+            0x7FF0_0000_0000_0000) return if (compiler_rt.want_float_exceptions) (x - x) / 0.0
+            else math.nan(f64);
+        // x is subnormal, normalize it.
+        ix = @bitCast(x * 0x1p52);
+        top = (ix >> 52) -% 52;
+    }
+
+    // argument reduction:
+    // x = 4^e m; with integer e, and m in [1, 4)
+    // m: fixed point representation [2.62]
+    // 2^e is the exponent part of the result.
+    let even = (top & 1) != 0;
+    let m: u64 = if (even) (ix << 10) & 0x7FFF_FFFF_FFFF_FFFF
+        else (ix << 11) | 0x8000_0000_0000_0000;
+    top = (top +% 0x3FF) >> 1;
+
+    const three32: u32 = 0xC000_0000;
+    const three64: u64 = 0xC000_0000_0000_0000;
+
+    let i: usize = @intCast((ix >> 46) & 0x7F);
+    let mut r32: u32 = @as(u32, rsqrt_tab[i]) << 16;
+    // |r sqrt(m) - 1| < 0x1.fdp-9
+    let mut s32: u32 = mul32(@truncate(u32, m >> 32), r32);
+    // |s/sqrt(m) - 1| < 0x1.fdp-9
+    let mut d32: u32 = mul32(s32, r32);
+    let mut u32_val: u32 = three32 - d32;
+    r32 = mul32(r32, u32_val) << 1;
+    // |r sqrt(m) - 1| < 0x1.7bp-16
+    s32 = mul32(s32, u32_val) << 1;
+    // |s/sqrt(m) - 1| < 0x1.7bp-16
+    d32 = mul32(s32, r32);
+    u32_val = three32 - d32;
+    r32 = mul32(r32, u32_val) << 1;
+    // |r sqrt(m) - 1| < 0x1.3704p-29 (measured worst-case)
+    let r64: u64 = @as(u64, r32) << 32;
+    let mut s64: u64 = mul64(m, r64);
+    let d64: u64 = mul64(s64, r64);
+    let u64_val: u64 = three64 - d64;
+    s64 = mul64(s64, u64_val); // repr: 3.61
+    // -0x1p-57 < s - sqrt(m) < 0x1.8001p-61
+    s64 = (s64 - 2) >> 9; // repr: 12.52
+    // -0x1.09p-52 < s - sqrt(m) < -0x1.fffcp-63
+
+    // s < sqrt(m) < s + 0x1.09p-52
+    // compute nearest rounded result:
+    // the nearest result to 52 bits is either s or s+0x1p-52,
+    // we can decide by comparing (2^52 s + 0.5)^2 to 2^104 m.
+    let d0 = (m << 42) -% s64 *% s64;
+    let d1 = s64 -% d0;
+    let d2 = d1 +% s64 +% 1;
+    s64 += d1 >> 63;
+    s64 &= 0x000F_FFFF_FFFF_FFFF;
+    s64 |= top << 52;
+    let y: f64 = @bitCast(s64);
+
+    // handle rounding modes and inexact exception:
+    // only (s+1)^2 == 2^42 m case is exact otherwise
+    // add a tiny value to cause the fenv effects.
+    if (d2 != 0) {
+        let mut tiny: u64 = 0x0010_0000_0000_0000;
+        tiny |= (d1 ^ d2) & 0x8000_0000_0000_0000;
+        let t: f64 = @bitCast(tiny);
+        return y + t;
+    }
+
+    return y;
+};
+
+test "sqrt_f64" {
+    import "cases/sqrt/sqrt.gh" as sqrt_cases;
+    for (sqrt_cases.cases) |case| {
+        @expect(sqrt_f64(case.x) == case.expected);
+    }
+    // sqrt(±0) is ±0
+    @expect(math.is_positive_zero(sqrt_f64(0x0.0p0)));
+    @expect(math.is_negative_zero(sqrt_f64(-0x0.0p0)));
+    // sqrt(inf) is inf
+    @expect(math.is_positive_inf(sqrt_f64(math.inf(f64))));
+    // sqrt(nan) is nan
+    @expect(math.is_nan(sqrt_f64(math.nan(f64))));
+    // sqrt(-ve) is nan
+    @expect(math.is_nan(sqrt_f64(-0x1p-1074)));
+    @expect(math.is_nan(sqrt_f64(-0x1p0)));
+    @expect(math.is_nan(sqrt_f64(-math.inf(f64))));
+}
+
+const __sqrtx = fn(x: u80) callconv(.c): u80 {
+    return @bitCast(sqrt_f80(@bitCast(x)));
+};
+
+pub const sqrt_f80 = fn(x: f80): f80 {
+    let mut ix: u80 = @bitCast(x);
+    let mut top: u80 = ix >> 64;
+
+    // special case handling.
+    if (top -% 0x0001 >= 0x7FFF - 0x0001) {
+        // x < 0x1p-16382 or inf or nan.
+        if (ix & 0x7FFF_FFFF_FFFF_FFFF_FFFF == 0) return x;
+        if (ix == 0x7FFF_8000_0000_0000_0000) return x;
+        if (ix >
+            0x7FFF_8000_0000_0000_0000) return if (compiler_rt.want_float_exceptions) (x - x) / 0.0
+            else math.nan(f80);
+        // x is subnormal, normalize it.
+        ix = @bitCast(x * 0x1p63);
+        top = (ix >> 64) -% 63;
+    }
+
+    // argument reduction:
+    // x = 4^e m; with integer e, and m in [1, 4)
+    // m: fixed point representation [2.78]
+    // 2^e is the exponent part of the result.
+    let even = (top & 1) != 0;
+    let m: u80 = if (even) (ix << 15) & 0x7FFF_FFFF_FFFF_FFFF_FFFF else ix << 16;
+    top = (top +% 0x3FFF) >> 1;
+
+    const three32: u32 = 0xC000_0000;
+    const three64: u64 = 0xC000_0000_0000_0000;
+    const three80: u80 = 0xC000_0000_0000_0000_0000;
+
+    let mut i: usize = @intCast((ix >> 57) & 0x3F);
+    if (even) i += 64;
+    let mut r32: u32 = @as(u32, rsqrt_tab[i]) << 16;
+    // |r sqrt(m) - 1| < 0x1p-8
+    let mut s32: u32 = mul32(@truncate(u32, m >> 48), r32);
+    let mut d32: u32 = mul32(s32, r32);
+    let mut u32_val: u32 = three32 - d32;
+    r32 = mul32(u32_val, r32) << 1;
+    // |r sqrt(m) - 1| < 0x1.7bp-16, switch to 64bit
+    let mut r64: u64 = @as(u64, r32) << 32;
+    let mut s64: u64 = mul64(@truncate(u64, m >> 16), r64);
+    let mut d64: u64 = mul64(s64, r64);
+    let mut u64_val: u64 = three64 - d64;
+    r64 = mul64(u64_val, r64) << 1;
+    // |r sqrt(m) - 1| < 0x1.a5p-31
+    s64 = mul64(u64_val, s64) << 1;
+    d64 = mul64(s64, r64);
+    u64_val = three64 - d64;
+    r64 = mul64(u64_val, r64) << 1;
+    // |r sqrt(m) - 1| < 0x1.c001p-59, switch to 80bit
+    let r80: u80 = @as(u80, r64) << 16;
+    let mut s80: u80 = mul80(m, r80);
+    let d80: u80 = mul80(s80, r80);
+    let u80_val: u80 = three80 - d80;
+    s80 = mul80(u80_val, s80); // repr: 3.77
+    s80 = (s80 - 4) >> 14; // repr: 17.63
+    // s < sqrt(m) < s + 1 ULP + tiny
+
+    // compute nearest rounded result:
+    // the nearest result to 63 bits is either s or s+0x1p-63,
+    // we can decide by comparing (2^63 s + 0.5)^2 to 2^126 m
+    let d0 = (m << 48) -% mul80_tail(s80, s80);
+    let d1 = s80 -% d0;
+    let d2 = d1 +% s80 +% 1;
+    s80 += d1 >> 79;
+    s80 &= 0x0000_7FFF_FFFF_FFFF_FFFF;
+    s80 |= 0x0000_8000_0000_0000_0000;
+    s80 |= top << 64;
+    let y: f80 = @bitCast(s80);
+
+    // handle rounding modes and inexact exception:
+    // only (s+1)^2 == 2^48 m case is exact otherwise
+    // add a tiny value to cause the fenv effects.
+    if (d2 != 0) {
+        let mut tiny: u80 = 0x0001_8000_0000_0000_0000;
+        tiny |= (d1 ^ d2) & 0x8000_0000_0000_0000_0000;
+        let t: f80 = @bitCast(tiny);
+        return y + t;
+    }
+
+    return y;
+};
+
+test "__sqrtx" {
+    import "cases/sqrt/sqrtx.gh" as sqrtx_cases;
+    for (sqrtx_cases.cases) |case| {
+        @expect(sqrt_f80(case.x) == case.expected);
+    }
+    // sqrt(±0) is ±0
+    @expect(math.is_positive_zero(sqrt_f80(0x0.0p0)));
+    @expect(math.is_negative_zero(sqrt_f80(-0x0.0p0)));
+    // sqrt(inf) is inf
+    @expect(math.is_positive_inf(sqrt_f80(math.inf(f80))));
+    // sqrt(nan) is nan
+    @expect(math.is_nan(sqrt_f80(math.nan(f80))));
+    // sqrt(-ve) is nan
+    @expect(math.is_nan(sqrt_f80(-0x1p-16442)));
+    @expect(math.is_nan(sqrt_f80(-0x1p0)));
+    @expect(math.is_nan(sqrt_f80(-math.inf(f80))));
+}
+
+const sqrtq = fn(x: f128) callconv(.c): f128 {
+    return sqrt_f128(x);
+};
+
+pub const sqrt_f128 = fn(x: f128): f128 {
+    let mut ix: u128 = @bitCast(x);
+    let mut top: u128 = ix >> 112;
+
+    // special case handling.
+    if (top -% 0x0001 >= 0x7FFF - 0x0001) {
+        // x < 0x1p-16382 or inf or nan.
+        if (ix & 0x7FFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF == 0) return x;
+        if (ix == 0x7FFF_0000_0000_0000_0000_0000_0000_0000) return x;
+        if (ix > 0x7FFF_0000_0000_0000_0000_0000_0000_0000) return math.nan(f128);
+        // x is subnormal, normalize it.
+        ix = @bitCast(x * 0x1p112);
+        top = (ix >> 112) -% 112;
+    }
+
+    // argument reduction:
+    // x = 4^e m; with integer e, and m in [1, 4)
+    // m: fixed point representation [2.126]
+    // 2^e is the exponent part of the result.
+    let even = (top & 1) != 0;
+    let m: u128 = if (even) (ix << 14) & 0x7FFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+        else (ix << 15) | 0x8000_0000_0000_0000_0000_0000_0000_0000;
+    top = (top +% 0x3FFF) >> 1;
+
+    const three32: u32 = 0xC000_0000;
+    const three64: u64 = 0xC000_0000_0000_0000;
+    const three128: u128 = 0xC000_0000_0000_0000_0000_0000_0000_0000;
+
+    let i: usize = @intCast((ix >> 106) & 0x7F);
+    let mut r32: u32 = @as(u32, rsqrt_tab[i]) << 16;
+    // |r sqrt(m) - 1| < 0x1p-8
+    let mut s32: u32 = mul32(@truncate(u32, m >> 96), r32);
+    let mut d32: u32 = mul32(s32, r32);
+    let mut u32_val: u32 = three32 - d32;
+    r32 = mul32(u32_val, r32) << 1;
+    // |r sqrt(m) - 1| < 0x1.7bp-16, switch to 64bit
+    let mut r64: u64 = @as(u64, r32) << 32;
+    let mut s64: u64 = mul64(@truncate(u64, m >> 64), r64);
+    let mut d64: u64 = mul64(s64, r64);
+    let mut u64_val: u64 = three64 - d64;
+    r64 = mul64(u64_val, r64) << 1;
+    // |r sqrt(m) - 1| < 0x1.a5p-31
+    s64 = mul64(u64_val, s64) << 1;
+    d64 = mul64(s64, r64);
+    u64_val = three64 - d64;
+    r64 = mul64(u64_val, r64) << 1;
+    // |r sqrt(m) - 1| < 0x1.c001p-59, switch to 128bit
+    let r128: u128 = @as(u128, r64) << 64;
+    let mut s128: u128 = mul128(m, r128);
+    let d128: u128 = mul128(s128, r128);
+    let u128_val: u128 = three128 - d128;
+    s128 = mul128(u128_val, s128); // repr: 3.125
+    // -0x1p-116 < s - sqrt(m) < 0x3.8001p-125
+    s128 = (s128 - 4) >> 13; // repr: 16.122
+    // s < sqrt(m) < s + 1 ULP + tiny
+
+    // compute nearest rounded result:
+    // the nearest result to 122 bits is either s or s+0x1p-122,
+    // we can decide by comparing (2^122 s + 0.5)^2 to 2^244 m
+    let d0 = (m << 98) -% s128 *% s128;
+    let d1 = s128 -% d0;
+    let d2 = d1 +% s128 +% 1;
+    s128 += d1 >> 127;
+    s128 &= 0x0000_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;
+    s128 |= top << 112;
+    let y: f128 = @bitCast(s128);
+
+    // handle rounding modes and inexact exception:
+    // only (s+1)^2 == 2^98 m case is exact otherwise
+    // add a tiny value to cause the fenv effects.
+    if (d2 != 0) {
+        let mut tiny: u128 = 0x0001_0000_0000_0000_0000_0000_0000_0000;
+        tiny |= (d1 ^ d2) & 0x8000_0000_0000_0000_0000_0000_0000_0000;
+        let t: f128 = @bitCast(tiny);
+        return y + t;
+    }
+
+    return y;
+};
+
+test "sqrt_f128" {
+    import "cases/sqrt/sqrtq.gh" as sqrtq_cases;
+    for (sqrtq_cases.cases) |case| {
+        @expect(sqrt_f128(case.x) == case.expected);
+    }
+    // sqrt(±0) is ±0
+    @expect(math.is_positive_zero(sqrt_f128(0x0.0p0)));
+    @expect(math.is_negative_zero(sqrt_f128(-0x0.0p0)));
+    // sqrt(inf) is inf
+    @expect(math.is_positive_inf(sqrt_f128(math.inf(f128))));
+    // sqrt(nan) is nan
+    @expect(math.is_nan(sqrt_f128(math.nan(f128))));
+    // sqrt(-ve) is nan
+    @expect(math.is_nan(sqrt_f128(-0x1p-16442)));
+    @expect(math.is_nan(sqrt_f128(-0x1p0)));
+    @expect(math.is_nan(sqrt_f128(-math.inf(f128))));
+}
+
+pub const sqrtl = fn(x: c_longdouble) callconv(.c): c_longdouble {
+    return match comptime (@typeInfo(c_longdouble).float.bits) {
+        64 => sqrt_f64(x),
+        80 => sqrt_f80(x),
+        128 => sqrt_f128(x),
+        _ => unreachable,
+    };
+};
+
+// ghoti fmt: off
+const rsqrt_tab = [_]u16{
+    0xB451, 0xB2F0, 0xB196, 0xB044, 0xAEF9, 0xADB6, 0xAC79, 0xAB43,
+    0xAA14, 0xA8EB, 0xA7C8, 0xA6AA, 0xA592, 0xA480, 0xA373, 0xA26B,
+    0xA168, 0xA06A, 0x9F70, 0x9E7B, 0x9D8A, 0x9C9D, 0x9BB5, 0x9AD1,
+    0x99F0, 0x9913, 0x983A, 0x9765, 0x9693, 0x95C4, 0x94F8, 0x9430,
+    0x936B, 0x92A9, 0x91EA, 0x912E, 0x9075, 0x8FBE, 0x8F0A, 0x8E59,
+    0x8DAA, 0x8CFE, 0x8C54, 0x8BAC, 0x8B07, 0x8A64, 0x89C4, 0x8925,
+    0x8889, 0x87EE, 0x8756, 0x86C0, 0x862B, 0x8599, 0x8508, 0x8479,
+    0x83EC, 0x8361, 0x82D8, 0x8250, 0x81C9, 0x8145, 0x80C2, 0x8040,
+    0xFF02, 0xFD0E, 0xFB25, 0xF947, 0xF773, 0xF5AA, 0xF3EA, 0xF234,
+    0xF087, 0xEEE3, 0xED47, 0xEBB3, 0xEA27, 0xE8A3, 0xE727, 0xE5B2,
+    0xE443, 0xE2DC, 0xE17A, 0xE020, 0xDECB, 0xDD7D, 0xDC34, 0xDAF1,
+    0xD9B3, 0xD87B, 0xD748, 0xD61A, 0xD4F1, 0xD3CD, 0xD2AD, 0xD192,
+    0xD07B, 0xCF69, 0xCE5B, 0xCD51, 0xCC4A, 0xCB48, 0xCA4A, 0xC94F,
+    0xC858, 0xC764, 0xC674, 0xC587, 0xC49D, 0xC3B7, 0xC2D4, 0xC1F4,
+    0xC116, 0xC03C, 0xBF65, 0xBE90, 0xBDBE, 0xBCEF, 0xBC23, 0xBB59,
+    0xBA91, 0xB9CC, 0xB90A, 0xB84A, 0xB78C, 0xB6D0, 0xB617, 0xB560,
+};
+// ghoti fmt: on
+
+@[inline(.always)] const mul16 = fn(a: u16, b: u16): u16 {
+    return @intCast((@as(u32, a) * b) >> 16);
+};
+
+@[inline(.always)] const mul32 = fn(a: u32, b: u32): u32 {
+    return @intCast((@as(u64, a) * b) >> 32);
+};
+
+@[inline(.always)] const mul64 = fn(a: u64, b: u64): u64 {
+    return @intCast((@as(u128, a) * b) >> 64);
+};
+
+@[inline(.always)] const mul80 = fn(a: u80, b: u80): u80 {
+    let ahi = a >> 40;
+    let alo = a & 0xFF_FFFF_FFFF;
+    let bhi = b >> 40;
+    let blo = b & 0xFF_FFFF_FFFF;
+    return ahi * bhi + ((ahi * blo) >> 40) + ((alo * bhi) >> 40);
+};
+
+@[inline(.always)] const mul128 = fn(a: u128, b: u128): u128 {
+    let ahi = a >> 64;
+    let alo = a & 0xFFFF_FFFF_FFFF_FFFF;
+    let bhi = b >> 64;
+    let blo = b & 0xFFFF_FFFF_FFFF_FFFF;
+    return ahi * bhi + ((ahi * blo) >> 64) + ((alo * bhi) >> 64);
+};
+
+@[inline(.always)] const mul80_tail = fn(a: u80, b: u80): u80 {
+    let ahi = a >> 40;
+    let alo = a & 0xFF_FFFF_FFFF;
+    let bhi = b >> 40;
+    let blo = b & 0xFF_FFFF_FFFF;
+    return alo * blo +% ((ahi * blo) << 40) +% ((alo * bhi) << 40);
+};
