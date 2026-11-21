@@ -154,6 +154,14 @@ pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
     };
 };
 
+/// Where byte `i`, counting from the least significant, sits in a `len`-byte integer
+@[inline(.always)] pub const byte_index = fn(len: usize, i: usize): usize {
+    @cfg (endian == .little) {
+        return i;
+    }
+    return len - 1 - i;
+};
+
 @[inline(.always)] pub const abs_i32 = fn(x: i32): i32 {
     return (x ^ (x >> 31)) -% (x >> 31);
 };
