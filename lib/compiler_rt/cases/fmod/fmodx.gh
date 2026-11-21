@@ -1,0 +1,23 @@
+//! Cases from:
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/fmodx_test.zig
+
+// ghoti fmt: off
+pub const cases = [_]struct { pub a: f80, pub b: f80, pub expected: f80 }{
+    .{ .a = 6.4,                         .b = 4.0,                         .expected = 2.4 },
+    .{ .a = 6.4,                         .b = -4.0,                        .expected = 2.4 },
+    .{ .a = -6.4,                        .b = 4.0,                         .expected = -2.4 },
+    .{ .a = -6.4,                        .b = -4.0,                        .expected = -2.4 },
+    .{ .a = 3.0,                         .b = 2.0,                         .expected = 1.0 },
+    .{ .a = -5.0,                        .b = 3.0,                         .expected = -2.0 },
+    .{ .a = 3.0,                         .b = 2.0,                         .expected = 1.0 },
+    .{ .a = 1.0,                         .b = 2.0,                         .expected = 1.0 },
+    .{ .a = 0.0,                         .b = 1.0,                         .expected = 0.0 },
+    .{ .a = -0.0,                        .b = 1.0,                         .expected = -0.0 },
+    .{ .a = 7046119.0,                   .b = 5558362.0,                   .expected = 1487757.0 },
+    .{ .a = 9010357.0,                   .b = 1957236.0,                   .expected = 1181413.0 },
+    .{ .a = 9223372036854775807,         .b = 10.0,                        .expected = 7.0 },
+
+    // Denormals
+    .{ .a = 0x0.76e5_9a51_1a92_9ca4p-16381, .b = 0x0.2e97_1c3c_8e7d_e03ap-16381, .expected = 0x0.19b7_61d7_fd96_dc30p-16381 },
+    .{ .a = 0x0.76e5_9a51_1a92_9ca4p-16381, .b = 0x0.0e97_1c3c_8e7d_e03ap-16381, .expected = 0x0.022c_b86c_a6a3_9ad4p-16381 },
+};
