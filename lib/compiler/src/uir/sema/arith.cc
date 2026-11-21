@@ -1,6 +1,5 @@
 #include <array>
 #include <compare>
-#include <ranges>
 #include <vector>
 
 #include <fmt/format.h>
@@ -188,13 +187,14 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     auto&            peer{*TRY(peer_type(operands, src))};
 
     // Untyped operands only stay untyped when both are known
-    const bool     both_known{comptime_value(lhs) && comptime_value(rhs)};
-    auto&          work{both_known || !gs::is_comptime_numeric(peer.get_kind())
-                            ? peer
-                            : comp_.ctx().default_concrete(peer)};
-    const use_site as_operand{.what = use_site::kind::STORE};
-    const auto     l{TRY(coerce_to(lhs, work, src, as_operand))};
-    const auto     r{TRY(coerce_to(rhs, work, src, as_operand))};
+    const bool both_known{comptime_value(lhs) && comptime_value(rhs)};
+    auto&      work{both_known || !gs::is_comptime_numeric(peer.get_kind())
+                        ? peer
+                        : comp_.ctx().default_concrete(peer)};
+    const auto l{
+        TRY(coerce_to(lhs, work, src, {.what = use_site::kind::STORE, .from = d.bin.lhs}))};
+    const auto r{
+        TRY(coerce_to(rhs, work, src, {.what = use_site::kind::STORE, .from = d.bin.rhs}))};
 
     if (const auto folded{TRY(fold_binary(info, work, l, r, src))}) { return *folded; }
     TRY(require_runtime(src));
@@ -631,29 +631,25 @@ auto analyzer::bool_slot(inst_id inst, bool is_and) -> gir::value {
     auto& bool_type{builtin(gs::type_kind::BOOL)};
     auto& pool{comp_.constants()};
 
-    // An outer `and` / `or` made it for this one, while setting up its own
+    // Made before the left side was analyzed, when it lowered to any instruction
     if (const auto made{bool_slots_.find(inst)}; made != bool_slots_.end()) {
         const auto slot{made->second};
         bool_slots_.erase(made);
         return slot;
     }
 
-    const auto make{[&](bool for_and) {
-        const auto slot{builder_.emit_alloca(bool_type)};
-        builder_.emit_store(slot, constant(pool.intern(!for_and, bool_type), bool_type));
-        return gir::value{slot, bool_type};
-    }};
+    const auto slot{builder_.emit_alloca(bool_type)};
+    builder_.emit_store(slot, constant(pool.intern(!is_and, bool_type), bool_type));
+    return gir::value{slot, bool_type};
+}
 
-    std::vector<inst_id> enclosing;
-    for (auto at{comp_.bool_parent(u_, inst)}; at; at = comp_.bool_parent(u_, *at)) {
-        enclosing.emplace_back(*at);
+auto analyzer::start_bool_ops(inst_id inst) -> void {
+    // The default is stored before the left side runs, the outermost `and` / `or` first
+    for (const auto op : comp_.bool_ops_starting_at(u_, inst)) {
+        if (!bool_slots_.contains(op)) {
+            bool_slots_.insert_or_assign(op, bool_slot(op, mod().tag_of(op) == tag::bool_and));
+        }
     }
-
-    for (const auto outer : enclosing | std::views::reverse) {
-        bool_slots_.insert_or_assign(outer, make(mod().tag_of(outer) == tag::bool_and));
-    }
-
-    return make(is_and);
 }
 
 auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {

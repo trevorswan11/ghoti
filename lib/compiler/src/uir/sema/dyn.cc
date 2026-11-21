@@ -36,6 +36,21 @@ constexpr u64 DYN_VTABLE_FIELD{1};
 
 } // namespace
 
+auto compilation::method_has_defaults(const nominal& iface, std::string_view name) -> bool {
+    const auto& m{*iface.owner->uir};
+    for (const auto& method : interface_methods(iface)) {
+        if (method.name != name || m.tag_of(method.func) != tag::func) { continue; }
+        record_reader fn{m, m.data_of(method.func).pl.extra};
+        for (const auto param : params_of(m, fn.body_field())) {
+            record_reader p{m, m.data_of(param).pl.extra};
+            p.skip_str().skip_body();
+            if (!p.body_field().empty()) { return true; }
+        }
+    }
+
+    return false;
+}
+
 auto compilation::interface_methods(const nominal& iface) -> std::vector<interface_method> {
     const auto&   m{*iface.owner->uir};
     record_reader rec{m, m.data_of(iface.inst).pl.extra};
@@ -63,19 +78,19 @@ auto compilation::interface_methods(const nominal& iface) -> std::vector<interfa
     return methods;
 }
 
-auto compilation::vtable_for(impl_instance& applied, const source& use)
-    -> result<std::string_view> {
+auto compilation::vtable_for(impl_instance& applied) -> result<std::string_view> {
     if (applied.vtable) { return std::string_view{*applied.vtable}; }
     const auto iface{nominal_of(*applied.interface)};
 
-    // Every method goes in the vtable, so each one's body is analyzed now
+    // Every method goes in the vtable, so each one's body is analyzed now, located at the impl
+    // since the coercion asking may be in another module
+    const auto&     impl_unit{*applied.entry->owner};
+    const auto&     at_impl{impl_unit.uir->src_of(applied.entry->inst)};
     mod::dyn_vtable vtable{.symbol = fmt::format("__vtable.{}", vtables_++), .slots = {}};
     for (const auto& method : interface_methods(*iface)) {
-        const auto member{TRY(impl_member(applied, method.name, use))};
+        const auto member{TRY(impl_member(applied, method.name, at_impl))};
         const auto fn{member ? member->as_opt<function_ref>() : stdx::none};
-        if (!fn) {
-            return unsupported(*applied.entry->owner, use, "a vtable slot that isn't a method");
-        }
+        if (!fn) { return unsupported(impl_unit, at_impl, "a vtable slot that isn't a method"); }
 
         request_body(*fn->fn);
         vtable.slots.emplace_back(fn->fn->symbol);
@@ -137,7 +152,7 @@ auto analyzer::coerce_to_dyn(const operand& op, gs::type& target, const source& 
     if (applied == impls.end()) { return stdx::option<operand>{}; }
     if (is_comptime()) { return comp_.unsupported(u_, src, "a `dyn` value at compile time"); }
 
-    const auto vtable{TRY(comp_.vtable_for(**applied, src))};
+    const auto vtable{TRY(comp_.vtable_for(**applied))};
     TRY(require_runtime(src));
 
     // `{ data, vtable }` is built in a slot typed by the bare `dyn`, then read out
@@ -173,6 +188,10 @@ auto analyzer::call_dyn(const operand&       object,
 
     const auto methods{comp_.interface_methods(*iface)};
     const auto slot{std::ranges::find(methods, name, &interface_method::name)};
+    if (comp_.method_has_defaults(*iface, name)) {
+        return comp_.unsupported(u_, src, "an interface method with default arguments");
+    }
+
     if (slot == methods.end()) {
         return comp_.report(u_,
                             src,

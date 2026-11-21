@@ -150,6 +150,18 @@ struct global_const {
     ip::index                         value;
 };
 
+// An imported module, which only names its declarations
+struct module_ref {
+    gsl::not_null<const unit*> target;
+    // The name the module was reached through, for diagnostics
+    std::string_view name;
+};
+
+// A one-argument cast, whose target is the type it is used as: `let x: u8 = @intCast(y)`
+struct cast_ref {
+    inst_id inst;
+};
+
 // What analyzing an instruction yields
 using operand = stdx::variant<ip::index,      // a comptime value
                               gir::value,     // a runtime value
@@ -162,7 +174,9 @@ using operand = stdx::variant<ip::index,      // a comptime value
                               slot_value,     // a value held in a slot
                               anon_init,      // an untyped `.{ ... }` literal
                               enum_literal,   // an untyped `.name` literal
-                              global_const>;  // a module-level aggregate `const`
+                              global_const,   // a module-level aggregate `const`
+                              module_ref,     // an imported module
+                              cast_ref>;      // a cast waiting for its target type
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -213,6 +227,8 @@ struct decl_state {
     decl_status                          status{decl_status::UNRESOLVED};
     stdx::option<operand>                value{};
     stdx::option<stdx::box<std::string>> global_symbol{};
+    // Whether its value was given a GIR global
+    bool has_storage{false};
 };
 
 // How an instance binds one of its template's parameters
@@ -264,6 +280,8 @@ struct generic_fn {
     std::vector<ip::index>     captures{};
     stdx::option<gs::type&>    self_type{};
     stdx::option<nominal&>     scope{};
+    // The ctor instance declaring it, which its instances' symbols end with
+    stdx::option<gs::type&> enclosing{};
 };
 
 // What a function declared inside a type sees of it
@@ -407,6 +425,21 @@ struct nominal_key_hash {
     [[nodiscard]] auto operator()(const nominal_key& key) const noexcept -> u64;
 };
 
+// A declaration that may claim a GIR symbol, which a same-named one in another scope qualifies
+struct name_candidate {
+    u32     unit;
+    decl_id decl;
+    // A function or `let mut`, which always has storage, rather than a `const` that may not
+    bool certain;
+};
+
+// Every name declared where it could claim a symbol, across the program
+struct scoped_names {
+    ankerl::unordered_dense::map<std::string, std::vector<name_candidate>> candidates;
+    // Names a `weak` declaration carries, whose override shares its symbol
+    ankerl::unordered_dense::set<std::string> weak;
+};
+
 class analyzer;
 
 class compilation {
@@ -443,6 +476,17 @@ class compilation {
     [[nodiscard]] auto
     declare_function(const unit& u, decl_id decl, inst_id func, const member_context& member = {})
         -> result<operand>;
+    // Modules (modules.cc)
+    // The module an import of `u` loads, reached through the name `name`
+    [[nodiscard]] auto
+    import_target(const unit& u, import_id import, std::string_view name, const source& src)
+        -> result<operand>;
+    // The module-level declaration `name` of `m`, as `user` sees it
+    [[nodiscard]] auto
+    module_member(const module_ref& m, std::string_view name, const unit& user, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto prelude_module() -> stdx::option<module_ref>;
+
     // Impls (impls.cc)
     auto register_impl(const unit& u, decl_id decl) -> void;
     // Analyzes a plain impl's members, which are roots as every non-generic declaration is
@@ -456,9 +500,10 @@ class compilation {
 
     // `dyn` (dyn.cc)
     [[nodiscard]] auto interface_methods(const nominal& iface) -> std::vector<interface_method>;
+    // Whether the interface's method `name` gives any parameter a default argument
+    [[nodiscard]] auto method_has_defaults(const nominal& iface, std::string_view name) -> bool;
     // The vtable of an impl's interface for its target, made and its methods requested on first use
-    [[nodiscard]] auto vtable_for(impl_instance& applied, const source& use)
-        -> result<std::string_view>;
+    [[nodiscard]] auto vtable_for(impl_instance& applied) -> result<std::string_view>;
     // Whether an interface declares associated types or constants
     [[nodiscard]] static auto declares_associated_items(const nominal& iface) -> bool;
     // The program's root module, whose list of vtables codegen lowers
@@ -506,9 +551,19 @@ class compilation {
     // The GIR symbol and linkage of a module-level declaration
     [[nodiscard]] auto symbol_for(const unit& u, decl_id decl, const source& src)
         -> result<std::string>;
+    // `name` declared in `owner`'s scope of `scope`, qualified when another scope shares it
+    [[nodiscard]] auto        scoped_symbol(const unit&           scope,
+                                            stdx::option<inst_id> owner,
+                                            std::string_view      name,
+                                            const unit&           user,
+                                            const source&         use) -> result<std::string>;
     [[nodiscard]] static auto linkage_of(const decl& d) noexcept -> gir::linkage;
     [[nodiscard]] static auto
     member_linkage(const unit& u, const decl& d, const member_context& member) -> gir::linkage;
+    // Records that a declaration's value was given a GIR global
+    auto note_storage(const unit& u, decl_id decl) -> void {
+        decls_[u.index][std::to_underlying(decl)].has_storage = true;
+    }
     // Keeps a `let mut` global's symbol alive for the `global_ref`s that name it
     [[nodiscard]] auto own_symbol(const unit& u, decl_id decl, std::string symbol)
         -> const std::string&;
@@ -557,8 +612,9 @@ class compilation {
     // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
     auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
 
-    // The `and` / `or` whose left side is the `and` / `or` `inst`, if any
-    [[nodiscard]] auto bool_parent(const unit& u, inst_id inst) -> stdx::option<inst_id>;
+    // The `and` / `or` ops whose left side starts at `inst`, outermost first
+    [[nodiscard]] auto bool_ops_starting_at(const unit& u, inst_id inst)
+        -> gsl::span<const inst_id>;
 
     // Records where a comptime evaluation needed a runtime value and returns the deferred stop
     [[nodiscard]] auto needs_runtime(const unit& u, const source& src) -> stdx::err<stop>;
@@ -604,13 +660,20 @@ class compilation {
     // The interface's default method `name` instantiated for an impl's target
     [[nodiscard]] auto default_method(impl_instance& applied, std::string_view name)
         -> result<stdx::option<operand>>;
-    // How many module-level declarations, module-level type members and impl members carry
-    // each name, across every module
-    [[nodiscard]] auto declared_names() -> const ankerl::unordered_dense::map<std::string, u32>&;
+    // The declarations of every module, module-level type and impl that may claim each name
+    [[nodiscard]] auto declared_names(const unit& user, const source& use)
+        -> result<gsl::not_null<scoped_names*>>;
+    // Whether more than one declaration with storage carries `name`
+    [[nodiscard]] auto collides(const std::string& name, const unit& user, const source& use)
+        -> result<bool>;
+    // The number a qualified symbol names its declaring scope by: a module, type or impl
+    [[nodiscard]] auto        scope_number(const unit& u, stdx::option<inst_id> owner) -> u32;
+    [[nodiscard]] static auto declares_function(const unit& u, const decl& d) -> bool;
+    // A template's name for its instances, numbered after the first same-named template
+    [[nodiscard]] auto versioned_name(const generic_fn& g) -> std::string;
     // The type a declaration's value body declares outright, if any
     [[nodiscard]] static auto declared_nominal(const unit& u, const decl& d)
         -> stdx::option<inst_id>;
-    [[nodiscard]] static auto impl_inst_of(const unit& u, const decl& d) -> stdx::option<inst_id>;
     // What tells a type a compile-time call creates apart from the same call's other instances
     [[nodiscard]] static auto call_identity(const comptime_frame& frame) -> std::vector<ip::index>;
     auto                      analyze_roots() -> void;
@@ -630,42 +693,49 @@ class compilation {
     auto add_call_notes(gs::diagnostic& d) const -> void;
 
   private:
-    gs::context&                                                      ctx_;
-    const program&                                                    prog_;
-    options                                                           opts_;
-    std::vector<unit>                                                 units_;
-    std::vector<std::vector<decl_state>>                              decls_;
+    gs::context&                         ctx_;
+    const program&                       prog_;
+    options                              opts_;
+    std::vector<unit>                    units_;
+    std::vector<std::vector<decl_state>> decls_;
     // Instances and nominals are referenced by address, so the arena keeps them in place
-    ghoti::arena                                                      arena_;
-    std::vector<gsl::not_null<instance*>>                             instances_;
-    std::vector<gsl::not_null<generic_fn*>>                           generics_;
-    std::vector<gsl::not_null<impl_entry*>>                           impls_;
+    ghoti::arena                            arena_;
+    std::vector<gsl::not_null<instance*>>   instances_;
+    std::vector<gsl::not_null<generic_fn*>> generics_;
+    std::vector<gsl::not_null<impl_entry*>> impls_;
     ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
         impl_instances_;
     ankerl::unordered_dense::map<instance_key, gsl::not_null<instance*>, instance_key_hash>
-                                                                      instances_by_key_;
-    std::vector<gsl::not_null<instance*>>                             queue_;
-    gir::module_t                                                     gir_;
-    gs::diagnostics                                                   diagnostics_;
-    stdx::option<sema::unsupported>                                   stopped_at_;
-    u32                                                               ptr_bits_;
-    std::vector<comptime_alloc>                                       allocs_;
-    std::vector<comptime_frame>                                       calls_;
-    ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash> memo_;
-    eval_limits                                                       limits_;
-    stdx::option<runtime_site>                                        runtime_site_;
-    u32                                                               next_frame_{0};
-    std::vector<gsl::not_null<nominal*>>                              nominals_;
-    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>  nominal_ids_;
+                                                                        instances_by_key_;
+    ankerl::unordered_dense::map<std::string, gsl::not_null<instance*>> instances_by_symbol_;
+    std::vector<gsl::not_null<instance*>>                               queue_;
+    gir::module_t                                                       gir_;
+    gs::diagnostics                                                     diagnostics_;
+    stdx::option<sema::unsupported>                                     stopped_at_;
+    u32                                                                 ptr_bits_;
+    std::vector<comptime_alloc>                                         allocs_;
+    std::vector<comptime_frame>                                         calls_;
+    ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash>   memo_;
+    eval_limits                                                         limits_;
+    stdx::option<runtime_site>                                          runtime_site_;
+    u32                                                                 next_frame_{0};
+    std::vector<gsl::not_null<nominal*>>                                nominals_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>    nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
     stdx::option<lowered> prelude_;
     stdx::option<u32>     prelude_unit_;
-    // Per unit, each `and` / `or` that is the left side of another, built on first use
-    std::vector<stdx::option<ankerl::unordered_dense::map<inst_id, inst_id>>> bool_parents_;
+    // Per unit, the `and` / `or` ops by the first inst of their left side, built on first use
+    std::vector<stdx::option<ankerl::unordered_dense::map<inst_id, std::vector<inst_id>>>>
+        bool_starts_;
     // Each GIR symbol a declaration claimed, with the unit and declaration that claimed it
     ankerl::unordered_dense::map<std::string, std::pair<u32, decl_id>> symbols_;
-    stdx::option<ankerl::unordered_dense::map<std::string, u32>>       declared_names_;
+    stdx::option<scoped_names>                                         declared_names_;
+    ankerl::unordered_dense::map<u64, u32>                             scope_numbers_;
+    // The declarations whose symbols are being chosen, innermost last
+    std::vector<std::pair<u32, decl_id>> naming_;
+    ankerl::unordered_dense::map<std::string, std::vector<std::pair<u32, inst_id>>>
+        generic_versions_;
 };
 
 // The result of analyzing a body: the value it yields, or none when control left it
@@ -833,6 +903,8 @@ class analyzer {
         kind             what;
         usize            arg_index{0};
         std::string_view callee{};
+        // The instruction that computed the value, which an integer conversion may fold
+        stdx::option<ref> from{};
     };
 
   private:
@@ -1096,7 +1168,7 @@ class analyzer {
         -> result<gir::value>;
     // A `.{...}` or `.name` that takes its type from where it is used
     [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
-        return op.is<anon_init>() || op.is<enum_literal>();
+        return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>();
     }
     [[nodiscard]] auto concrete(const operand& op, const source& src) -> result<operand>;
 
@@ -1112,6 +1184,13 @@ class analyzer {
     [[nodiscard]] auto store_destination(const operand& target, const source& src) -> result<place>;
     [[nodiscard]] auto analyze_load(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_decl_val(inst_id inst, bool as_place) -> result<operand>;
+    // A declaration's value where it is used: a `let mut` global's place, or its value loaded
+    [[nodiscard]] auto declaration_use(const operand& value, bool as_place, const source& src)
+        -> result<operand>;
+    // Modules (modules.cc)
+    [[nodiscard]] auto analyze_import(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto module_member(const module_ref& m, std::string_view name, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto analyze_discard(inst_id inst) -> result<operand>;
 
     // Control flow (control.cc)
@@ -1143,10 +1222,15 @@ class analyzer {
     [[nodiscard]] auto known_bool(const operand& op, const source& src) -> result<bool>;
     // The result slot of a runtime `and` / `or`, holding the value its left side decides alone
     [[nodiscard]] auto bool_slot(inst_id inst, bool is_and) -> gir::value;
+    // Makes the result slots of the `and` / `or` ops whose left side starts at `inst`
+    auto start_bool_ops(inst_id inst) -> void;
     // Whether a branch body ends yielding nothing, like a statement `if`'s arms
     [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
     // A runtime condition's value when running it again at compile time knows it
     [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
+    // What `r` computes when run again at compile time, keeping nothing that records, if computable
+    [[nodiscard]] auto speculated_value(ref r, const source& src)
+        -> result<stdx::option<ip::index>>;
     [[nodiscard]] auto finish_merge(const std::vector<incoming>& arrivals,
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
@@ -1158,6 +1242,11 @@ class analyzer {
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
+    // Calls a function or generic `callee` evaluated to
+    [[nodiscard]] auto call_operand(const operand&       callee,
+                                    gsl::span<const ref> args,
+                                    const source&        src,
+                                    const source&        callee_src) -> result<operand>;
     // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     [[nodiscard]] auto call_function(instance&            target,
                                      gsl::span<const ref> args,
@@ -1210,6 +1299,45 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;
+    // Casts and conversions (casts.cc)
+    [[nodiscard]] auto builtin_cast(inst_id              inst,
+                                    syntax::builtin_t    which,
+                                    gsl::span<const ref> args) -> result<operand>;
+    // A one-argument cast given its target, or the cast's own fallback when none is known
+    [[nodiscard]] auto cast_target_inferred(cast_ref cast, stdx::option<gs::type&> target)
+        -> result<operand>;
+    [[nodiscard]] auto
+    apply_cast(inst_id inst, syntax::builtin_t which, gs::type& target, ref operand_ref)
+        -> result<operand>;
+    // Whether a runtime body folds the cast of a known operand, which the old emitter evaluated
+    [[nodiscard]] static auto folds_whole(syntax::builtin_t which,
+                                          const gs::type&   from,
+                                          const gs::type&   target) noexcept -> bool;
+    [[nodiscard]] auto        fold_cast(syntax::builtin_t which,
+                                        ip::index         index,
+                                        const gs::type&   from,
+                                        gs::type&         target,
+                                        const source&     src,
+                                        const source&     operand_src) -> result<operand>;
+    [[nodiscard]] auto        unary_cast(inst_id inst, syntax::builtin_t which, ref operand_ref)
+        -> result<operand>;
+    [[nodiscard]] auto slice_from_ptr(inst_id inst, ref ptr_ref, ref len_ref) -> result<operand>;
+    // A cast's operand, read through a reference
+    [[nodiscard]] auto cast_operand(ref operand_ref, const source& src) -> result<operand>;
+    [[nodiscard]] auto
+    cast_value(gir::instruction_kind kind, const gir::value& from, gs::type& target) -> operand;
+    [[nodiscard]] auto
+    check_bit_cast(const gs::type& from, const gs::type& target, const source& src) -> result<void>;
+    // Panics unless the integer fits the target, where the cast could lose it
+    [[nodiscard]] auto int_cast_guard(const gir::value& value,
+                                      const gs::type&   target,
+                                      const source&     src) -> result<void>;
+    // Panics unless an integer cast to an enum landed on one of its variants
+    [[nodiscard]] auto
+    enum_cast_guard(const operand& cast, const gir::value& from, ref operand_ref, const source& src)
+        -> result<void>;
+    // Where a cast's operand is written in the call
+    [[nodiscard]] auto cast_operand_src(inst_id call, ref operand_ref) const -> source;
     [[nodiscard]] auto builtin_this(const source& src) -> result<operand>;
     // Resolves what `@sizeOf(type)` needs, reporting a layout that depends on itself
     [[nodiscard]] auto layout_ready(gs::type& type, const source& src) -> result<void>;
@@ -1274,8 +1402,8 @@ class analyzer {
     std::string             symbol_prefix_;
     u32                     frame_;
     u32                     runtime_depth_{0};
-    u32                alloc_base_;
-    stdx::option<jump> jump_;
+    u32                     alloc_base_;
+    stdx::option<jump>      jump_;
 };
 
 // Diagnostic messages shared across checks (messages.cc)

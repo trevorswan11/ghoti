@@ -14,6 +14,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -353,20 +354,26 @@ auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {
 }
 
 auto analyzer::folded_condition(ref cond, const source& src) -> result<stdx::option<bool>> {
-    // A failure only means the condition stays at runtime, so nothing it records is kept
+    const auto index{TRY(speculated_value(cond, src))};
+    if (!index) { return stdx::option<bool>{}; }
+    return comp_.constants().value_at(*index).data.as_opt<bool>().transform(
+        [](bool b) { return b; });
+}
+
+auto analyzer::speculated_value(ref r, const source& src) -> result<stdx::option<ip::index>> {
+    // A failure only means the value stays at runtime, so nothing it records is kept
     const auto before{comp_.speculate()};
     const auto folded{[&] {
         const auto scope{comptime_scope()};
-        return reevaluate(cond, src);
+        return reevaluate(r, src);
     }()};
     const bool unsupported{!folded && folded.error() == stop::UNSUPPORTED};
     comp_.abandon(before, unsupported);
     if (unsupported) { return stdx::err{stop::UNSUPPORTED}; }
-    if (!folded) { return stdx::option<bool>{}; }
+    if (!folded) { return stdx::option<ip::index>{}; }
     const auto index{comptime_value(*folded)};
-    if (!index) { return stdx::option<bool>{}; }
-    return comp_.constants().value_at(*index).data.as_opt<bool>().transform(
-        [](bool b) { return b; });
+    if (!index || comp_.constants().is_type(*index)) { return stdx::option<ip::index>{}; }
+    return stdx::option<ip::index>{*index};
 }
 
 auto analyzer::known_bool(const operand& op, const source& src) -> result<bool> {

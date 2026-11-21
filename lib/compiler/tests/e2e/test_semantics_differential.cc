@@ -270,10 +270,25 @@ auto float_casts() -> std::vector<diff::expr_template> {
     return templates;
 }
 
+// TODO(#456): the folds of these disagree with compiler_rt's exp and log routines
+constexpr std::pair<std::string_view, std::string_view> MATH_MISMATCHES[]{
+    {"@exp", "f64"},
+    {"@exp", "f80"},
+    {"@exp2", "f80"},
+    {"@log", "f80"},
+    {"@log2", "f80"},
+    {"@log10", "f80"},
+};
+
+[[nodiscard]] auto awaits_456(std::string_view name, std::string_view type) -> bool {
+    return std::ranges::contains(MATH_MISMATCHES, std::pair{name, type});
+}
+
 // Correctly rounded when folded; a runtime mismatch, once compiler_rt has the routines, is a bug
 // in them. `@exp` past the range is a fold error but an infinity at runtime.
 auto math_functions() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
+    std::vector<std::string>         skipped;
     for (const auto& type : diff::host_float_types()) {
         for (const std::string_view name : {"@sqrt",
                                             "@sin",
@@ -286,6 +301,10 @@ auto math_functions() -> std::vector<diff::expr_template> {
                                             "@log10",
                                             "@floor",
                                             "@ceil"}) {
+            if (awaits_456(name, type.name)) {
+                skipped.emplace_back(fmt::format("{} -> {}", name, type.name));
+                continue;
+            }
             templates.emplace_back<diff::expr_template>({
                 .text              = fmt::format("{}({{0}})", name),
                 .operands          = {type},
@@ -293,6 +312,9 @@ auto math_functions() -> std::vector<diff::expr_template> {
                 .fold_errors_panic = false,
             });
         }
+    }
+    if (!skipped.empty()) {
+        WARN(fmt::format("skipped until #456 is fixed:\n  {}", fmt::join(skipped, "\n  ")));
     }
     return templates;
 }

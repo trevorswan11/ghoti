@@ -407,4 +407,71 @@ TEST_CASE("Normalized GIR reads no mutability in an address's type") {
     CHECK(mutable_view == immutable_view);
 }
 
+TEST_CASE("Normalized GIR ignores how each pipeline numbers a qualified symbol's scope") {
+    const auto legacy{normalize_gir(R"(const m0.K: i32 = 4
+fn m7.get() -> i32
+  seg 0:
+    %0 = call @m1.twice()
+    ret i32 %0
+)")};
+    const auto uir{normalize_gir(R"(const m3.K: i32 = 4
+fn m0.get() -> i32
+  seg 0:
+    %0 = call @m2.twice()
+    ret i32 %0
+)")};
+    CHECK(legacy == uir);
+
+    // A name that merely starts with `m` and a digit keeps its spelling
+    CHECK(normalize_gir("const m1x: i32 = 4\n").contains("m1x"));
+}
+
+TEST_CASE("Normalized GIR folds an integer cast of a known integer") {
+    const auto legacy{normalize_gir(R"(fn f() -> i32
+  seg 0:
+    %0 = int_cast i32 6
+    %1 = trunc_cast u8 300
+    %2 = widen_cast i32 %1
+    %3 = add.checked i32 %0, %2
+    ret i32 %3
+)")};
+    CHECK(legacy == normalize_gir("fn f() -> i32\n  seg 0:\n    ret i32 50\n"));
+
+    // A value the target can't hold stays a cast
+    CHECK(normalize_gir("fn f() -> u8\n  seg 0:\n    %0 = int_cast u8 300\n    ret u8 %0\n")
+              .contains("int_cast u8 300"));
+}
+
+TEST_CASE("Normalized GIR folds a known number widened to a float") {
+    const auto legacy{normalize_gir(R"(fn f(x: f64) -> f64
+  seg 0:
+    %0 = widen_cast f64 0.3400000035762786865234375
+    %1 = add f64 param.0, %0
+    ret f64 %1
+)")};
+    CHECK(legacy == normalize_gir(R"(fn f(x: f64) -> f64
+  seg 0:
+    %0 = add f64 param.0, 0.3400000035762786865234375
+    ret f64 %0
+)"));
+}
+
+TEST_CASE("Normalized GIR ignores which same-named generic was instantiated first") {
+    const auto legacy{normalize_gir(R"(fn id__i32() -> void
+  seg 0:
+    ret
+fn id_v2__u8() -> void
+  seg 0:
+    ret
+)")};
+    const auto uir{normalize_gir(R"(fn id_v2__i32() -> void
+  seg 0:
+    ret
+fn id__u8() -> void
+  seg 0:
+    ret
+)")};
+    CHECK(legacy == uir);
+}
+
 } // namespace ghoti::tests

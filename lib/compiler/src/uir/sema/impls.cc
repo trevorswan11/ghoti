@@ -90,6 +90,18 @@ auto compilation::analyze_impl_roots(const unit& u, decl_id decl) -> void {
             DISCARD(analyze_impl_decl(*impl, member, *d.node));
             if (stopped_at_) { return; }
         }
+
+        // The interface's defaults the impl doesn't write are its members too
+        const auto iface{impl->interface ? nominal_of(*impl->interface) : stdx::none};
+        if (!iface) { continue; }
+        for (const auto& method : interface_methods(*iface)) {
+            const bool written{std::ranges::any_of(ns->decls, [&](decl_id member) {
+                return m.string(m.decl_at(member).name) == method.name;
+            })};
+            if (written) { continue; }
+            DISCARD(default_method(*impl, method.name));
+            if (stopped_at_) { return; }
+        }
     }
 }
 
@@ -209,6 +221,12 @@ auto compilation::impl_context(impl_instance& applied) -> member_context {
 auto compilation::impl_member(impl_instance& applied, std::string_view name, const source& use)
     -> result<stdx::option<operand>> {
     const auto& u{*applied.entry->owner};
+    const auto  iface{applied.interface ? nominal_of(*applied.interface) : stdx::none};
+    if (iface && method_has_defaults(*iface, name)) {
+        return unsupported(
+            u, u.uir->src_of(applied.entry->inst), "an interface method with default arguments");
+    }
+
     const auto& m{*u.uir};
     const auto  ns{m.namespace_of(applied.entry->inst)};
     if (ns) {
@@ -248,13 +266,25 @@ auto compilation::default_method(impl_instance& applied, std::string_view name)
             return stdx::option<operand>{known->second};
         }
 
-        const auto    func{yielded_inst(m, signature)};
+        // A method of an interface with associated items closes over them
+        const auto func{yielded_inst(m, signature)};
+        if (!func || m.tag_of(*func) != tag::func) {
+            return unsupported(
+                u, m.src_of(iface->inst), "a default method of an interface with associated items");
+        }
+
         record_reader fn{m, m.data_of(*func).pl.extra};
         fn.skip_body().skip_body().skip_body().skip_u32();
         if ((fn.u32_field() & flags::BODYLESS) != 0) { return stdx::option<operand>{}; }
 
-        auto member{impl_context(applied)};
-        member.symbol = method;
+        // A plain impl's default is named in the impl's scope, like the methods it writes out
+        auto              member{impl_context(applied)};
+        const auto&       impl_unit{*applied.entry->owner};
+        const std::string symbol{
+            applied.prefix.empty()
+                ? TRY(scoped_symbol(impl_unit, applied.entry->inst, method, u, m.src_of(*func)))
+                : std::string{method}};
+        member.symbol = symbol;
         const auto owner_decl{*iface->declaring_decl};
         const auto value{TRY(declare_function(u, owner_decl, *func, member))};
         applied.defaults.emplace(i, value);

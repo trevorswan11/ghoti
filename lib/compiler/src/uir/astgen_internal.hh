@@ -281,6 +281,7 @@ class astgen {
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::dot_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::index_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::range_expr& node) -> ref;
+    [[nodiscard]] auto range(ast::node_id id, const ast::range_expr& node, u32 bits) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::initializer_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::array_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::if_expr& node) -> ref;

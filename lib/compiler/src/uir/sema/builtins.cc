@@ -59,6 +59,23 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TRAP:                     return builtin_trap(src);
     case builtin_t::AS:                       return builtin_as(args, src);
     case builtin_t::THIS:                     return builtin_this(src);
+    case builtin_t::INT_CAST:
+    case builtin_t::TRUNCATE:
+    case builtin_t::BIT_CAST:
+    case builtin_t::INT_FROM_BOOL:
+    case builtin_t::BOOL_FROM_INT:
+    case builtin_t::FROM_BACKING_INT:
+    case builtin_t::BACKING_INT:
+    case builtin_t::INT_FROM_FLOAT:
+    case builtin_t::FLOAT_FROM_INT:
+    case builtin_t::FLOAT_CAST:
+    case builtin_t::PTR_CAST:
+    case builtin_t::ALIGN_CAST:
+    case builtin_t::PTR_FROM_INT:
+    case builtin_t::INT_FROM_PTR:
+    case builtin_t::CONST_CAST:
+    case builtin_t::VOLATILE_CAST:
+    case builtin_t::SLICE_FROM_PTR:           return builtin_cast(inst, which, args);
     default:                                  break;
     }
 

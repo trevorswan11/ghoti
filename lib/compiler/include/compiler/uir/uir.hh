@@ -260,6 +260,7 @@ enum : u32 {
 
     // slice, range
     INCLUSIVE = 1U << 0,
+    FOR_RANGE = 1U << 1, // a range a `for` iterates
 
     // loop, for_iter
     UNROLL   = 1U << 0,

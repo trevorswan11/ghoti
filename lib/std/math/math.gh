@@ -90,9 +90,9 @@ pub const raise_div_by_zero = fn(): void {
 pub const raise_underflow = fn(): void {
     if comptime return;
     @cfg (family != .wasm) {
-        let mut min = float.float_true_min(f32);
-        std.mem.do_not_optimize_away(^min);
-        std.mem.do_not_optimize_away(min * min);
+        let mut tiny = float.float_true_min(f32);
+        std.mem.do_not_optimize_away(^tiny);
+        std.mem.do_not_optimize_away(tiny * tiny);
     }
 };
 
@@ -100,9 +100,9 @@ pub const raise_underflow = fn(): void {
 pub const raise_overflow = fn(): void {
     if comptime return;
     @cfg (family != .wasm) {
-        let mut max = float.float_max(f32);
-        std.mem.do_not_optimize_away(^max);
-        std.mem.do_not_optimize_away(max * max);
+        let mut huge = float.float_max(f32);
+        std.mem.do_not_optimize_away(^huge);
+        std.mem.do_not_optimize_away(huge * huge);
     }
 };
 

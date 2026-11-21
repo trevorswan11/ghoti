@@ -469,18 +469,23 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     const auto n{comp_.nominal_of(owner)};
     if (!n) { return comp_.unsupported(u_, src, "a member of a type UIR didn't declare"); }
+    // A use from another module is located at what it reaches in that module
     const auto& owner_mod{*n->owner->uir};
     if (const auto ns{owner_mod.namespace_of(n->inst)}) {
         for (const auto decl : ns->decls) {
             if (owner_mod.string(owner_mod.decl_at(decl).name) == name) {
-                return comp_.analyze_member(*n, decl, src);
+                const bool here{n->owner.get() == &u_};
+                return comp_.analyze_member(
+                    *n, decl, here ? src : source{*owner_mod.decl_at(decl).node});
             }
         }
     }
 
     // A member an impl adds to the type
     for (const auto applied : TRY(comp_.impls_of(owner))) {
-        if (const auto member{TRY(comp_.impl_member(*applied, name, src))}) { return *member; }
+        const auto& impl_unit{*applied->entry->owner};
+        const auto& use{&impl_unit == &u_ ? src : impl_unit.uir->src_of(applied->entry->inst)};
+        if (const auto member{TRY(comp_.impl_member(*applied, name, use))}) { return *member; }
     }
 
     return comp_.report(u_,

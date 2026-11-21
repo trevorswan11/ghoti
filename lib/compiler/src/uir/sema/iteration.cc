@@ -44,9 +44,11 @@ struct range_bounds {
 } // namespace
 
 auto analyzer::analyze_range(inst_id inst) -> result<operand> {
-    // A range only means something to the `for` that reads it
-    DISCARD(inst);
-    return void_value();
+    // The `for` that iterates a range reads its bounds itself
+    auto rec{record(inst)};
+    rec.skip_ref().skip_ref();
+    if ((rec.u32_field() & flags::FOR_RANGE) != 0) { return void_value(); }
+    return comp_.unsupported(u_, src_of(inst), "a range used as a value");
 }
 
 auto analyzer::analyze_bind(inst_id inst) -> result<operand> {

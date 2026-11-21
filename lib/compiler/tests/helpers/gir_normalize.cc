@@ -120,6 +120,29 @@ struct module_dump {
             }
         }
 
+        // A qualified symbol names its scope by each pipeline's own number
+        const bool word_start{i == 0 || !is_mangle_char(dump[i - 1])};
+        if (word_start && dump[i] == 'm') {
+            usize end{i + 1};
+            while (end < dump.size() && is_digit(dump[end])) { ++end; }
+            if (end > i + 1 && end < dump.size() && dump[end] == '.') {
+                out += "m#";
+                i = end;
+                continue;
+            }
+        }
+
+        // A second same-named generic's instances are numbered by when each was first instantiated
+        if (stdx::string::substr(dump, i).starts_with("_v") && i > 0 &&
+            is_mangle_char(dump[i - 1])) {
+            usize end{i + 2};
+            while (end < dump.size() && is_digit(dump[end])) { ++end; }
+            if (end > i + 2 && stdx::string::substr(dump, end).starts_with("__")) {
+                i = end;
+                continue;
+            }
+        }
+
         bool erased{false};
         for (const std::string_view kind : KINDS) {
             if (!stdx::string::substr(dump, i).starts_with(kind)) { continue; }
@@ -289,6 +312,15 @@ struct fold_input {
     return v == "true" || v == "false";
 }
 
+// A decimal integer or float constant as the dumper spells it
+[[nodiscard]] auto is_number_text(std::string_view v) -> bool {
+    if (v.starts_with('-')) { v.remove_prefix(1); }
+    if (v.empty() || v.front() < '0' || v.front() > '9') { return false; }
+    return std::ranges::all_of(v, [](char c) {
+        return (c >= '0' && c <= '9') || c == '.' || c == 'e' || c == '+' || c == '-';
+    });
+}
+
 // The constant an all-constant integer or bool instruction computes, none when it can't be
 // folded exactly
 [[nodiscard]] auto fold(const fold_input& in) -> stdx::option<std::string> {
@@ -349,12 +381,27 @@ struct fold_input {
         return stdx::none;
     }
 
+    // Widening a known number to a float is exact, so it reads as the number
+    const bool float_type{in.type == "f16" || in.type == "f32" || in.type == "f64" ||
+                          in.type == "f80" || in.type == "f128"};
+    if (float_type && in.kind == "widen_cast" && ops.size() == 1 && is_number_text(ops[0])) {
+        return std::string{ops[0]};
+    }
+
     const auto shape{int_shape_of(in.type)};
     if (!shape) { return stdx::none; }
     if (ops.size() == 1) {
         const auto v{parse_int(ops[0])};
         if (!v) { return stdx::none; }
         if (in.kind == "widen_cast") { return format_int(*v); }
+
+        // A cast of a known integer the old emitter left at runtime is that integer, which an
+        // `@intCast` checked fits at compile time
+        if (in.kind == "int_cast" && *v >= min_of(*shape) && *v <= max_of(*shape)) {
+            return format_int(*v);
+        }
+
+        if (in.kind == "trunc_cast") { return format_int(wrap(*v, *shape)); }
         if (in.kind == "bitnot") { return format_int(wrap(~*v, *shape)); }
         if (in.kind == "neg") {
             if (in.checked && -*v > max_of(*shape)) { return stdx::none; }
@@ -460,17 +507,19 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
 // An instruction that only computes its result
 [[nodiscard]] auto is_pure(std::string_view body) -> bool {
     static constexpr std::array prefixes{
-        "load ",        "get_element_ptr ",
-        "global_addr ", "address_of ",
-        "not ",         "eq ",
-        "ne ",          "lt ",
-        "le ",          "gt ",
-        "ge ",          "and ",
-        "or ",          "xor ",
-        "widen_cast ",  "bit_cast ",
-        "add ",         "sub ",
-        "mul ",         "shl ",
-        "shr ",
+        "load ",         "get_element_ptr ",
+        "global_addr ",  "address_of ",
+        "not ",          "eq ",
+        "ne ",           "lt ",
+        "le ",           "gt ",
+        "ge ",           "and ",
+        "or ",           "xor ",
+        "widen_cast ",   "bit_cast ",
+        "int_cast ",     "trunc_cast ",
+        "ptr_cast ",     "int_from_ptr ",
+        "ptr_from_int ", "add ",
+        "sub ",          "mul ",
+        "shl ",          "shr ",
     };
     return std::ranges::any_of(prefixes, [&](std::string_view p) { return body.starts_with(p); });
 }
@@ -1220,20 +1269,24 @@ auto normalize_gir(std::string_view dump) -> std::string {
     }
 
     std::ranges::sort(mod.items);
-    std::ranges::sort(mod.functions, {}, sort_key);
 
-    std::string out;
-    for (const auto& item : mod.items) { out += fmt::format("{}\n", item); }
+    // Functions whose erased symbols match are ordered by their bodies
+    std::vector<std::pair<std::string_view, std::string>> rendered;
     for (const auto& fn : mod.functions) {
-        out += fmt::format("{}\n", fn.header);
+        std::string text{fmt::format("{}\n", fn.header)};
         for (const auto& seg : fn.segments) {
-            out += fmt::format("  seg {}:\n", seg.id);
-            for (const auto& inst : seg.instructions) { out += fmt::format("    {}\n", inst); }
+            text += fmt::format("  seg {}:\n", seg.id);
+            for (const auto& inst : seg.instructions) { text += fmt::format("    {}\n", inst); }
         }
 
-        out += "\n";
+        text += "\n";
+        rendered.emplace_back(sort_key(fn), std::move(text));
     }
 
+    std::ranges::sort(rendered);
+    std::string out;
+    for (const auto& item : mod.items) { out += fmt::format("{}\n", item); }
+    for (const auto& [key, text] : rendered) { out += text; }
     return out;
 }
 
