@@ -118,7 +118,6 @@ TEST_CASE("@typeInfo and @Union carry a union's tag enum") {
 }
 
 TEST_CASE("A tagged union's payload slot takes its most aligned member's alignment") {
-    // Layout queries agree with the stride LLVM gives an array of the union
     CHECK(helpers::compile_and_run(R"(
         const N = union(enum) { a: u8, b: i32 };
         const L = union(enum) { a: u8, b: i64 };
