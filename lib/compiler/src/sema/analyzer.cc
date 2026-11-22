@@ -323,7 +323,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     collect_symbols(*module);
     // A std module tested as the root resolves in the order std imports it
     if (const auto std_mod{modules_.find_loaded_library_module("std")};
-        std_mod && &*std_mod != module.get() && reaches_module(*std_mod, *module)) {
+        std_mod && std_mod != module.get() && reaches_module(*std_mod, *module)) {
         resolve_types(*std_mod);
     }
     resolve_types(*module);

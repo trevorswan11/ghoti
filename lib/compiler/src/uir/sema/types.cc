@@ -1,4 +1,4 @@
-#include <cstdint>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -6,8 +6,10 @@
 #include <gsl/span>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/target.hh"
@@ -39,11 +41,12 @@ namespace {
 
 auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index {
     if (const auto small{value.to_i128()}) {
-        if (*small >= static_cast<i128>(INT64_MIN) && *small <= static_cast<i128>(INT64_MAX)) {
+        if (*small >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
+            *small <= static_cast<i128>(std::numeric_limits<i64>::max())) {
             return pool.intern(static_cast<i64>(*small), type);
         }
 
-        if (*small >= 0 && *small <= static_cast<i128>(UINT64_MAX)) {
+        if (*small >= 0 && *small <= static_cast<i128>(std::numeric_limits<u64>::max())) {
             return pool.intern(static_cast<u64>(*small), type);
         }
 
@@ -279,7 +282,7 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     const auto coerced{TRY(coerce_to(len, usize_type, src, {.what = use_site::kind::STORE}))};
     const auto value{int_of(comp_.constants().value_at(TRY(require_comptime(coerced, src))))};
     const auto small{value ? value->to_u128() : stdx::none};
-    if (!small || *small > static_cast<u128>(UINT32_MAX)) {
+    if (!small || *small > static_cast<u128>(std::numeric_limits<u32>::max())) {
         return comp_.unsupported(u_, src, "an array length past 32 bits");
     }
 

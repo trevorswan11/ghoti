@@ -16,9 +16,11 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
@@ -236,7 +238,7 @@ auto compilation::collides(const std::string& name, const unit& user, const sour
 
 auto compilation::declared_names(const unit& user, const source& use)
     -> result<gsl::not_null<scoped_names*>> {
-    if (declared_names_) { return &*declared_names_; }
+    if (declared_names_) { return &declared_names_.value(); }
     auto&      names{declared_names_.emplace()};
     const auto note{[&](const unit& u, decl_id decl, bool certain) {
         names.candidates[std::string{u.uir->string(u.uir->decl_at(decl).name)}].emplace_back(
@@ -399,7 +401,7 @@ auto compilation::declare_function(const unit&           u,
             const auto self{self_param_type(member, mod_kind)};
             if (!self) { return unsupported(u, param_src, "this `self` parameter"); }
             self_modifier.emplace(mod_kind);
-            param_types.emplace_back(&*self);
+            param_types.emplace_back(self.get());
             continue;
         }
 
@@ -430,10 +432,12 @@ auto compilation::declare_function(const unit&           u,
     // A non-generic function's attributes are known before its body, for `@typeInfo`
     const auto folded{TRY(sig.fold_attributes(
         attrs,
-        {.target       = ast::attribute_target::FN,
-         .returns_void = return_type.get_kind() == gs::type_kind::VOID_,
-         .declared_by =
-             declares_literal(m, d, func) ? stdx::option<const uir::decl&>{d} : stdx::none}))};
+        {
+            .target       = ast::attribute_target::FN,
+            .returns_void = return_type.get_kind() == gs::type_kind::VOID_,
+            .declared_by =
+                declares_literal(m, d, func) ? stdx::option<const uir::decl&>{d} : stdx::none,
+        }))};
 
     auto  symbol{TRY(member_symbol(u, decl, func, member))};
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
@@ -595,8 +599,7 @@ auto analyzer::analyze_global(decl_id                        decl,
     // An aggregate has no operand form, so the global holds it apart
     const bool is_aggregate{data.is<ip::aggregate_value>() || data.is<ip::union_value>()};
 
-    // One holding types only exists at compile time, so it has no storage, and neither does a
-    // compile-time slice, which each runtime use backs with an array of its own
+    // One holding types or is a comptime slice only exists at compile time and has no storage
     if (is_aggregate && !is_mutable &&
         (holds_types(type) || type.get_kind() == gs::type_kind::SLICE)) {
         return stored;

@@ -13,13 +13,15 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
-#include "compiler/codegen/target.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
+#include "stdx/assert.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -43,10 +45,13 @@ auto analyzer::info_union(std::string_view tag, stdx::option<ip::index> payload,
     -> result<ip::index> {
     auto& pool{comp_.constants()};
     auto& info{*TRY(comp_.prelude_type("TypeInfo", u_, src))};
-    return pool.intern(ip::union_value{.active_field = std::string{tag},
-                                       .payload      = {payload.value_or(pool.intern(
-                                           ip::void_value{}, builtin(gs::type_kind::VOID_)))}},
-                       info);
+    return pool.intern(
+        ip::union_value{
+            .active_field = std::string{tag},
+            .payload      = {payload.value_or(
+                pool.intern(ip::void_value{}, builtin(gs::type_kind::VOID_)))},
+        },
+        info);
 }
 
 auto analyzer::info_variant(std::string_view enum_name, std::string_view variant, const source& src)

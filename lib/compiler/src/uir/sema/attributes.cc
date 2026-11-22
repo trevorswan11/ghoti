@@ -14,6 +14,7 @@
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/side_tables.hh"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <limits>
 #include <ostream>
 #include <string_view>
 #include <vector>
@@ -220,7 +220,9 @@ class formatter {
         -> syntax::doc_id;
     auto consume_trailing_comment(usize line) -> syntax::doc_id;
     // Comments before the closing brace at (`brace_line`, `brace_col`); one after it is trailing
-    auto consume_dangling_comments(usize brace_line, usize brace_col = SIZE_MAX) -> syntax::doc_id;
+    auto consume_dangling_comments(usize brace_line,
+                                   usize brace_col = std::numeric_limits<usize>::max())
+        -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;
     // The comment ending `operator_line` when the operand `rhs` starts below it, as in `a + // c`
     auto consume_operator_comment(usize operator_line, node_id rhs) -> syntax::doc_id;

@@ -102,13 +102,12 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
         const auto body{rec.body_field()};
         const auto value{TRY(unevaluated(body, src))};
 
-        // A type operand's type is the type itself, as the old resolver gives it
+        // A type operand's type is the type itself
         const auto known{comptime_value(value)};
         auto& type{known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
                                                               : type_of(value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
 
-        // A signature naming an untyped parameter's type would take a type the old resolver doesn't
         if (!fn_ && !declaring_ && gs::is_comptime_numeric(type.get_kind())) {
             return comp_.unsupported(u_, src, "a signature's `@TypeOf` of an untyped value");
         }
@@ -131,8 +130,7 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
 }
 
 auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> result<operand> {
-    // A runtime body's operand is analyzed into a function no one emits, even from a comptime
-    // part of that body, since only its type is wanted
+    // A runtime body's operand is analyzed into a function no one emits
     if (!gir_fn_) {
         const auto out{TRY(analyze_body(body))};
         if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }

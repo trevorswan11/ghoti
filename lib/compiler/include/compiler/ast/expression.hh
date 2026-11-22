@@ -221,7 +221,7 @@ struct function_expr {
         bool                      is_written{false};
         stdx::option<expr_handle> default_value{};
 
-        // Whether the parameter is annotated `type`, as in `comptime T: type`
+        // Whether the parameter is annotated `type`
         [[nodiscard]] constexpr auto spells_type() const noexcept -> bool {
             return explicit_type &&
                    explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE;

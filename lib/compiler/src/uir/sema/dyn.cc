@@ -147,8 +147,8 @@ auto analyzer::coerce_to_dyn(const operand& op, gs::type& target, const source& 
 
     auto&      iface{dyn->get_data().as<gs::types::dyn_t>().interface};
     const auto impls{TRY(comp_.impls_of(*concrete))};
-    const auto applied{std::ranges::find_if(
-        impls, [&](const auto impl) { return impl->interface && &*impl->interface == &iface; })};
+    const auto applied{
+        std::ranges::find_if(impls, [&](const auto impl) { return impl->interface == iface; })};
     if (applied == impls.end()) { return stdx::option<operand>{}; }
     if (is_comptime()) { return comp_.unsupported(u_, src, "a `dyn` value at compile time"); }
 

@@ -278,7 +278,7 @@ auto analyzer::run_for(inst_id                                   inst,
         }
 
         source_values values{
-            .start = stdx::none, .descending = false, .elem = &*elem, .elements = {}};
+            .start = stdx::none, .descending = false, .elem = elem.get(), .elements = {}};
         if (text) {
             for (const auto byte : *text) {
                 values.elements.emplace_back(operand{

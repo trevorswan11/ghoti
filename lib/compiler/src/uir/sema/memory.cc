@@ -60,7 +60,7 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
     }
 
     const auto slot{builder_.emit_alloca(*type)};
-    return place{.address = gir::value{slot, *type}, .pointee = &*type, .is_mutable = true};
+    return place{.address = gir::value{slot, *type}, .pointee = type.get(), .is_mutable = true};
 }
 
 auto analyzer::store_comptime(comptime_place p, const operand& value, const source& src)

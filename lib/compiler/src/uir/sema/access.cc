@@ -629,7 +629,7 @@ auto analyzer::pointer_place(const operand& ptr, const source& src) -> result<pl
 
     const auto value{TRY(as_runtime(ptr, src))};
     TRY(check_not_null(value, src));
-    return place{.address = value, .pointee = &*referent, .is_mutable = writable_through(type)};
+    return place{.address = value, .pointee = referent.get(), .is_mutable = writable_through(type)};
 }
 
 auto analyzer::analyze_deref(inst_id inst) -> result<operand> {

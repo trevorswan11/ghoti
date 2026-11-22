@@ -1,5 +1,5 @@
 #include <algorithm>
-#include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -424,7 +424,8 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
         }
 
         const auto small{next.to_i128()};
-        if (!small || *small > INT64_MAX || *small < INT64_MIN) {
+        if (!small || *small > std::numeric_limits<i64>::max() ||
+            *small < std::numeric_limits<i64>::min()) {
             return comp_.unsupported(u_, src, "an enum value past 64 bits");
         }
 

@@ -328,7 +328,7 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             binding.self_modifier.emplace(how);
             binding.key.args.emplace_back(interned_type(*self));
             binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
-            binding.slots.emplace_back(&*self);
+            binding.slots.emplace_back(self.get());
             continue;
         }
 
@@ -358,8 +358,11 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 binding.mangled_params.emplace_back(comp_.mangle_type(type));
             }
 
-            binding.bindings.emplace_back<param_binding>(
-                {.value = stdx::none, .has_slot = true, .pack_size = args.size() - i});
+            binding.bindings.emplace_back<param_binding>({
+                .value     = stdx::none,
+                .has_slot  = true,
+                .pack_size = args.size() - i,
+            });
             break;
         }
 
@@ -373,7 +376,10 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         const bool binds_type{declared && declared->get_kind() == gs::type_kind::TYPE};
         if ((param_flags & flags::PARAM_COMPTIME) != 0 || binds_type || comptime_numeric_arg) {
             const use_site use{
-                .what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = g.name};
+                .what      = use_site::kind::ARGUMENT,
+                .arg_index = i + 1,
+                .callee    = g.name,
+            };
             const auto index{TRY(comptime_argument(args[i], declared, use, src))};
             auto&      type{declared ? *declared : type_of(arg)};
             sig.bind(param, operand{index});
@@ -567,9 +573,8 @@ auto analyzer::check_bound(analyzer&         sig,
 
         auto&      iface{pool.type_at(*index)};
         const auto impls{TRY(comp_.impls_of(leaf))};
-        if (std::ranges::any_of(impls, [&](const auto applied) {
-                return applied->interface && &*applied->interface == &iface;
-            })) {
+        if (std::ranges::any_of(impls,
+                                [&](const auto applied) { return applied->interface == iface; })) {
             continue;
         }
 
