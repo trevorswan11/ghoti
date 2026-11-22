@@ -160,7 +160,7 @@ reinterpret_constant(llvm::Constant* source, llvm::Type* ty, u64 offset, const l
     return folded;
 }
 
-// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target.
+// Which narrow integers a C caller extends to 32 bits for its callee.
 // RV64 also sign-extends every 32-bit integer, unsigned ones included, to the full register
 enum class narrow_int_rule : u8 {
     NONE,

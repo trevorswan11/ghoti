@@ -109,7 +109,7 @@ class cfg_evaluator {
     // Fires a selected arm's bare `@compileError(...)` statements
     auto fire_eager_compile_errors(const std::vector<ast::stmt_handle>& items) -> void;
 
-    // Records each `@cfgValue` verdict on the module, as the old pipeline's later passes read it
+    // Records each `@cfgValue` verdict on the module
     auto record_results_on(mod::module_t& module) noexcept -> void { recorded_on_.emplace(module); }
 
     [[nodiscard]] auto is_ok() const noexcept -> bool { return ok_; }

@@ -1500,9 +1500,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     if (val.type && sema::is_enum_widenable(*val.type, dest_type)) {
         if (const auto cv{const_eval_.try_eval(*expr_id)}) {
             const auto widened{const_eval_.widen_enum_const(*cv, dest_type)};
-            if (widened.get_type() && &*widened.get_type() == &dest_type) {
-                return materialize_const(widened);
-            }
+            if (widened.get_type() == dest_type) { return materialize_const(widened); }
         }
         return emit_enum_widen(val, dest_type);
     }

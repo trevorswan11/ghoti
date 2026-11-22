@@ -183,7 +183,7 @@ enum class token_type_t : u8 {
     NULLPTR,
     UNREACHABLE,
 
-    BUILTIN, // `@name`: which builtin is carried in the lexeme, as a `builtin_t`
+    BUILTIN, // `@name`
 
     BUILTIN_CFG,
     BUILTIN_CFG_VALUE,

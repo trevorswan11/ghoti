@@ -233,7 +233,7 @@ auto int_literal_expr::parse(syntax::parser& parser)
                                                                  : stdx::string::substr(digits, 2)};
     bool       overflow{false};
     const u128 value{parse_u128(digits_only, std::to_underlying(base), overflow)};
-    // Past 128 bits the literal is still exact, as a `comptime_int` grows as needed
+    // Past 128 bits the literal is still exact bc `comptime_int` grows as needed
     if (overflow && !exact_digits(digits_only, base)) {
         return make_syntax_err("Overflow of literal", syntax::error::INTEGER_OVERFLOW, start_token);
     }

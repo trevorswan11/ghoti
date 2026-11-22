@@ -335,6 +335,15 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
                 bound = un->payload.empty() ? void_value() : operand{un->payload.front()};
             }
 
+            // The old emitter builds a captured aggregate anew at each runtime read
+            const auto known{bound.as_opt<ip::index>()};
+            const bool aggregate{known && !pool.is_type(*known) &&
+                                 (pool.value_at(*known).data.is<ip::aggregate_value>() ||
+                                  pool.value_at(*known).data.is<ip::union_value>())};
+            if (aggregate && !is_comptime()) {
+                return comp_.unsupported(u_, src, "a runtime use of a captured comptime aggregate");
+            }
+
             values_.insert_or_assign(*as_inst(*arm.capture), bound);
         }
 

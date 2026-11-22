@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -25,13 +26,31 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto  args{rec.refs_field()};
     const auto  pack_mask{rec.words_field()};
     if (modifier) { return comp_.unsupported(u_, src, "a call modifier"); }
-    for (const auto word : pack_mask) {
-        if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion"); }
-    }
-
     const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
     const auto callee{TRY(resolve_value(callee_ref, src))};
-    return call_operand(callee, args, src, callee_src.value_or(src));
+    const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
+    if (!expands) { return call_operand(callee, args, src, callee_src.value_or(src)); }
+
+    // `f(rest...)` passes each of the pack's values as an argument of its own
+    const auto generic{callee.as_opt<generic_ref>()};
+    if (!generic) { return comp_.unsupported(u_, src, "a pack expansion into this callee"); }
+    std::vector<call_arg> values;
+    for (usize i{0}; i < args.size(); ++i) {
+        const auto value{TRY(resolve_value(args[i], src))};
+        const bool spread{(pack_mask[i / 32] & (1U << (i % 32))) != 0};
+        const auto pack{value.as_opt<pack_ref>()};
+        if (!spread) {
+            values.emplace_back(call_arg{.value = value, .written = args[i]});
+            continue;
+        }
+
+        if (!pack) { return comp_.unsupported(u_, src, "an expansion of something not a pack"); }
+        for (const auto& element : packs_[pack->index]) {
+            values.emplace_back(call_arg{.value = element, .written = stdx::none});
+        }
+    }
+
+    return call_generic(*generic->fn, std::move(values), src, callee_src.value_or(src));
 }
 
 auto analyzer::call_operand(const operand&       callee,

@@ -72,6 +72,30 @@ auto format_value(const ip::pool& constants, const value& val) -> std::string {
                           [&constants](ip::index at) { return format_constant(constants, at); });
 }
 
+// The symbol-level flags codegen reads, each led by a comma
+auto symbol_flags(stdx::option<ast::symbol_visibility> visibility, stdx::option<u64> alignment)
+    -> std::string {
+    std::string out;
+    if (visibility) {
+        out += fmt::format(", visibility({})", ast::symbol_visibility_name(*visibility));
+    }
+    if (alignment) { out += fmt::format(", align({})", *alignment); }
+    return out;
+}
+
+auto attribute_flags(const sema::resolved_attributes& attrs) -> std::string {
+    std::string out;
+    if (attrs.inlining) {
+        out += fmt::format(", inline({})", ast::inline_mode_name(*attrs.inlining));
+    }
+    if (attrs.naked) { out += ", naked"; }
+    if (attrs.cold) { out += ", cold"; }
+    if (attrs.testing) { out += ", testing"; }
+    if (attrs.no_builtins) { out += ", no_builtins"; }
+    for (const auto& feature : attrs.target_features) { out += fmt::format(", {}", feature); }
+    return out + symbol_flags(attrs.visibility, attrs.alignment);
+}
+
 auto linkage_name(gir::linkage l) noexcept -> std::string_view {
     switch (l) {
     case linkage::INTERNAL: return "internal";
@@ -121,7 +145,12 @@ auto format_instruction(const ip::pool& constants, const instruction& inst, bool
                                                     : "<missing_src>",
                            "<missing_dst>");
     case instruction_kind::ALLOCA:
-        return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), type_str);
+        return fmt::format("{}{} {}{}",
+                           prefix,
+                           instruction_kind_name(inst.kind),
+                           type_str,
+                           show_flags && inst.alignment ? fmt::format(" align({})", *inst.alignment)
+                                                        : "");
     case instruction_kind::MAKE_CALLABLE:
         return fmt::format("{}{} {} {}, @{}",
                            prefix,
@@ -261,7 +290,10 @@ auto dumper::dump(const function& fn) -> void {
                      syntax::ascii_spelling(fn.get_name()),
                      params_str,
                      return_str,
-                     show_flags_ ? fmt::format(" [{}]", linkage_name(fn.get_linkage())) : "");
+                     show_flags_ ? fmt::format(" [{}{}]",
+                                               linkage_name(fn.get_linkage()),
+                                               attribute_flags(fn.get_attributes()))
+                                 : "");
     }
 
     for (const auto& seg : fn.get_segments()) { dump(*seg); }
@@ -276,7 +308,11 @@ auto dumper::dump(const module_t& mod) -> void {
 
     for (const auto& global : mod.get_globals()) {
         const auto kw{global->is_constant ? "const" : "var"};
-        const auto flags{show_flags_ ? fmt::format(" [{}]", linkage_name(global->linkage)) : ""};
+        const auto flags{show_flags_
+                             ? fmt::format(" [{}{}]",
+                                           linkage_name(global->linkage),
+                                           symbol_flags(global->visibility, global->alignment))
+                             : ""};
         if (global->init_value) {
             fmt::println(out_,
                          "{} {}: {} = {}{}",

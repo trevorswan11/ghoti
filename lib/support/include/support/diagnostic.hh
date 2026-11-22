@@ -375,7 +375,7 @@ template <Diagnostic D> class diagnostic_list {
         }
     }
 
-    // Drops later exact repeats, as when several instantiations report the same body error
+    // Drops later exact repeats
     auto remove_duplicates() -> void {
         ankerl::unordered_dense::set<std::string> seen;
         std::erase_if(diagnostics_,

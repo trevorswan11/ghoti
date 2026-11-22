@@ -104,9 +104,9 @@ namespace {
     return calls_folded_function(uir_text, legacy_text);
 }
 
-// The old dump without the parameterized impl methods UIR's dump doesn't define
-[[nodiscard]] auto without_unused_impl_methods(std::string_view legacy_text,
-                                               std::string_view uir_text) -> std::string {
+// The old dump without the impl methods and type-ctor members UIR analyzes on demand and never used
+[[nodiscard]] auto without_unused_on_demand(std::string_view legacy_text, std::string_view uir_text)
+    -> std::string {
     std::string kept;
     for (usize at{0}; at < legacy_text.size();) {
         const auto next{legacy_text.find("\nfn ", at + 1)};
@@ -114,9 +114,13 @@ namespace {
         const auto function{stdx::string::substr(legacy_text, at, end - at)};
         const auto header_end{function.find('(')};
         const auto name{stdx::string::substr(function, 0, header_end)};
-        const bool unused_impl_method{function.starts_with("fn pimpl#") &&
-                                      uir_text.find(name) == std::string_view::npos};
-        if (!unused_impl_method) { kept += function; }
+        // A type-ctor instance's member is `Ctor__args.member`, analyzed on demand too (Q5)
+        const auto mangled{name.find("__")};
+        const bool on_demand{function.starts_with("fn pimpl#") ||
+                             (mangled != std::string_view::npos &&
+                              name.find('.', mangled) != std::string_view::npos)};
+        const bool unused{on_demand && uir_text.find(name) == std::string_view::npos};
+        if (!unused) { kept += function; }
         at = end;
     }
 
@@ -136,6 +140,8 @@ constexpr std::array LEGACY_BUG_TESTS{
     // The old evaluator can't run a call returning an untyped module-level `const` as a float, so
     // `@intFromFloat(i32, as_float())` stays at runtime
     std::string_view{"A later global is typed on its own, not by the `return` that first reads it"},
+    // A compile-time slice global read at runtime stores its backing array into the slice's slot
+    std::string_view{"A compile-time slice used at runtime is backed by a stack array"},
 };
 
 [[nodiscard]] auto shows_legacy_bug() -> bool {
@@ -258,7 +264,7 @@ auto diff_pipelines(mod::source_loader&          loader,
     if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
         return {.status = uir_diff_status::FOLD_PLACEMENT};
     }
-    if (without_unused_impl_methods(legacy_text, uir_text) == uir_text) {
+    if (without_unused_on_demand(legacy_text, uir_text) == uir_text) {
         return {.status = uir_diff_status::ON_USE_IMPL};
     }
     if (shows_legacy_bug()) { return {.status = uir_diff_status::LEGACY_BUG}; }
@@ -311,7 +317,7 @@ auto uir_gir(std::string_view source) -> std::string {
     return normalize_gir(dump_with_flags(*out.gir));
 }
 
-auto report_uir_diff(const uir_diff& diff) -> void {
+auto report_uir_diff(const uir_diff& diff, std::string_view label) -> void {
     const auto path{get_env("GHOTI_TEST_UIR_DIFF_REPORT")};
     if (!path) { return; }
     std::ofstream out{std::string{*path}, std::ios::app | std::ios::binary};
@@ -320,7 +326,8 @@ auto report_uir_diff(const uir_diff& diff) -> void {
     fmt::println(out,
                  "{}\t{}\t{}",
                  uir_diff_status_name(diff.status),
-                 Catch::getResultCapture().getCurrentTestName(),
+                 label.empty() ? Catch::getResultCapture().getCurrentTestName()
+                               : std::string{label},
                  flat);
 }
 

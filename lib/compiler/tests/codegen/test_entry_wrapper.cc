@@ -537,7 +537,7 @@ TEST_CASE("@export as 'main' picks the entry point") {
     CHECK(llvm_mod->getFunction("main"));
 }
 
-TEST_CASE("std/start.gh analyzes on its own, as an editor opens it") {
+TEST_CASE("std/start.gh analyzes on its own") {
     std::ostringstream  errors;
     mod::file_loader    loader;
     mod::module_manager manager{loader};

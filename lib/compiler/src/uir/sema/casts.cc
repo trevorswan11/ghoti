@@ -463,7 +463,7 @@ auto analyzer::fold_cast(builtin_t       which,
                gs::comptime_int_fits(value, target, comp_.ptr_bits());
     }};
 
-    // The low `bits` of an integer of any width, as the two's complement `u128` they spell
+    // The low `bits` of an integer of any width
     const auto low_bits{[](const big_int& value) -> stdx::option<u128> {
         if (const auto small{value.to_i128()}) { return static_cast<u128>(*small); }
         return value.to_u128();
@@ -624,7 +624,7 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
                 "`@boolFromInt` operand must be an integer or pointer; found '{}'", display(from)));
         }
 
-        // A runtime body compares even a known operand, as the old emitter did
+        // A runtime body compares even a known operand
         if (known && is_comptime()) {
             const auto& v{pool.value_at(*known)};
             if (const auto exact{int_of(v)}) {
@@ -783,7 +783,7 @@ auto analyzer::int_cast_guard(const gir::value& value, const gs::type& target, c
     auto&      pool{comp_.constants()};
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
 
-    // The target's smallest or largest value, as a constant of the operand's type
+    // The target's smallest or largest value
     const auto limit{[&](bool upper) {
         const big_int one{u128{1}};
         const auto    span{one.shl(to.is_signed ? to.bits - 1U : to.bits)};

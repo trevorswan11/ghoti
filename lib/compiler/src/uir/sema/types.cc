@@ -1,11 +1,18 @@
-#include <cstdint>
+#include <limits>
+#include <string_view>
 #include <utility>
 
+#include <fmt/format.h>
 #include <gsl/span>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/primitive.hh"
+#include "compiler/codegen/c_abi.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
@@ -34,11 +41,12 @@ namespace {
 
 auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index {
     if (const auto small{value.to_i128()}) {
-        if (*small >= static_cast<i128>(INT64_MIN) && *small <= static_cast<i128>(INT64_MAX)) {
+        if (*small >= static_cast<i128>(std::numeric_limits<i64>::min()) &&
+            *small <= static_cast<i128>(std::numeric_limits<i64>::max())) {
             return pool.intern(static_cast<i64>(*small), type);
         }
 
-        if (*small >= 0 && *small <= static_cast<i128>(UINT64_MAX)) {
+        if (*small >= 0 && *small <= static_cast<i128>(std::numeric_limits<u64>::max())) {
             return pool.intern(static_cast<u64>(*small), type);
         }
 
@@ -163,11 +171,84 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
 
     auto&      ctx{comp_.ctx()};
     const auto mut{container_mutability(bits)};
+
+    // `&fn(...)` borrows the same callable that a bare `fn(...)` already is
+    const auto elem_inst{as_inst(*record(inst).ref_field())};
+    if (t == tag::ref_type && elem_inst && mod().tag_of(*elem_inst) == tag::fn_type) {
+        return interned_type(elem);
+    }
+
     switch (t) {
     case tag::ptr_type: return interned_type(ctx.get_pointer(mut, elem));
     case tag::ref_type: return interned_type(ctx.get_reference(mut, elem));
     default: return interned_type(ctx.get_slice(mut, (bits & flags::SENTINEL) != 0, elem));
     }
+}
+
+auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
+    auto        rec{record(inst)};
+    const auto& src{src_of(inst)};
+    const auto  params{rec.refs_field()};
+    const auto  names{rec.count()};
+    for (u32 i{0}; i < names; ++i) { rec.skip_str(); }
+    const auto ret{*rec.ref_field()};
+    const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
+    const auto bits{rec.u32_field()};
+    const bool is_extern{(bits & flags::EXTERN_FN) != 0};
+    if ((bits & (flags::DYN_FN | flags::IMPL_FN)) != 0) {
+        return comp_.unsupported(u_, src, "a `dyn fn` or `impl fn` type");
+    }
+
+    if (!is_extern && (bits & flags::EXPLICIT_CONV) != 0) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::CALLCONV_REQUIRES_EXTERN_FN,
+                            "`callconv(...)` only applies to a thin `extern fn(...)` type; an "
+                            "erased `fn(...)` callable has no C calling convention");
+    }
+
+    // Neither end of a function type may be inferred or have no size
+    const auto check{[&](gs::type& type, const source& at, std::string_view end) -> result<void> {
+        if (type.get_kind() == gs::type_kind::AUTO) {
+            return comp_.report(u_,
+                                at,
+                                gs::error::ILLEGAL_AUTO_USAGE,
+                                fmt::format("Function types cannot have 'auto' {}", end));
+        }
+
+        if (type.get_kind() == gs::type_kind::OPAQUE) {
+            return comp_.report(u_,
+                                at,
+                                gs::error::ILLEGAL_OPAQUE_TYPE,
+                                "An 'opaque' value has no size, so it can't be passed or returned; "
+                                "use a pointer to it instead");
+        }
+
+        return {};
+    }};
+
+    auto& ctx{comp_.ctx()};
+    auto  param_types{ctx.pool.get_many_unsafe(params.size())};
+    for (usize i{0}; i < params.size(); ++i) {
+        const auto& at{as_inst(params[i]) ? src_of(*as_inst(params[i])) : src};
+        auto&       type{*TRY(resolve_type(params[i], at))};
+        TRY(check(type, at, "parameter types"));
+        param_types[i] = &type;
+    }
+
+    const auto& ret_src{as_inst(ret) ? src_of(*as_inst(ret)) : src};
+    auto&       return_type{*TRY(resolve_type(ret, ret_src))};
+    TRY(check(return_type, ret_src, "return type"));
+    if (is_extern) {
+        const auto triple{codegen::resolve_target_triple(ctx.target_opts.triple_str)};
+        if (!codegen::has_c_abi_model(triple, codegen::to_llvm_callconv(conv, triple))) {
+            return comp_.unsupported(
+                u_, src, "an `extern fn` type on a target without a C ABI model");
+        }
+    }
+
+    return interned_type(ctx.get_function(
+        param_types, return_type, (bits & flags::VARIADIC) != 0, conv, !is_extern));
 }
 
 auto analyzer::analyze_array_type(inst_id inst) -> result<operand> {
@@ -201,7 +282,7 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     const auto coerced{TRY(coerce_to(len, usize_type, src, {.what = use_site::kind::STORE}))};
     const auto value{int_of(comp_.constants().value_at(TRY(require_comptime(coerced, src))))};
     const auto small{value ? value->to_u128() : stdx::none};
-    if (!small || *small > static_cast<u128>(UINT32_MAX)) {
+    if (!small || *small > static_cast<u128>(std::numeric_limits<u32>::max())) {
         return comp_.unsupported(u_, src, "an array length past 32 bits");
     }
 

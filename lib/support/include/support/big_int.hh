@@ -44,7 +44,7 @@ class big_int {
     [[nodiscard]] auto unsigned_bits() const noexcept -> stdx::option<u64>;
     [[nodiscard]] auto fits(u64 bits, bool is_signed) const noexcept -> bool;
 
-    // The value modulo 2^`width`, as little-endian 64-bit words
+    // The value modulo 2^`width` as little-endian 64-bit words
     [[nodiscard]] auto to_words(u64 width) const -> std::vector<u64>;
     // The two's complement integer the lowest `width` bits of `words` spell
     [[nodiscard]] static auto from_words(const std::vector<u64>& words, u64 width, bool is_signed)

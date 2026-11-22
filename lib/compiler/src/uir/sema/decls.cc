@@ -16,9 +16,11 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
@@ -236,7 +238,7 @@ auto compilation::collides(const std::string& name, const unit& user, const sour
 
 auto compilation::declared_names(const unit& user, const source& use)
     -> result<gsl::not_null<scoped_names*>> {
-    if (declared_names_) { return &*declared_names_; }
+    if (declared_names_) { return &declared_names_.value(); }
     auto&      names{declared_names_.emplace()};
     const auto note{[&](const unit& u, decl_id decl, bool certain) {
         names.candidates[std::string{u.uir->string(u.uir->decl_at(decl).name)}].emplace_back(
@@ -375,7 +377,6 @@ auto compilation::declare_function(const unit&           u,
         return unsupported(u, src, "a variadic, extern, erased or `impl` function");
     }
 
-    if (!attrs.empty()) { return unsupported(u, src, "function attributes"); }
     if (bound_count != 0 || is_generic(u, func)) { return declare_generic(u, decl, func, member); }
 
     analyzer sig{*this, u};
@@ -400,7 +401,7 @@ auto compilation::declare_function(const unit&           u,
             const auto self{self_param_type(member, mod_kind)};
             if (!self) { return unsupported(u, param_src, "this `self` parameter"); }
             self_modifier.emplace(mod_kind);
-            param_types.emplace_back(&*self);
+            param_types.emplace_back(self.get());
             continue;
         }
 
@@ -428,6 +429,16 @@ auto compilation::declare_function(const unit&           u,
     for (usize i{0}; i < param_types.size(); ++i) { span[i] = param_types[i]; }
     auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
 
+    // A non-generic function's attributes are known before its body, for `@typeInfo`
+    const auto folded{TRY(sig.fold_attributes(
+        attrs,
+        {
+            .target       = ast::attribute_target::FN,
+            .returns_void = return_type.get_kind() == gs::type_kind::VOID_,
+            .declared_by =
+                declares_literal(m, d, func) ? stdx::option<const uir::decl&>{d} : stdx::none,
+        }))};
+
     auto  symbol{TRY(member_symbol(u, decl, func, member))};
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
         .owner         = &units_[u.index],
@@ -448,6 +459,7 @@ auto compilation::declare_function(const unit&           u,
         .self_type     = member.self_type,
         .self_modifier = self_modifier,
         .scope         = member.scope,
+        .attributes    = folded,
     }))};
     request_body(fn);
     return function_ref{&fn};
@@ -468,10 +480,6 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         return comp_.unsupported(u_, src, "an extern, export, weak or comptime declaration");
     }
 
-    if (!mod().body(d.attrs_body).empty()) {
-        return comp_.unsupported(u_, src, "declaration attributes");
-    }
-
     if (!d.value_body) { return comp_.unsupported(u_, src, "a declaration without a value"); }
 
     stdx::option<gs::type&> declared;
@@ -489,6 +497,7 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     }
 
     if (!value) { return stdx::err{value.error()}; }
+    const auto attrs{TRY(decl_attributes(d, *value))};
 
     // A module alias has no storage
     if (value->is<module_ref>()) {
@@ -509,7 +518,7 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         declared.emplace(comp_.ctx().default_concrete(type_of(*value)));
     }
 
-    return analyze_global(decl, *value, declared, src);
+    return analyze_global(decl, *value, declared, attrs, src);
 }
 
 auto analyzer::declares_type(const decl& d) const -> bool {
@@ -526,16 +535,17 @@ auto analyzer::declares_type(const decl& d) const -> bool {
     }
 }
 
-auto analyzer::analyze_global(decl_id                 decl,
-                              const operand&          value,
-                              stdx::option<gs::type&> declared,
-                              const source&           src) -> result<operand> {
+auto analyzer::analyze_global(decl_id                        decl,
+                              const operand&                 value,
+                              stdx::option<gs::type&>        declared,
+                              const gs::resolved_attributes& attrs,
+                              const source&                  src) -> result<operand> {
     const auto& d{mod().decl_at(decl)};
     const auto  constant_index{comptime_value(value)};
     if (!constant_index) {
         if (is_untyped_literal(value)) {
             if (!declared && value.is<cast_ref>()) {
-                return analyze_global(decl, TRY(concrete(value, src)), declared, src);
+                return analyze_global(decl, TRY(concrete(value, src)), declared, attrs, src);
             }
 
             if (!declared) {
@@ -546,6 +556,7 @@ auto analyzer::analyze_global(decl_id                 decl,
                 decl,
                 TRY(coerce_to(value, *declared, src, {.what = use_site::kind::STORE})),
                 declared,
+                attrs,
                 src);
         }
 
@@ -569,7 +580,7 @@ auto analyzer::analyze_global(decl_id                 decl,
 
         // Only a module-level alias is listed, by its name alone since it claims no symbol
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
-        if (!declared && !declares_type(d) && module_level) {
+        if (!declared && !declares_type(d) && module_level && !comp_.is_prelude(u_)) {
             comp_.gir().add_type(std::string{mod().string(d.name)}, pool.type_at(*constant_index));
         }
 
@@ -588,8 +599,11 @@ auto analyzer::analyze_global(decl_id                 decl,
     // An aggregate has no operand form, so the global holds it apart
     const bool is_aggregate{data.is<ip::aggregate_value>() || data.is<ip::union_value>()};
 
-    // One holding types only exists at compile time, so it has no storage
-    if (is_aggregate && !is_mutable && holds_types(type)) { return stored; }
+    // One holding types or is a comptime slice only exists at compile time and has no storage
+    if (is_aggregate && !is_mutable &&
+        (holds_types(type) || type.get_kind() == gs::type_kind::SLICE)) {
+        return stored;
+    }
 
     // A ctor instance's scalar constant is folded wherever it is read
     if (scope_ && scope_->in_call && !is_mutable && !is_aggregate) { return stored; }
@@ -602,9 +616,13 @@ auto analyzer::analyze_global(decl_id                 decl,
                                             : stdx::option<gir::value>{constant(index, type)},
                                         compilation::linkage_of(d))};
     if (is_aggregate) { global.const_init.emplace(index); }
-    global.is_weak = d.has(decl_flags::WEAK);
+    global.is_weak    = d.has(decl_flags::WEAK);
+    global.visibility = attrs.visibility;
+    global.alignment  = attrs.alignment;
     comp_.note_storage(u_, decl);
-    if (!is_mutable && !is_aggregate) { return stored; }
+    // A string array is read where the global stores it
+    const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
+    if (!is_mutable && !is_aggregate && !text_array) { return stored; }
     const auto& symbol{comp_.own_symbol(u_, decl, global.name)};
     if (!is_mutable) { return global_const{.symbol = &symbol, .type = &type, .value = index}; }
     return global_ref{&symbol, &type};

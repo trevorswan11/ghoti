@@ -39,8 +39,8 @@ TEST_CASE("A type is created once per key and found again by its index") {
     auto&           pool{types.intern()};
 
     auto& i32_type{*types[int_key(32, true)]};
-    CHECK(&*types[int_key(32, true)] == &i32_type);
-    CHECK(&*types[int_key(32, false)] != &i32_type);
+    CHECK(types[int_key(32, true)] == &i32_type);
+    CHECK(types[int_key(32, false)] != &i32_type);
     CHECK(pool.is_type(i32_type.get_ip_index()));
     CHECK(&pool.type_at(i32_type.get_ip_index()) == &i32_type);
 }
@@ -61,7 +61,7 @@ TEST_CASE("Equal values share an index, and a different type or payload doesn't"
     CHECK(pool.intern(u64{5}, i32_type) != five);
     CHECK_FALSE(pool.is_type(five));
     CHECK(pool.value_at(five).data.as<i64>() == 5);
-    CHECK(&*pool.value_at(five).type == &i32_type);
+    CHECK(pool.value_at(five).type == &i32_type);
 }
 
 TEST_CASE("Floats are interned by bit pattern") {

@@ -43,7 +43,7 @@ TEST_CASE("unsigned and shifted compile-time results wrap to their type like run
     )") == 0);
 }
 
-TEST_CASE("signed compile-time overflow is an error, as it is a runtime panic") {
+TEST_CASE("signed compile-time overflow is an error") {
     const auto overflow = [](std::string_view type, std::pair<usize, usize> at) {
         return sema::diagnostic{fmt::format("Signed integer overflow in compile-time constant "
                                             "expression: the result does not fit '{}'",

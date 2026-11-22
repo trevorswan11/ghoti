@@ -50,7 +50,7 @@ const write_formatted = fn(
     return .done;
 };
 
-/// Prints `fmt` formatted with `args` to stdout, as `std.fmt.format` does
+/// Prints `fmt` formatted with `args` to stdout
 pub const print = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
     return write_formatted(stdout(), false, fmt, args...);
 };
@@ -60,7 +60,7 @@ pub const println = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
     return write_formatted(stdout(), true, fmt, args...);
 };
 
-/// Prints `fmt` formatted with `args` to stderr, as `std.fmt.format` does
+/// Prints `fmt` formatted with `args` to stderr
 pub const eprint = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
     return write_formatted(stderr(), false, fmt, args...);
 };

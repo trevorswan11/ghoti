@@ -38,7 +38,7 @@ TEST_CASE("A catch-all arm is tried last wherever it's written") {
         )") == 21);
     }
 
-    SECTION("between arms, as a statement") {
+    SECTION("between arms as a statement") {
         CHECK(helpers::compile_and_run(R"(
             pub const main = fn(): i32 {
                 let mut x: i32 = 0;

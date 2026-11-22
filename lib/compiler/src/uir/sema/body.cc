@@ -103,6 +103,8 @@ auto analyzer::analyze_function() -> result<void> {
     const auto    params{params_of(mod(), rec.body_field())};
     rec.skip_body();
     const auto body{rec.body_field()};
+    rec.skip_u32().skip_u32();
+    const auto attrs{rec.body_field()};
     for (usize i{0}, slot{0}; const auto param : params) {
         const auto binding{fn_->bindings.empty() ? stdx::option<param_binding>{}
                                                  : stdx::option<param_binding>{fn_->bindings[i]}};
@@ -113,7 +115,20 @@ auto analyzer::analyze_function() -> result<void> {
         record_reader p{record(param)};
         const auto    name{p.str_field()};
         p.skip_body().skip_body();
-        const auto  param_flags{p.u32_field()};
+        const auto param_flags{p.u32_field()};
+        if (binding && binding->pack_size) {
+            std::vector<operand> elements;
+            for (usize k{0}; k < *binding->pack_size; ++k) {
+                auto&       type{*fn_->params[slot++]};
+                const auto& added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
+                elements.emplace_back(gir::value{added.id, type});
+            }
+
+            values_.insert_or_assign(param, pack_ref{static_cast<u32>(packs_.size())});
+            packs_.emplace_back(std::move(elements));
+            continue;
+        }
+
         auto&       type{*fn_->params[slot++]};
         const bool  discarded{(param_flags & flags::PARAM_DISCARDED) != 0 || name == "_"};
         const auto& added{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
@@ -131,6 +146,19 @@ auto analyzer::analyze_function() -> result<void> {
             values_.insert_or_assign(param, value);
         }
     }
+
+    // Attribute arguments may read the comptime parameters bound above
+    if (!fn_->attributes) {
+        const auto& d{mod().decl_at(fn_->decl)};
+        fn_->attributes = TRY(fold_attributes(
+            attrs,
+            {.target       = ast::attribute_target::FN,
+             .returns_void = fn_->return_type->get_kind() == gs::type_kind::VOID_,
+             .declared_by  = declares_literal(mod(), d, fn_->func) ? stdx::option<const decl&>{d}
+                                                                   : stdx::none}));
+    }
+
+    gir_fn_->set_attributes(*fn_->attributes);
 
     // `@setEval*Limit` in the body scopes over the rest of it
     const auto saved{comp_.limits()};
@@ -242,6 +270,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::eval_branch:     return analyze_eval_branch(inst);
     case tag::unreachable:     return analyze_unreachable(inst);
     case tag::builtin:         return analyze_builtin(inst);
+    case tag::type_of:         return analyze_type_of(inst);
     case tag::loop:            return analyze_loop(inst);
     case tag::condbr:          return analyze_condbr(inst);
     case tag::break_to:        return analyze_break(inst);
@@ -254,6 +283,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::ref_type:
     case tag::slice_type:      return analyze_elem_type(inst, t);
     case tag::array_type:      return analyze_array_type(inst);
+    case tag::fn_type:         return analyze_fn_type(inst);
     case tag::struct_decl:     return analyze_nominal_decl(inst, gs::type_kind::STRUCT);
     case tag::union_decl:      return analyze_nominal_decl(inst, gs::type_kind::UNION);
     case tag::enum_decl:       return analyze_nominal_decl(inst, gs::type_kind::ENUM);
@@ -380,7 +410,8 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [&](enum_literal) -> gs::type& { return builtin(gs::type_kind::ENUM_LITERAL); },
         [](const global_const& g) -> gs::type& { return *g.type; },
         [&](const module_ref&) -> gs::type& { return builtin(gs::type_kind::VOID_); },
-        [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
+        [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
+        [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

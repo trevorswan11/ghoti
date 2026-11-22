@@ -121,7 +121,7 @@ auto compilation::is_generic(const unit& u, inst_id func) const -> bool {
         const auto type_body{p.body_field()};
         p.skip_body();
         const auto param_flags{p.u32_field()};
-        return (param_flags & flags::PARAM_COMPTIME) != 0 ||
+        return (param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK)) != 0 ||
                is_generic_type(written_type(m, type_body)) || is_auto_pattern(m, type_body);
     });
 }
@@ -240,17 +240,18 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
     }
 
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
-        .owner         = g.owner,
-        .decl          = g.decl,
-        .func          = g.func,
-        .symbol        = std::move(symbol),
-        .type          = &fn_type,
-        .params        = std::move(binding.slots),
-        .return_type   = &ret,
-        .linkage       = gir::linkage::INTERNAL,
-        .weak          = g.weak,
-        .queued        = false,
-        .comptime_only = ret.get_kind() == gs::type_kind::TYPE,
+        .owner       = g.owner,
+        .decl        = g.decl,
+        .func        = g.func,
+        .symbol      = std::move(symbol),
+        .type        = &fn_type,
+        .params      = std::move(binding.slots),
+        .return_type = &ret,
+        .linkage     = gir::linkage::INTERNAL,
+        .weak        = g.weak,
+        .queued      = false,
+        .comptime_only =
+            ret.get_kind() == gs::type_kind::TYPE || gs::is_comptime_numeric(ret.get_kind()),
         .bindings      = std::move(binding.bindings),
         .infers_return = binding.infers_return,
         .source_name   = std::string{g.owner->uir->string(g.owner->uir->decl_at(g.decl).name)},
@@ -327,12 +328,42 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             binding.self_modifier.emplace(how);
             binding.key.args.emplace_back(interned_type(*self));
             binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
-            binding.slots.emplace_back(&*self);
+            binding.slots.emplace_back(self.get());
             continue;
         }
 
-        if ((param_flags & flags::PARAM_PACK) != 0 || modifier != 0) {
-            return comp_.unsupported(*g.owner, param_src, "a pack or modified parameter");
+        if (modifier != 0) {
+            return comp_.unsupported(*g.owner, param_src, "a modified parameter");
+        }
+
+        // A pack takes every argument left, each in a GIR parameter of its own
+        if ((param_flags & flags::PARAM_PACK) != 0) {
+            if ((param_flags & flags::PARAM_COMPTIME) != 0 || i + 1 != params.size()) {
+                return comp_.unsupported(*g.owner, param_src, "a comptime or leading pack");
+            }
+
+            const bool              untyped{type_body.empty() ||
+                                            written_type(m, type_body) == well_known::auto_type};
+            stdx::option<gs::type&> declared;
+            if (!untyped) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
+            for (usize j{i}; j < args.size(); ++j) {
+                auto& type{declared ? *declared : inferred_type(args[j].value)};
+                if (!gs::is_value_type(type.get_kind()) ||
+                    gs::is_comptime_numeric(type.get_kind())) {
+                    return comp_.unsupported(*g.owner, param_src, "a pack of comptime-only values");
+                }
+
+                binding.key.args.emplace_back(interned_type(type));
+                binding.slots.emplace_back(&type);
+                binding.mangled_params.emplace_back(comp_.mangle_type(type));
+            }
+
+            binding.bindings.emplace_back<param_binding>({
+                .value     = stdx::none,
+                .has_slot  = true,
+                .pack_size = args.size() - i,
+            });
+            break;
         }
 
         const auto&             arg{args[i].value};
@@ -345,7 +376,10 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         const bool binds_type{declared && declared->get_kind() == gs::type_kind::TYPE};
         if ((param_flags & flags::PARAM_COMPTIME) != 0 || binds_type || comptime_numeric_arg) {
             const use_site use{
-                .what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = g.name};
+                .what      = use_site::kind::ARGUMENT,
+                .arg_index = i + 1,
+                .callee    = g.name,
+            };
             const auto index{TRY(comptime_argument(args[i], declared, use, src))};
             auto&      type{declared ? *declared : type_of(arg)};
             sig.bind(param, operand{index});
@@ -359,7 +393,11 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 continue;
             }
 
-            binding.mangled_params.emplace_back(comp_.mangle_type(type));
+            // A string argument keeps its literal's array type in the symbol
+            const bool text{!comp_.constants().is_type(index) &&
+                            comp_.constants().value_at(index).data.is<std::string>() &&
+                            type_of(arg).get_kind() == gs::type_kind::ARRAY};
+            binding.mangled_params.emplace_back(comp_.mangle_type(text ? type_of(arg) : type));
             binding.comptime_suffixes.emplace_back(fmt::format(
                 "_cx{}", gir::const_value::from_interned(comp_.constants(), index).mangle()));
             continue;
@@ -435,15 +473,14 @@ auto analyzer::call_generic(generic_fn&           g,
         p.skip_str().skip_body().skip_body();
         return (p.u32_field() & flags::PARAM_PACK) != 0;
     })};
-    if (has_pack) {
-        return comp_.unsupported(u_, src, "a call of a function with a pack parameter");
-    }
-    if (args.size() != param_count) {
-        return comp_.report(
-            u_,
-            callee_src,
-            gs::error::ARITY_MISMATCH,
-            fmt::format("Expected {} arguments, found {}", param_count, args.size()));
+    if (has_pack ? args.size() + 1 < param_count : args.size() != param_count) {
+        return comp_.report(u_,
+                            callee_src,
+                            gs::error::ARITY_MISMATCH,
+                            fmt::format("Expected {}{} arguments, found {}",
+                                        has_pack ? "at least " : "",
+                                        has_pack ? param_count - 1 : param_count,
+                                        args.size()));
     }
 
     auto  binding{TRY(bind_generic(g, args, src))};
@@ -451,8 +488,15 @@ auto analyzer::call_generic(generic_fn&           g,
 
     // Each argument a parameter's slot takes, with a type parameter's left undefined
     std::vector<operand> values;
-    for (usize i{0}; i < args.size(); ++i) {
+    for (usize i{0}; i < target.bindings.size(); ++i) {
         const auto& bound{target.bindings[i]};
+        if (bound.pack_size) {
+            for (usize j{i}; j < args.size(); ++j) {
+                values.emplace_back(std::move(args[j].value));
+            }
+            break;
+        }
+
         if (!bound.has_slot) { continue; }
         if (bound.value) {
             values.emplace_back(
@@ -529,9 +573,8 @@ auto analyzer::check_bound(analyzer&         sig,
 
         auto&      iface{pool.type_at(*index)};
         const auto impls{TRY(comp_.impls_of(leaf))};
-        if (std::ranges::any_of(impls, [&](const auto applied) {
-                return applied->interface && &*applied->interface == &iface;
-            })) {
+        if (std::ranges::any_of(impls,
+                                [&](const auto applied) { return applied->interface == iface; })) {
             continue;
         }
 

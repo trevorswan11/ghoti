@@ -1,5 +1,5 @@
 #include <algorithm>
-#include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -289,6 +289,7 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     auto&      ctx{comp_.ctx()};
     const auto count{rec.count()};
     auto       field_types{ctx.pool.get_many_pending(count)};
+    auto       alignments{ctx.arena.make_span<u64>(count)};
     for (u32 i{0}; i < count; ++i) {
         const auto name{rec.str_field()};
         rec.skip_u32();
@@ -296,7 +297,8 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         rec.skip_body();
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
-        if (!attrs.empty()) { return comp_.unsupported(u_, field_src, "field attributes"); }
+        const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
+        alignments[i]  = resolved.alignment.value_or(0);
         field_types[i] = *TRY(field_type_of(type_body, name, field_src));
     }
 
@@ -307,7 +309,7 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
                                          *u_.source,
                                          (agg_flags & flags::AGG_EXTERN) != 0,
                                          false,
-                                         ctx.arena.make_span<u64>(count),
+                                         alignments,
                                          gs::declared_names(ctx.arena, *u_.source, fields));
     return {};
 }
@@ -358,7 +360,14 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto  type_body{rec.body_field()};
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
-        if (!attrs.empty()) { return comp_.unsupported(u_, field_src, "field attributes"); }
+        const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
+        if (resolved.alignment) {
+            DISCARD(comp_.report(u_,
+                                 source{ast::node_id{expr.fields[i].name}},
+                                 gs::error::ILLEGAL_ATTRIBUTE,
+                                 "Attribute 'align' is not supported on union fields"));
+        }
+
         field_types[i] = *TRY(field_type_of(type_body, name, field_src));
     }
 
@@ -415,7 +424,8 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
         }
 
         const auto small{next.to_i128()};
-        if (!small || *small > INT64_MAX || *small < INT64_MIN) {
+        if (!small || *small > std::numeric_limits<i64>::max() ||
+            *small < std::numeric_limits<i64>::min()) {
             return comp_.unsupported(u_, src, "an enum value past 64 bits");
         }
 
@@ -455,6 +465,18 @@ auto analyzer::enum_constant(gs::type& enum_type, std::string_view name, const s
                         fmt::format("Type '{}' has no field named '{}'",
                                     comp_.ctx().type_display_name(enum_type),
                                     name));
+}
+
+auto analyzer::variant_name(ip::index value) -> stdx::option<std::string_view> {
+    const auto& v{comp_.constants().value_at(value)};
+    const auto  number{int_of(v)};
+    const auto  n{v.type ? comp_.nominal_of(*v.type) : stdx::none};
+    const auto  small{number ? number->to_i128() : stdx::none};
+    if (!n || !small || v.type->get_kind() != gs::type_kind::ENUM) { return stdx::none; }
+    const auto at{std::ranges::find(n->enum_values, static_cast<i64>(*small))};
+    if (at == n->enum_values.end()) { return stdx::none; }
+    const auto& names{v.type->get_data().as<gs::types::enum_t>().variant_names};
+    return names[static_cast<usize>(at - n->enum_values.begin())];
 }
 
 auto analyzer::member_of(gs::type& owner, std::string_view name, const source& src)

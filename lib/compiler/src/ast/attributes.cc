@@ -115,7 +115,7 @@ constexpr std::array ALL_ATTRIBUTES{
         .targets   = attribute_target::FN,
         .signature = "no_builtins(bool = true)",
         .doc       = "The optimizer never turns the body's loops into calls to `memcpy`, `memset`, "
-                     "or other library routines, as freestanding code implementing them needs",
+                     "or other library routines",
     },
     attribute_spec{
         .name      = "target_features",

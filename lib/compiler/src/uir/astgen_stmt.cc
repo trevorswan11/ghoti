@@ -117,6 +117,11 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     binding    b{};
     const auto initializes_fn{decl.value ? ast_.get_as_opt<ast::function_expr>(*decl.value)
                                          : stdx::none};
+
+    // A literal takes its function-only attributes, the local keeps the rest
+    std::vector<inst_id> attrs;
+    lower_attributes(
+        decl.attributes, initializes_fn ? stdx::option<bool>{false} : stdx::none, attrs);
     if (!is_mut && initializes_fn) {
         // A local function can call itself, so its name is bound before its body
         const auto inst{reserve(id)};
@@ -125,8 +130,9 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
         const ast::node_id value_node{*decl.value};
         if (!is_comptime) {
             const auto init{lower_function(value_node, *initializes_fn, decl)};
-            fill_pl(
-                inst, tag::let_value, writer().str_field(name).ref_field(type_ref).ref_field(init));
+            fill_pl(inst,
+                    tag::let_value,
+                    writer().str_field(name).ref_field(type_ref).ref_field(init).body_field(attrs));
             return;
         }
         std::vector<inst_id> value;
@@ -134,8 +140,9 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
             const body_guard guard{*this, value};
             yields(lower_function(value_node, *initializes_fn, decl), value_node);
         }
-        fill_pl(
-            inst, tag::const_local, writer().str_field(name).ref_field(type_ref).body_field(value));
+        fill_pl(inst,
+                tag::const_local,
+                writer().str_field(name).ref_field(type_ref).body_field(value).body_field(attrs));
         return;
     }
     if (is_comptime && !is_mut) {
@@ -159,12 +166,13 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
             yields(result, ast::node_id{initializer});
         }
         b = {.kind  = binding_kind::VALUE,
-             .value = add_pl(tag::const_local,
-                             writer().str_field(name).ref_field(type_ref).body_field(value),
-                             id)};
+             .value = add_pl(
+                 tag::const_local,
+                 writer().str_field(name).ref_field(type_ref).body_field(value).body_field(attrs),
+                 id)};
     } else if (is_mut) {
         const auto slot{add_pl(is_comptime ? tag::alloc_comptime : tag::alloc_mut,
-                               writer().str_field(name).ref_field(type_ref),
+                               writer().str_field(name).ref_field(type_ref).body_field(attrs),
                                id)};
         if (decl.value) { DISCARD(add_bin(tag::store, slot, expr(*decl.value), id)); }
         b = {.kind = binding_kind::PLACE, .value = slot};
@@ -172,7 +180,9 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
         const auto init{decl.value ? expr(*decl.value) : to_ref(well_known::undefined)};
         b = {.kind  = binding_kind::VALUE,
              .value = add_pl(
-                 tag::let_value, writer().str_field(name).ref_field(type_ref).ref_field(init), id)};
+                 tag::let_value,
+                 writer().str_field(name).ref_field(type_ref).ref_field(init).body_field(attrs),
+                 id)};
     }
     DISCARD(declare(name, location_of(decl.name), b));
 }

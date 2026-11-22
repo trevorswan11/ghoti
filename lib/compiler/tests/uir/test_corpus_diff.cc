@@ -52,7 +52,7 @@ TEST_CASE("UIR Sema's GIR matches the old pipeline's over the file corpus", "[.u
     std::vector<std::string>     failures;
     for (const auto& file : corpus_files(std::filesystem::path{*repo})) {
         const auto diff{helpers::diff_pipelines(loader, file, libraries, {})};
-        helpers::report_uir_diff(diff);
+        helpers::report_uir_diff(diff, file.generic_string());
         counts[std::string{helpers::uir_diff_status_name(diff.status)}] += 1;
         if (diff.status == helpers::uir_diff_status::GIR_DIFF ||
             diff.status == helpers::uir_diff_status::REJECTED) {

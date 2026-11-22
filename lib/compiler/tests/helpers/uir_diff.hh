@@ -64,8 +64,9 @@ using library_list = gsl::span<const std::pair<std::string, std::filesystem::pat
                                   library_list                 libraries,
                                   const pipeline_settings&     settings) -> uir_diff;
 
-// Appends the outcome to `GHOTI_TEST_UIR_DIFF_REPORT` when that names a file
-auto report_uir_diff(const uir_diff& diff) -> void;
+// Appends the outcome to `GHOTI_TEST_UIR_DIFF_REPORT` when that names a file, labeled by the
+// current test's name unless `label` is given
+auto report_uir_diff(const uir_diff& diff, std::string_view label = {}) -> void;
 
 // UIR Sema's outcome for one program, with everything it points into kept alive
 struct uir_sema_run {

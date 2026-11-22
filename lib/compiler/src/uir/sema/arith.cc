@@ -154,6 +154,19 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
                gs::comptime_int_fits(slot->range->lo, target, comp_.ptr_bits()) &&
                gs::comptime_int_fits(slot->range->hi, target, comp_.ptr_bits());
     }};
+    // A one-argument cast takes the type of the side it meets
+    const auto cast_meets{[&](const operand& cast, const operand& other) {
+        return info.cls != op_class::SHIFT && cast.is<cast_ref>() && !other.is<cast_ref>() &&
+               !is_untyped_literal(other) && !gs::is_comptime_numeric(type_of(other).get_kind());
+    }};
+    if (cast_meets(lhs, rhs)) {
+        lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
+    } else if (cast_meets(rhs, lhs)) {
+        rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
+    } else if (info.cls != op_class::SHIFT && (lhs.is<cast_ref>() || rhs.is<cast_ref>())) {
+        return comp_.unsupported(u_, src, "an inferred cast meeting an untyped value");
+    }
+
     if (narrows_to(lhs, rhs)) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
     } else if (narrows_to(rhs, lhs)) {
@@ -276,6 +289,24 @@ auto analyzer::compare_pointers(const binary_info& info,
         return kind == gs::type_kind::POINTER || kind == gs::type_kind::NULLPTR;
     }};
     if (!pointer_like(lhs) || !pointer_like(rhs)) { return stdx::none; }
+
+    // Known pointers are equal when they are the same address or both null
+    const auto known_l{comptime_value(lhs)};
+    const auto known_r{comptime_value(rhs)};
+    if (is_comptime() && !gir_fn_ && known_l && known_r &&
+        (info.kind == instruction_kind::EQ || info.kind == instruction_kind::NE)) {
+        auto&       pool{comp_.constants()};
+        const auto& ld{pool.value_at(*known_l).data};
+        const auto& rd{pool.value_at(*known_r).data};
+        const bool  l_null{ld.is<ip::nullptr_value>()};
+        const bool  r_null{rd.is<ip::nullptr_value>()};
+        if (l_null || r_null || (ld.is<ip::address_value>() && rd.is<ip::address_value>())) {
+            const bool equal{l_null || r_null ? l_null == r_null : ld == rd};
+            return operand{pool.intern(equal == (info.kind == instruction_kind::EQ),
+                                       builtin(gs::type_kind::BOOL))};
+        }
+    }
+
     if (is_comptime()) { return comp_.unsupported(u_, src, "comparing pointers at compile time"); }
     // Even two known pointers compare at runtime
     auto&      bool_type{builtin(gs::type_kind::BOOL)};

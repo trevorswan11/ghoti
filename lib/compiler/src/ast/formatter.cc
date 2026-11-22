@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -302,8 +302,8 @@ auto formatter::take_verbatim_region(usize       first,
     const auto off{find_fmt_marker(comment_idx_, start_line(first), "off")};
     if (!off) { return stdx::none; }
     const auto off_line{comments_[*off].line};
-    const auto on{find_fmt_marker(*off + 1, SIZE_MAX, "on")};
-    const auto on_line{on ? comments_[*on].line : SIZE_MAX};
+    const auto on{find_fmt_marker(*off + 1, std::numeric_limits<usize>::max(), "on")};
+    const auto on_line{on ? comments_[*on].line : std::numeric_limits<usize>::max()};
     // Both markers before the item leave nothing to keep
     if (on_line < start_line(first)) { return stdx::none; }
 
@@ -390,8 +390,12 @@ auto formatter::format() -> void {
     stdx::option<node_id> previous;
     stdx::option<usize>   region_end;
     for (usize i{0}; i < roots.size(); ++i) {
-        if (auto region{take_verbatim_region(
-                i, roots.size(), root_start, root_end, SIZE_MAX, previous.has_value())}) {
+        if (auto region{take_verbatim_region(i,
+                                             roots.size(),
+                                             root_start,
+                                             root_end,
+                                             std::numeric_limits<usize>::max(),
+                                             previous.has_value())}) {
             doc_manager_.add_root(region->doc);
             doc_manager_.add_root(doc_manager_.hard_line());
             i += region->items - 1;
