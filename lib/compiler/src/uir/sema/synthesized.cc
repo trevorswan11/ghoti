@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/hash.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -118,15 +120,19 @@ auto compilation::synthesize_union(nominal&                         n,
     n.synthesized = true;
 }
 
-auto compilation::merged_enum(std::pair<const gs::type*, const gs::type*> key)
-    -> stdx::option<gs::type&> {
+auto merge_key_hash::operator()(const merge_key& key) const noexcept -> u64 {
+    stdx::hasher h{static_cast<u64>(std::bit_cast<uptr>(key.lhs.get()))};
+    h.combine(static_cast<u64>(std::bit_cast<uptr>(key.rhs.get())));
+    return h.finalize();
+}
+
+auto compilation::merged_enum(const merge_key& key) -> stdx::option<gs::type&> {
     const auto found{merges_.find(key)};
     if (found == merges_.end()) { return stdx::none; }
     return *found->second;
 }
 
-auto compilation::remember_merge(std::pair<const gs::type*, const gs::type*> key, gs::type& merged)
-    -> void {
+auto compilation::remember_merge(const merge_key& key, gs::type& merged) -> void {
     merges_.emplace(key, &merged);
 }
 
@@ -157,9 +163,9 @@ auto analyzer::analyze_merge_enums(inst_id inst) -> result<operand> {
         sides[i] = &side;
     }
 
-    auto&      lhs{*sides[0]};
-    auto&      rhs{*sides[1]};
-    const auto key{std::pair<const gs::type*, const gs::type*>{&lhs, &rhs}};
+    auto&           lhs{*sides[0]};
+    auto&           rhs{*sides[1]};
+    const merge_key key{.lhs = &lhs, .rhs = &rhs};
     if (const auto known{comp_.merged_enum(key)}) { return interned_type(*known); }
 
     const auto lhs_n{comp_.nominal_of(lhs)};

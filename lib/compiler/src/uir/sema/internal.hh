@@ -1,6 +1,5 @@
 #pragma once
 
-#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -464,6 +463,19 @@ struct impl_key_hash {
     [[nodiscard]] auto operator()(const impl_key& key) const noexcept -> u64;
 };
 
+// The two enums an `A || B` merges, in order
+struct merge_key {
+    gsl::not_null<const gs::type*> lhs;
+    gsl::not_null<const gs::type*> rhs;
+
+    [[nodiscard]] auto operator==(const merge_key&) const noexcept -> bool = default;
+};
+
+struct merge_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const merge_key& key) const noexcept -> u64;
+};
+
 // A nominal type's instruction and the comptime call it was created in
 struct nominal_key {
     u32                    unit;
@@ -679,9 +691,8 @@ class compilation {
                           bool                             tagged,
                           bool                             is_extern) -> void;
     // `A || B`, one enum per pair of enums however many merges name it
-    [[nodiscard]] auto merged_enum(std::pair<const gs::type*, const gs::type*> key)
-        -> stdx::option<gs::type&>;
-    auto remember_merge(std::pair<const gs::type*, const gs::type*> key, gs::type& merged) -> void;
+    [[nodiscard]] auto merged_enum(const merge_key& key) -> stdx::option<gs::type&>;
+    auto               remember_merge(const merge_key& key, gs::type& merged) -> void;
     [[nodiscard]] auto nominal_of(const gs::type& t) -> stdx::option<nominal&>;
     // A copy of `name` that lives as long as the context
     [[nodiscard]] auto lasting_name(std::string_view name) -> std::string_view;
@@ -813,7 +824,7 @@ class compilation {
     stdx::option<runtime_site>                                          runtime_site_;
     u32                                                                 next_frame_{0};
     std::vector<gsl::not_null<nominal*>>                                nominals_;
-    std::map<std::pair<const gs::type*, const gs::type*>, gsl::not_null<gs::type*>> merges_;
+    ankerl::unordered_dense::map<merge_key, gsl::not_null<gs::type*>, merge_key_hash> merges_;
     ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>                nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
