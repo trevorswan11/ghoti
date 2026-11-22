@@ -262,7 +262,7 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
     instances_by_key_.emplace(std::move(binding.key), &fn);
     instances_by_symbol_.emplace(fn.symbol, &fn);
 
-    request_body(fn);
+    // Its body is emitted once a runtime call needs it, not for calls run at compile time
     return &fn;
 }
 

@@ -232,4 +232,20 @@ TEST_CASE("A global constant holding another global's address", "[uir]") {
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("A typed local `const` takes a `.name(args)` call's value", "[uir]") {
+    const auto diff{diff_source(R"(
+        const P = struct {
+            x: i32,
+            pub const make = fn(v: i32): @This() { return .{ .x = v * 2 }; };
+        };
+        pub const f = fn(): i32 {
+            const p: P = .make(3);
+            return p.x;
+        };
+    )")};
+    INFO(diff.detail);
+    // The old emitter makes the call at runtime, which UIR folds
+    CHECK(diff.status == helpers::uir_diff_status::FOLD_PLACEMENT);
+}
+
 } // namespace ghoti::tests

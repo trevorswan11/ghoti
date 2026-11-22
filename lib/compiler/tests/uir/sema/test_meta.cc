@@ -269,4 +269,36 @@ TEST_CASE("Math builtins fold known operands and call the builtin otherwise", "[
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("`++` joins compile-time strings and `@panic` calls the handler", "[uir]") {
+    const auto diff{diff_source(R"(
+        const greet = fn(comptime who: []u8): []u8 { return "hello " ++ who ++ "!"; };
+        const nums = [2]i32{ 1, 2 } ++ [1]i32{ 3 };
+        pub const name = fn(): []u8 { return greet("there"); };
+        pub const third = fn(): i32 { return nums[2]; };
+        pub const fail = fn(x: i32): i32 {
+            if (x < 0) { @panic("negative"); }
+            return x;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`unroll while` copies its body per iteration under compile-time control", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const count = fn(x: i32): i32 {
+            comptime let mut i: usize = 0;
+            let mut total: i32 = x;
+            unroll while (i < 4) {
+                i += 1;
+                if comptime (i == 2) { continue; }
+                total += @intCast(i);
+            }
+            return total;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

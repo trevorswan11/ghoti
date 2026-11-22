@@ -93,7 +93,13 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }};
         if ((kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION) && !union_field()) {
             TRY(comp_.require_fields(u_, src, target));
-            const auto member{TRY(member_of(target, name, src))};
+            auto member{TRY(member_of(target, name, src))};
+
+            // Compile time reads a constant's value rather than its global
+            if (const auto g{member.as_opt<global_const>()}; g && is_comptime()) {
+                member = operand{g->value};
+            }
+
             return operand{TRY(coerce_to(member, target, src, {.what = use_site::kind::STORE}))};
         }
 
@@ -163,6 +169,15 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         if (!comptime_value(op)) {
             const auto base{TRY(operand_address(op, src))};
             return array_as_slice(base.address, from, target);
+        }
+
+        // A known array a runtime body slices is built, then copied into a slot of its own
+        if (const auto known{comptime_value(op)};
+            !comp_.constants().is_type(*known) &&
+            comp_.constants().value_at(*known).data.is<ip::aggregate_value>()) {
+            const auto built{TRY(as_runtime(op, src))};
+            const auto slot{spill(built, from, false)};
+            return array_as_slice(slot.address, from, target);
         }
     }
 
@@ -324,9 +339,21 @@ auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> resu
     return gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type};
 }
 
+auto analyzer::comptime_referent(const operand& op) -> stdx::option<ip::index> {
+    const auto known{comptime_value(op)};
+    if (!known || comp_.constants().is_type(*known)) { return stdx::none; }
+    const auto address{comp_.constants().value_at(*known).data.as_opt<ip::address_value>()};
+    if (!address || address->pointee.size() != 1) { return stdx::none; }
+    return address->pointee.front();
+}
+
 auto analyzer::read_through_reference(const operand& op, const source& src) -> result<operand> {
     auto& type{type_of(op)};
-    if (type.get_kind() != gs::type_kind::REFERENCE || is_comptime()) { return op; }
+    if (type.get_kind() != gs::type_kind::REFERENCE) { return op; }
+
+    // A compile-time reference holds what it refers to
+    if (const auto referent{comptime_referent(op)}) { return operand{*referent}; }
+    if (is_comptime()) { return op; }
     auto&      referent{*gs::pointee_of(type)};
     const auto address{TRY(as_runtime(op, src))};
     return operand{

@@ -53,6 +53,11 @@ auto analyzer::condition(const operand& op, const source& src) -> result<gir::va
     return as_runtime(op, src);
 }
 
+auto analyzer::unrolls(ref r) const -> bool {
+    const auto inst{as_inst(r)};
+    return inst && std::ranges::contains(unrolling_, *inst);
+}
+
 auto analyzer::target_of(ref r) -> target& {
     const auto inst{*as_inst(r)};
     for (auto& t : targets_ | std::views::reverse) {
@@ -227,8 +232,16 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     const auto body{rec.body_field()};
     const auto cont_body{rec.body_field()};
     const auto else_body{rec.body_field()};
+    // An unrolled loop runs its control at compile time and copies its body per iteration
     if ((loop_flags & flags::UNROLL) != 0) {
-        return comp_.unsupported(u_, src, "an unrolled loop");
+        if ((loop_flags & flags::UNWRAPS) != 0) {
+            return comp_.unsupported(u_, src, "an unrolled unwrapping loop");
+        }
+
+        if (is_comptime()) { return run_loop(inst); }
+        unrolling_.emplace_back(inst);
+        const auto unrolled{gsl::finally([this] { unrolling_.pop_back(); })};
+        return run_loop(inst);
     }
 
     // `while (x) |v|` runs `x.branch()` on every iteration
@@ -335,7 +348,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     const auto  value{TRY(resolve_value(d.bin.rhs, src))};
-    if (is_comptime()) {
+    if (is_comptime() || unrolls(d.bin.lhs)) {
         jump_.emplace(jump::kind::BREAK, *as_inst(d.bin.lhs), value);
         return void_value();
     }
@@ -346,7 +359,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
 
 auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
     const auto& operand_ref{mod().data_of(inst).un.operand};
-    if (is_comptime()) {
+    if (is_comptime() || unrolls(operand_ref)) {
         jump_.emplace(jump::kind::REPEAT, *as_inst(operand_ref), stdx::none);
         return void_value();
     }
@@ -463,6 +476,7 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
     const auto owns{
         [&](jump::kind k) { return jump_ && jump_->what == k && jump_->target == inst; }};
     const auto holds{[&] -> result<bool> {
+        const auto scope{comptime_scope()};
         const auto out{TRY(analyze_body(cond_body))};
         if (jump_ || !out.yielded) {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
@@ -485,6 +499,9 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
 
         for (const auto part : {body, cont_body}) {
             DISCARD(TRY(analyze_body(part)));
+
+            // An unrolled body that leaves at runtime, like a `return`, ends the loop there
+            if (!is_comptime() && !jump_ && terminated()) { return void_value(); }
             if (owns(jump::kind::REPEAT)) {
                 jump_.reset();
             } else if (owns(jump::kind::BREAK)) {

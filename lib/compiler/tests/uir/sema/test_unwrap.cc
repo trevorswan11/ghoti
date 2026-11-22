@@ -275,4 +275,18 @@ TEST_CASE("A `dyn` names its associated types' defaults", "[uir]") {
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("A match on a call's aggregate result takes it apart in a copy", "[uir]") {
+    const auto diff{diff_source(with_types(R"(
+        const make = fn(x: i32): Res { if (x < 0) { return .{ .err = 1 }; } return .{ .ok = x }; };
+        pub const code = fn(x: i32): i32 {
+            return match (make(x)) {
+                .ok => |v| v,
+                .err => x - 1,
+            };
+        };
+    )"))};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

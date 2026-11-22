@@ -1127,8 +1127,6 @@ class analyzer {
 
     // Field and element access (access.cc)
     [[nodiscard]] auto analyze_field_val(inst_id inst) -> result<operand>;
-    // Whether a runtime body reads a field of a local `const` holding a known aggregate
-    [[nodiscard]] auto reads_local_aggregate(ref object_ref, ip::index known) -> bool;
     [[nodiscard]] auto analyze_field_ptr(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_elem_val(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_elem_ptr(inst_id inst) -> result<operand>;
@@ -1252,6 +1250,9 @@ class analyzer {
     // An enum value as the enum merged from it, its tag rewritten where the merge moved it
     [[nodiscard]] auto widen_enum(const operand& op, gs::type& target, const source& src)
         -> result<operand>;
+
+    // `a ++ b` of two compile-time arrays or slices (concat.cc)
+    [[nodiscard]] auto analyze_concat(inst_id inst) -> result<operand>;
 
     // Unwrapping (unwrap.cc)
     [[nodiscard]] auto analyze_unwrap(inst_id inst) -> result<operand>;
@@ -1425,6 +1426,8 @@ class analyzer {
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret_value(inst_id inst) -> result<operand>;
+    // What a compile-time reference refers to, none for any other operand
+    [[nodiscard]] auto comptime_referent(const operand& op) -> stdx::option<ip::index>;
     // What a reference refers to, loaded, and any other operand as it is
     [[nodiscard]] auto read_through_reference(const operand& op, const source& src)
         -> result<operand>;
@@ -1463,6 +1466,8 @@ class analyzer {
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
     [[nodiscard]] auto target_of(ref r) -> target&;
+    // Whether `r` is a loop being unrolled at runtime, which its jumps leave per iteration
+    [[nodiscard]] auto unrolls(ref r) const -> bool;
     auto               arrive(target& t, const operand& value, const source& src) -> void;
     [[nodiscard]] auto condition(const operand& op, const source& src) -> result<gir::value>;
     [[nodiscard]] auto void_value() -> operand;
@@ -1470,6 +1475,12 @@ class analyzer {
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
+    // A call whose arguments may expand packs, `f(rest...)`
+    [[nodiscard]] auto call_expanding(const operand&       callee,
+                                      gsl::span<const ref> args,
+                                      gsl::span<const u32> pack_mask,
+                                      const source&        src,
+                                      const source&        callee_src) -> result<operand>;
     // Calls a function or generic `callee` evaluated to
     [[nodiscard]] auto call_operand(const operand&       callee,
                                     gsl::span<const ref> args,
@@ -1635,6 +1646,10 @@ class analyzer {
     // `@targetOs`, `@targetArch`, `@targetAbi` and `@targetFamily` as the prelude's enums
     [[nodiscard]] auto builtin_target(syntax::builtin_t which, const source& src)
         -> result<operand>;
+    [[nodiscard]] auto builtin_panic(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_implements(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
     // A runtime `@assert` or `@verify`, a call to the handler where the condition fails
     [[nodiscard]] auto runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
@@ -1740,7 +1755,9 @@ class analyzer {
     std::vector<pending_merge>                        merges_;
     std::vector<std::vector<operand>>                 packs_;
     std::vector<propagation>                          propagations_;
-    ankerl::unordered_dense::map<inst_id, mem_view>   mem_views_;
+    // The loops being unrolled into a runtime body, innermost last
+    std::vector<inst_id>                            unrolling_;
+    ankerl::unordered_dense::map<inst_id, mem_view> mem_views_;
     // The segment each call returning a runtime reference ended in
     ankerl::unordered_dense::map<inst_id, gir::segment_id> reference_segments_;
     // The reference each binary operator read its left side through

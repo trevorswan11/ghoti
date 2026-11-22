@@ -32,7 +32,16 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
 
     // `.name(args)` calls the member of whatever type the call is used as
     if (callee.is<enum_literal>() && !expands) { return implicit_call{inst}; }
-    if (!expands) { return call_operand(callee, args, src, callee_src.value_or(src)); }
+    return call_expanding(callee, args, pack_mask, src, callee_src.value_or(src));
+}
+
+auto analyzer::call_expanding(const operand&       callee,
+                              gsl::span<const ref> args,
+                              gsl::span<const u32> pack_mask,
+                              const source&        src,
+                              const source&        callee_src) -> result<operand> {
+    const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
+    if (!expands) { return call_operand(callee, args, src, callee_src); }
 
     // `f(rest...)` passes each of the pack's values as an argument of its own
     const auto generic{callee.as_opt<generic_ref>()};
@@ -53,7 +62,7 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
         }
     }
 
-    return call_generic(*generic->fn, std::move(values), src, callee_src.value_or(src));
+    return call_generic(*generic->fn, std::move(values), src, callee_src);
 }
 
 auto analyzer::call_operand(const operand&       callee,
@@ -85,16 +94,16 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     const auto args{rec.refs_field()};
     const auto pack_mask{rec.words_field()};
     if (modifier) { return comp_.unsupported(u_, src, "a call modifier"); }
-    for (const auto word : pack_mask) {
-        if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion"); }
-    }
-
     const auto object{TRY(resolve(object_ref, src))};
 
     // A module's function is called like one declared here
     if (const auto m{object.as_opt<module_ref>()}) {
         const auto member{TRY(module_member(*m, name, src))};
-        return call_operand(member, args, src, src);
+        return call_expanding(member, args, pack_mask, src, src);
+    }
+
+    for (const auto word : pack_mask) {
+        if (word != 0) { return comp_.unsupported(u_, src, "a pack expansion into a method"); }
     }
 
     const auto index{comptime_value(object)};
@@ -206,6 +215,7 @@ auto analyzer::call_with(instance&            target,
     }
 
     TRY(require_runtime(src));
+    comp_.request_body(target);
 
     auto& ret{*target.return_type};
     if (ret.get_kind() == gs::type_kind::NORETURN) {

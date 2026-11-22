@@ -290,20 +290,6 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     };
 }
 
-auto analyzer::reads_local_aggregate(ref object_ref, ip::index known) -> bool {
-    if (is_comptime() || !comp_.constants().value_at(known).data.is<ip::aggregate_value>()) {
-        return false;
-    }
-
-    // The old emitter builds a local `const` aggregate anew at each runtime read
-    auto at{as_inst(object_ref)};
-    while (at && (mod().tag_of(*at) == tag::field_val || mod().tag_of(*at) == tag::field_ptr)) {
-        at = as_inst(*record(*at).ref_field());
-    }
-
-    return at && mod().tag_of(*at) == tag::const_local;
-}
-
 auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -335,10 +321,6 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
             const auto copy{spill(built, *slice_type, false)};
             const auto field{TRY(field_place(copy, name, src))};
             return operand{TRY(read(field, src))};
-        }
-
-        if (reads_local_aggregate(object_ref, *index)) {
-            return comp_.unsupported(u_, src, "a runtime read of a local compile-time aggregate");
         }
 
         return comptime_field(*index, name, src);
@@ -400,12 +382,13 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return member;
     }
 
-    // A field of a compile-time value is known, so reading it needs no storage
-    if (const auto known{comptime_value(object)}; known && !assigned) {
-        if (reads_local_aggregate(object_ref, *known)) {
-            return comp_.unsupported(u_, src, "a runtime read of a local compile-time aggregate");
-        }
+    // A field of a compile-time value is known, so reading it needs no storage, and a
+    // compile-time reference's field is the field of what it holds
+    if (const auto referent{comptime_referent(object)}; referent && !assigned) {
+        return comptime_field(*referent, name, src);
+    }
 
+    if (const auto known{comptime_value(object)}; known && !assigned) {
         return comptime_field(*known, name, src);
     }
 
@@ -804,6 +787,13 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
 
     const auto small{index->to_i128()};
     const auto count{agg ? agg->elements.size() : text->size()};
+
+    // A sentinel-terminated array's sentinel sits just past its elements
+    const auto arr{value.type ? value.type->get_data().as_opt<gs::types::array>() : stdx::none};
+    if (small && *small == static_cast<i128>(count) && arr && arr->null_terminated) {
+        return intern_int(pool, big_int{i128{0}}, *elem_type);
+    }
+
     if (!small || *small < 0 || *small >= static_cast<i128>(count)) {
         return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
     }

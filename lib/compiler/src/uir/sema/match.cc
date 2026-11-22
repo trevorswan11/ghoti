@@ -233,24 +233,27 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     const bool comptime_match{(match_flags & flags::MATCH_COMPTIME) != 0};
     const auto arms{match_arms(inst)};
 
-    const auto scrutinee{TRY([&] -> result<operand> {
+    auto  scrutinee{TRY([&] -> result<operand> {
         if (!comptime_match || is_comptime()) { return resolve_value(operand_ref, src); }
         const auto scope{comptime_scope()};
         return at_comptime_boundary(reevaluate(operand_ref, src));
     }())};
-    auto&      scrutinee_type{type_of(scrutinee)};
+    auto& scrutinee_type{type_of(scrutinee)};
     if (scrutinee_type.is_poison()) { return stdx::err{stop::POISON}; }
     if (scrutinee_type.get_kind() == gs::type_kind::POINTER) {
         return comp_.unsupported(u_, src, "a match through a pointer");
     }
 
-    // A reference is matched on what it refers to
-    const bool through_ref{scrutinee_type.get_kind() == gs::type_kind::REFERENCE};
+    // A reference is matched on what it refers to, a compile-time one by the value it holds
+    if (const auto referent{comptime_referent(scrutinee)}) { scrutinee = operand{*referent}; }
+
+    auto&      matched_type{type_of(scrutinee)};
+    const bool through_ref{matched_type.get_kind() == gs::type_kind::REFERENCE};
     if (through_ref && (comptime_match || is_comptime())) {
         return comp_.unsupported(u_, src, "a match through a reference at compile time");
     }
 
-    auto& type{through_ref ? *gs::pointee_of(scrutinee_type) : scrutinee_type};
+    auto& type{through_ref ? *gs::pointee_of(matched_type) : matched_type};
 
     if (!gs::is_value_type(type.get_kind()) || type.get_kind() == gs::type_kind::TYPE ||
         gs::is_comptime_numeric(type.get_kind())) {
@@ -426,9 +429,9 @@ auto analyzer::scrutinee_address(ref            operand_ref,
         if (inst && mod().tag_of(*inst) == tag::load) {
             return in_place(TRY(address_of(mod().data_of(*inst).un.operand, src)));
         }
-
-        return comp_.unsupported(u_, src, "a match on an aggregate with no name");
     }
+
+    // A value with no storage, an aggregate one included, is matched in a copy
 
     const auto value{TRY(as_runtime(scrutinee, src))};
     return match_root{.address        = spill(value, *value.type, false).address,

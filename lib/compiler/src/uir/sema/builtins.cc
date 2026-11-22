@@ -68,6 +68,8 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::ASSERT:                   return builtin_assert(args, src, false);
     case builtin_t::VERIFY:                   return builtin_assert(args, src, true);
     case builtin_t::TRAP:                     return builtin_trap(src);
+    case builtin_t::PANIC:                    return builtin_panic(args, src);
+    case builtin_t::IMPLEMENTS:               return builtin_implements(args, src);
     case builtin_t::AS:                       return builtin_as(args, src);
     case builtin_t::THIS:                     return builtin_this(src);
     case builtin_t::INT:                      return builtin_int_type(args, src);
@@ -637,6 +639,41 @@ auto analyzer::builtin_vector_type(gsl::span<const ref> args, const source& src)
 
     return interned_type(
         ctx.get_vector(gs::types::mut::CONSTANT, static_cast<u32>(*count), lane_type));
+}
+
+auto analyzer::builtin_panic(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (is_comptime()) { return comp_.unsupported(u_, src, "a `@panic` at compile time"); }
+
+    // The message is a string known at compile time, a literal or a value
+    std::string message{"panic"};
+    if (const auto text{string_literal(mod(), args, 0)}) {
+        message = std::string{*text};
+    } else if (!args.empty()) {
+        const auto value{TRY(resolve_value(args.front(), src))};
+        const auto known{comptime_value(value)};
+        const auto text_value{known ? comp_.constants().value_at(*known).data.as_opt<std::string>()
+                                    : stdx::none};
+        if (!text_value) { return comp_.unsupported(u_, src, "a `@panic` message it can't read"); }
+        message = *text_value;
+    }
+
+    TRY(emit_panic(message, src));
+    return void_value();
+}
+
+auto analyzer::builtin_implements(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 2) { return comp_.unsupported(u_, src, "an `@implements` arity"); }
+    auto& target{*TRY(resolve_type(args[0], src))};
+    auto& iface{*TRY(resolve_type(args[1], src))};
+    auto& bool_type{builtin(gs::type_kind::BOOL)};
+    if (iface.get_kind() != gs::type_kind::INTERFACE) {
+        return operand{comp_.constants().intern(false, bool_type)};
+    }
+
+    const auto impls{TRY(comp_.impls_of(target))};
+    const bool found{std::ranges::any_of(
+        impls, [&](const auto applied) { return applied->interface == iface; })};
+    return operand{comp_.constants().intern(found, bool_type)};
 }
 
 } // namespace ghoti::uir::sema
