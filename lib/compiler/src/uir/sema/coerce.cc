@@ -289,6 +289,15 @@ auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> resu
     return gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type};
 }
 
+auto analyzer::read_through_reference(const operand& op, const source& src) -> result<operand> {
+    auto& type{type_of(op)};
+    if (type.get_kind() != gs::type_kind::REFERENCE || is_comptime()) { return op; }
+    auto&      referent{*gs::pointee_of(type)};
+    const auto address{TRY(as_runtime(op, src))};
+    return operand{
+        gir::value{builder_.emit_load(gir::value{address.data, referent}, referent), referent}};
+}
+
 auto analyzer::coerce_to(const operand&  op,
                          gs::type&       target,
                          const source&   src,
@@ -308,6 +317,14 @@ auto analyzer::coerce_to(const operand&  op,
     if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
+
+    // A reference is read where a value is wanted
+    if (from.get_kind() == gs::type_kind::REFERENCE && !is_comptime() &&
+        target.get_kind() != gs::type_kind::REFERENCE &&
+        target.get_kind() != gs::type_kind::POINTER) {
+        const auto read{TRY(read_through_reference(op, src))};
+        return coerce_to(read, target, src, site);
+    }
 
     // Functions as values arrive with erased callables and closures
     const auto callable{[](const gs::type& t) {

@@ -140,9 +140,29 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
 
     if (is_comptime()) { return value; }
 
-    // An aggregate binding keeps one address for every use, so it gets a slot of its own
+    // An aggregate binding keeps one address for every use, so it gets a slot of its own. So
+    // does a reference taken directly of a place
     auto& type{declared && gs::is_structural(declared->get_kind()) ? *declared : type_of(value)};
-    if (!gs::is_structural(type.get_kind()) || value.is<merge_ref>()) { return value; }
+    const bool place_reference{[&] {
+        const auto init_inst{as_inst(init_ref)};
+        if (!init_inst || mod().tag_of(*init_inst) != tag::ref_of ||
+            type.get_kind() != gs::type_kind::REFERENCE) {
+            return false;
+        }
+
+        // Only `&mut x` of a scalar `let mut` folds to an address the old emitter stores
+        auto       ref_rec{record(*init_inst)};
+        const auto target{as_inst(*ref_rec.ref_field())};
+        const auto bits{ref_rec.u32_field()};
+        const auto pointee{gs::pointee_of(type)};
+        return (bits & flags::MUT) != 0 && (bits & flags::POLY) == 0 && target &&
+               mod().tag_of(*target) == tag::alloc_mut && pointee &&
+               (gs::is_numeric(pointee->get_kind()) || pointee->get_kind() == gs::type_kind::BOOL ||
+                pointee->get_kind() == gs::type_kind::ENUM);
+    }()};
+    if ((!gs::is_structural(type.get_kind()) && !place_reference) || value.is<merge_ref>()) {
+        return value;
+    }
 
     // An `undefined` initializer leaves the fresh slot as it is
     const auto slot{builder_.emit_alloca(type)};
@@ -216,6 +236,16 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     return coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE});
 }
 
+namespace {
+
+[[nodiscard]] auto same_node(const source& a, const source& b) -> bool {
+    const auto x{a.as_opt<ast::node_id>()};
+    const auto y{b.as_opt<ast::node_id>()};
+    return x && y && x->get_index() == y->get_index();
+}
+
+} // namespace
+
 auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
@@ -253,7 +283,15 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     if (const auto lhs{as_inst(d.bin.lhs)};
         lhs && is_binding(mod().tag_of(*lhs)) && !target.is<place>() &&
         type_of(target).get_kind() == gs::type_kind::REFERENCE) {
-        through = load(TRY(address_of(d.bin.lhs, src)));
+        const auto read{as_inst(d.bin.rhs).and_then([&](inst_id rhs) {
+            const auto known{reference_reads_.find(rhs)};
+            // `a += b` lowers its operator at the assignment, `a = a + b` at the `+`
+            const bool compound{known != reference_reads_.end() &&
+                                mod().data_of(rhs).bin.lhs == d.bin.lhs &&
+                                same_node(src_of(rhs), src)};
+            return compound ? stdx::option<gir::value>{known->second} : stdx::option<gir::value>{};
+        })};
+        through = read ? *read : load(TRY(address_of(d.bin.lhs, src)));
     }
 
     auto destination{TRY(store_destination(through, src))};

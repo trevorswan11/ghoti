@@ -923,6 +923,43 @@ class analyzer {
         gsl::not_null<gs::type*> type;
         gir::value               address;
         bool                     is_void;
+        // A `&v` or `^v` capture holds the address of what it names
+        bool is_alias;
+    };
+
+    // Where a runtime `match` takes its scrutinee apart
+    struct match_root {
+        gir::value address;
+        bool       is_const;
+        // A temporary's copy can't be captured by mutable reference
+        bool is_addressable;
+        // Reached through a `mut?` reference
+        bool is_poly;
+    };
+
+    // What a type's `builtin.Unwrappable` impl gives `?` and `!`
+    struct unwrap_shape {
+        gsl::not_null<impl_instance*> applied;
+        gsl::not_null<gs::type*>      output;
+        gsl::not_null<gs::type*>      residual;
+    };
+
+    // The `Flow` that `branch` returned, spilled, and whether it breaks
+    struct flow_result {
+        gir::value slot;
+        gir::value is_break;
+        // Where the operand lives, which a capture by reference is checked against
+        bool is_const;
+        bool is_poly;
+    };
+
+    // A `?` whose failure body is being analyzed
+    struct propagation {
+        flow_result                   flow;
+        unwrap_shape                  shape;
+        gsl::not_null<impl_instance*> rewrap;
+        gsl::not_null<gs::type*>      from;
+        stdx::option<operand>         rewrapped{};
     };
 
     // A runtime `match` while its decision tree is emitted
@@ -1123,12 +1160,62 @@ class analyzer {
                                   const gs::pattern::decision_tree&          tree,
                                   ref                                        operand_ref,
                                   const operand&                             scrutinee,
+                                  gs::type&                                  type,
                                   const source& src) -> result<operand>;
-    [[nodiscard]] auto
-    scrutinee_address(ref operand_ref, const operand& scrutinee, bool aggregate, const source& src)
-        -> result<gir::value>;
+    [[nodiscard]] auto scrutinee_address(ref            operand_ref,
+                                         const operand& scrutinee,
+                                         gs::type&      type,
+                                         bool           aggregate,
+                                         bool           aliased,
+                                         const source&  src) -> result<match_root>;
+    // A capture's slot type, a `&v` or `^v` capture's checked against where it's reached
+    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, const match_root& root)
+        -> result<gsl::not_null<gs::type*>>;
     [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
+
+    // Unwrapping (unwrap.cc)
+    [[nodiscard]] auto analyze_unwrap(inst_id inst) -> result<operand>;
+    // `if (x) |v| a else |e| b`
+    [[nodiscard]] auto analyze_unwrap_branch(inst_id inst) -> result<operand>;
+    // The shape an `if` or `while` capture unwraps, its `else` capture checked
+    [[nodiscard]] auto capture_shape(const operand&                      op,
+                                     const stdx::option<ast::capture_t>& residual,
+                                     std::string_view                    construct,
+                                     const source&                       cond_src,
+                                     const source& src) -> result<unwrap_shape>;
+    // Binds an unwrapping capture's `bind` in `body` to `value`
+    auto bind_unwrapped(gsl::span<const inst_id> body, u32 slot, const operand& value) -> void;
+    // A `|v|` payload capture's slot, a copy or the address the `Flow` holds
+    [[nodiscard]] auto payload_capture(const ast::capture_t& capture,
+                                       const flow_result&    flow,
+                                       const unwrap_shape&   shape) -> result<operand>;
+    [[nodiscard]] auto residual_capture(const flow_result& flow, const unwrap_shape& shape)
+        -> operand;
+    [[nodiscard]] auto analyze_residual(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_ret_residual(inst_id inst) -> result<operand>;
+    // The impl of the `builtin` interface `name` for `target`, none when it has none
+    [[nodiscard]] auto prelude_impl(gs::type& target, std::string_view name, const source& src)
+        -> result<stdx::option<impl_instance&>>;
+    [[nodiscard]] auto associated_type(impl_instance&   applied,
+                                       std::string_view name,
+                                       const source&    src) -> result<stdx::option<gs::type&>>;
+    [[nodiscard]] auto call_impl_method(impl_instance&       applied,
+                                        std::string_view     name,
+                                        std::vector<operand> args,
+                                        const source&        src) -> result<operand>;
+    [[nodiscard]] auto unwrap_shape_of(gs::type& operand_type, const source& src)
+        -> result<stdx::option<unwrap_shape>>;
+    // Calls `branch` on the operand's address and tests the `Flow` it returns
+    [[nodiscard]] auto
+    emit_flow(ref operand_ref, const operand& op, const unwrap_shape& shape, const source& src)
+        -> result<flow_result>;
+    // Reads the `continue` payload through the reference the `Flow` holds
+    [[nodiscard]] auto flow_output(const flow_result& flow, const unwrap_shape& shape)
+        -> gir::value;
+    [[nodiscard]] auto propagation_for(const operand&      op,
+                                       const unwrap_shape& shape,
+                                       const source&       src) -> result<propagation>;
 
     // Initializers (init.cc)
     [[nodiscard]] auto analyze_init_struct(inst_id inst) -> result<operand>;
@@ -1257,6 +1344,10 @@ class analyzer {
     [[nodiscard]] auto analyze_break(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_ret_value(inst_id inst) -> result<operand>;
+    // What a reference refers to, loaded, and any other operand as it is
+    [[nodiscard]] auto read_through_reference(const operand& op, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto analyze_unreachable(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_block_comptime(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_condbr_comptime(inst_id inst) -> result<operand>;
@@ -1310,6 +1401,11 @@ class analyzer {
                                      const source&        src,
                                      const source&        callee_src,
                                      bool                 through_member) -> result<operand>;
+    // A call whose `mut?` result takes the mutability its `mut?` argument has
+    [[nodiscard]] auto call_following_poly(instance&            target,
+                                           std::vector<operand> values,
+                                           const source&        src,
+                                           bool                 through_member) -> result<operand>;
     // A call of `target` on arguments that match its GIR parameters
     [[nodiscard]] auto
     call_with(instance& target, std::vector<operand> args, const source& src, bool through_member)
@@ -1517,6 +1613,11 @@ class analyzer {
     std::vector<target>                               targets_;
     std::vector<pending_merge>                        merges_;
     std::vector<std::vector<operand>>                 packs_;
+    std::vector<propagation>                          propagations_;
+    // The segment each call returning a runtime reference ended in
+    ankerl::unordered_dense::map<inst_id, gir::segment_id> reference_segments_;
+    // The reference each binary operator read its left side through
+    ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // The values `capture` instructions read, and the type whose namespace holds the body

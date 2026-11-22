@@ -130,7 +130,36 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     auto        lhs{TRY(resolve_value(d.bin.lhs, src))};
-    auto        rhs{TRY(resolve_value(d.bin.rhs, src))};
+
+    // A compound assignment stores through the reference its left side was read through. A
+    // union's tag is compared through the reference
+    const auto reads_through{[&](const operand& op) {
+        auto& type{type_of(op)};
+        return type.get_kind() == gs::type_kind::REFERENCE && !is_comptime() &&
+               !gs::pointee_of(type)->get_data().is<gs::types::union_t>();
+    }};
+    if (reads_through(lhs)) {
+        const auto address{TRY(as_runtime(lhs, src))};
+        reference_reads_.insert_or_assign(inst, address);
+        lhs = TRY(read_through_reference(address, src));
+    }
+
+    auto rhs{TRY(resolve_value(d.bin.rhs, src))};
+
+    // The old emitter reads a reference before the right side runs, so a right side that
+    // branches leaves the read in a later segment
+    if (reference_reads_.contains(inst)) {
+        const auto made{as_inst(d.bin.lhs).and_then([&](inst_id i) {
+            const auto found{reference_segments_.find(i)};
+            return found == reference_segments_.end()
+                       ? stdx::option<gir::segment_id>{}
+                       : stdx::option<gir::segment_id>{found->second};
+        })};
+        if (made && *made != builder_.get_segment()->get_id()) {
+            return comp_.unsupported(u_, src, "a reference read after a right side that branches");
+        }
+    }
+    if (reads_through(rhs)) { rhs = TRY(read_through_reference(rhs, src)); }
 
     // An enum literal names a variant of the other side's enum
     if (lhs.is<enum_literal>() && type_of(rhs).get_kind() == gs::type_kind::ENUM) {

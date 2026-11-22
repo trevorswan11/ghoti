@@ -232,7 +232,7 @@ const f = fn(x: u8): u8 {
     }
 decl#1 VALUE f CONSTANT
     value {
-        %23 = func conv=C
+        %24 = func conv=C
             params {
                 %6 = param name="x", flags=comptime, modifier=VALUE
                     type {
@@ -254,20 +254,21 @@ decl#1 VALUE f CONSTANT
                             }
                         yield %12
                     }
-                %15 = ret_failure %14
-                %16 = failure_is_set %15
-                %22 = condbr cond=%16
+                %15 = ret_value %14
+                %16 = ret_failure %15
+                %17 = failure_is_set %16
+                %23 = condbr cond=%17
                     then {
-                        %17 = failure_residual %15
-                        %18 = decl_val decl#0
-                        %19 = call callee=%18, args=(%17)
-                        ret %14
+                        %18 = failure_residual %16
+                        %19 = decl_val decl#0
+                        %20 = call callee=%19, args=(%18)
+                        ret %15
                     }
                     else {
-                        ret %14
+                        ret %15
                     }
             }
-        yield %23
+        yield %24
     }
 )");
 }

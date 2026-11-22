@@ -507,13 +507,20 @@ auto analyzer::call_generic(generic_fn&           g,
         values.emplace_back(std::move(args[i].value));
     }
 
+    return call_following_poly(target, std::move(values), src, false);
+}
+
+auto analyzer::call_following_poly(instance&            target,
+                                   std::vector<operand> values,
+                                   const source&        src,
+                                   bool                 through_member) -> result<operand> {
     // A `mut?` parameter's result takes the mutability of the argument the call passed it
     auto mut{gs::types::mut::POLY};
     for (usize i{0}; i < target.params.size() && i < values.size(); ++i) {
         if (target.params[i]->is_poly()) { mut = type_of(values[i]).get_key().get_mut(); }
     }
 
-    const auto result{TRY(call_with(target, std::move(values), src, false))};
+    const auto result{TRY(call_with(target, std::move(values), src, through_member))};
     const auto value{result.as_opt<gir::value>()};
     if (!value) { return result; }
     return gir::value{value->data, with_mutability(*value->type, mut)};

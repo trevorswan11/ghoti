@@ -141,7 +141,7 @@ auto analyzer::call_function(instance&            target,
     std::vector<operand> values;
     values.reserve(args.size());
     for (const auto arg : args) { values.emplace_back(TRY(resolve_value(arg, src))); }
-    return call_with(target, std::move(values), src, through_member);
+    return call_following_poly(target, std::move(values), src, through_member);
 }
 
 auto analyzer::call_with(instance&            target,

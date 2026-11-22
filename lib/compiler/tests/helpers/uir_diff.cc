@@ -157,7 +157,9 @@ constexpr std::array LEGACY_BUG_TESTS{
                 message == "`comptime let mut` assignment depends on a runtime condition") ||
                (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
                 message == "Cannot take a mutable address of an element of a non-mutable array "
-                           "or slice");
+                           "or slice") ||
+               (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
+                message == "Cannot capture an immutable value by mutable reference");
     });
 }
 

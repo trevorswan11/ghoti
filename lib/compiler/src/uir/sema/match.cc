@@ -31,6 +31,15 @@ namespace pattern = gs::pattern;
 
 namespace {
 
+// Whether any arm captures by reference or pointer, aliasing the scrutinee
+[[nodiscard]] auto holds_alias(const std::vector<pattern::row_input>& rows) -> bool {
+    return std::ranges::any_of(rows, [](const pattern::row_input& row) {
+        return std::ranges::any_of(pattern::captures_of(*row.root), [](const auto& site) {
+            return site.capture.modifier.is_ref() || site.capture.modifier.is_ptr();
+        });
+    });
+}
+
 [[nodiscard]] auto make_node(pattern::node_kind kind, gs::type& type) -> pattern::node_ptr {
     auto out{stdx::make_nullable_box<pattern::node>(
         pattern::node{.source = stdx::none, .value_type = &type})};
@@ -229,11 +238,19 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
         const auto scope{comptime_scope()};
         return at_comptime_boundary(reevaluate(operand_ref, src));
     }())};
-    auto&      type{type_of(scrutinee)};
-    if (type.is_poison()) { return stdx::err{stop::POISON}; }
-    if (type.get_kind() == gs::type_kind::REFERENCE || type.get_kind() == gs::type_kind::POINTER) {
-        return comp_.unsupported(u_, src, "a match through a reference");
+    auto&      scrutinee_type{type_of(scrutinee)};
+    if (scrutinee_type.is_poison()) { return stdx::err{stop::POISON}; }
+    if (scrutinee_type.get_kind() == gs::type_kind::POINTER) {
+        return comp_.unsupported(u_, src, "a match through a pointer");
     }
+
+    // A reference is matched on what it refers to
+    const bool through_ref{scrutinee_type.get_kind() == gs::type_kind::REFERENCE};
+    if (through_ref && (comptime_match || is_comptime())) {
+        return comp_.unsupported(u_, src, "a match through a reference at compile time");
+    }
+
+    auto& type{through_ref ? *gs::pointee_of(scrutinee_type) : scrutinee_type};
 
     if (!gs::is_value_type(type.get_kind()) || type.get_kind() == gs::type_kind::TYPE ||
         gs::is_comptime_numeric(type.get_kind())) {
@@ -282,8 +299,12 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
                                         fmt::join(tree.missing, ", ")));
     }
 
-    if (const auto folded{TRY(fold_match(arms, rows, operand_ref, src))}) { return *folded; }
-    return emit_match(arms, rows, tree, operand_ref, scrutinee, src);
+    // A capture that aliases the scrutinee keeps the match at runtime
+    if (!through_ref && !holds_alias(rows)) {
+        if (const auto folded{TRY(fold_match(arms, rows, operand_ref, src))}) { return *folded; }
+    }
+
+    return emit_match(arms, rows, tree, operand_ref, scrutinee, type, src);
 }
 
 auto analyzer::fold_match(const std::vector<match_arm>&              arms,
@@ -324,6 +345,10 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
                          const source&                          src) -> result<operand> {
     const auto value{TRY(require_comptime(scrutinee, src))};
     auto&      pool{comp_.constants()};
+    if (holds_alias(rows)) {
+        return comp_.unsupported(u_, src, "a capture by reference at compile time");
+    }
+
     for (const auto& row : rows) {
         if (!matches(pool, *row.root, value)) { continue; }
         const auto& arm{arms[row.arm]};
@@ -358,8 +383,20 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
 
 auto analyzer::scrutinee_address(ref            operand_ref,
                                  const operand& scrutinee,
+                                 gs::type&      type,
                                  bool           aggregate,
-                                 const source&  src) -> result<gir::value> {
+                                 bool           aliased,
+                                 const source&  src) -> result<match_root> {
+    // A reference is taken apart where it points
+    auto& scrutinee_type{type_of(scrutinee)};
+    if (scrutinee_type.get_kind() == gs::type_kind::REFERENCE) {
+        const auto ref_value{TRY(as_runtime(scrutinee, src))};
+        return match_root{.address        = gir::value{ref_value.data, type},
+                          .is_const       = scrutinee_type.is_constant(),
+                          .is_addressable = true,
+                          .is_poly        = scrutinee_type.is_poly()};
+    }
+
     // A named aggregate is taken apart where it lives, anything else from a copy
     const auto inst{as_inst(operand_ref)};
     const auto names_storage{[&] {
@@ -372,17 +409,73 @@ auto analyzer::scrutinee_address(ref            operand_ref,
         default:             return false;
         }
     }()};
+    const auto in_place{[](const place& p) {
+        return match_root{.address        = p.address,
+                          .is_const       = !p.is_mutable,
+                          .is_addressable = true,
+                          .is_poly        = false};
+    }};
+    // A named scalar is matched in place when a capture aliases it
+    const bool reads_storage{inst && mod().tag_of(*inst) == tag::load};
+    if (!aggregate && aliased && (names_storage || reads_storage)) {
+        return in_place(TRY(address_of(operand_ref, src)));
+    }
+
     if (aggregate) {
-        if (names_storage) { return TRY(address_of(operand_ref, src)).address; }
+        if (names_storage) { return in_place(TRY(address_of(operand_ref, src))); }
         if (inst && mod().tag_of(*inst) == tag::load) {
-            return TRY(address_of(mod().data_of(*inst).un.operand, src)).address;
+            return in_place(TRY(address_of(mod().data_of(*inst).un.operand, src)));
         }
 
         return comp_.unsupported(u_, src, "a match on an aggregate with no name");
     }
 
     const auto value{TRY(as_runtime(scrutinee, src))};
-    return spill(value, *value.type, false).address;
+    return match_root{.address        = spill(value, *value.type, false).address,
+                      .is_const       = true,
+                      .is_addressable = false,
+                      .is_poly        = false};
+}
+
+auto analyzer::capture_type(const pattern::capture_site& site, const match_root& root)
+    -> result<gsl::not_null<gs::type*>> {
+    const auto modifier{site.capture.modifier};
+    if (!modifier.is_ref() && !modifier.is_ptr()) { return &site.value_type; }
+
+    const source src{ast::node_id{*site.capture.payload}};
+
+    const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
+    if (wants_mutable && !root.is_addressable) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_RVALUE_CAPTURE,
+                            fmt::format("Cannot capture a temporary value by {}; only a plain "
+                                        "value capture is allowed here since it has no storage "
+                                        "of its own",
+                                        modifier.is_ptr() ? "pointer" : "reference"));
+    }
+
+    if (wants_mutable && (root.is_const || site.place_is_const)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ASSIGNMENT_TO_CONST,
+                            fmt::format("Cannot capture an immutable value by mutable {}",
+                                        modifier.is_mutable_ref() ? "reference" : "pointer"));
+    }
+
+    if (modifier.is_poly() && !root.is_poly) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::ILLEGAL_POLY_MUTABILITY,
+            fmt::format("A `{}` capture needs its value reached through a `mut?` parameter",
+                        modifier.is_poly_ref() ? "&mut?" : "^mut?"));
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto mut{*gs::types::mut::from_type_modifier(modifier)};
+    return modifier.is_ref() ? &ctx.get_reference(mut, site.value_type)
+                             : &ctx.get_pointer(mut, site.value_type);
 }
 
 auto analyzer::occurrence_address(const match_lowering& m, usize occ) -> gir::value {
@@ -416,6 +509,12 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
                 m.slots[d.arm], [&](const capture_slot& s) { return s.name == name; })};
             if (slot == m.slots[d.arm].end() || slot->is_void) { continue; }
             const auto address{occurrence_address(m, bind.occ)};
+            if (slot->is_alias) {
+                builder_.emit_store(slot->address, gir::value{address.data, *slot->type})
+                    .is_initializer = true;
+                continue;
+            }
+
             const auto loaded{
                 builder_.emit_load(gir::value{address.data, *slot->type}, *slot->type)};
             builder_.emit_store(slot->address, gir::value{loaded, *slot->type}).is_initializer =
@@ -500,15 +599,17 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
                           const pattern::decision_tree&          tree,
                           ref                                    operand_ref,
                           const operand&                         scrutinee,
+                          gs::type&                              type,
                           const source&                          src) -> result<operand> {
     TRY(require_runtime(src));
-    auto&      type{type_of(scrutinee)};
     const auto merge{new_segment()};
     const bool aggregate{
         type.get_data().is<gs::types::union_t>() || type.get_data().is<gs::types::struct_t>() ||
         type.get_data().is<gs::types::array>() || type.get_kind() == gs::type_kind::SLICE};
+    const auto root{
+        TRY(scrutinee_address(operand_ref, scrutinee, type, aggregate, holds_alias(rows), src))};
     match_lowering m{.tree   = tree,
-                     .root   = TRY(scrutinee_address(operand_ref, scrutinee, aggregate, src)),
+                     .root   = root.address,
                      .bodies = {},
                      .slots  = std::vector<std::vector<capture_slot>>(arms.size()),
                      .src    = src};
@@ -523,16 +624,16 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
                 continue;
             }
 
-            if (site.capture.modifier.is_ref() || site.capture.modifier.is_ptr()) {
-                return comp_.unsupported(u_, src, "a capture by reference");
-            }
-
-            auto&      cap_type{site.value_type};
+            auto&      cap_type{*TRY(capture_type(site, root))};
+            const bool is_alias{site.capture.modifier.is_ref() || site.capture.modifier.is_ptr()};
             const bool is_void{cap_type.get_kind() == gs::type_kind::VOID_};
             const auto slot{is_void ? gir::value{}
                                     : gir::value{builder_.emit_alloca(cap_type), cap_type}};
-            slots.emplace_back<capture_slot>(
-                {.name = name, .type = &cap_type, .address = slot, .is_void = is_void});
+            slots.emplace_back<capture_slot>({.name     = name,
+                                              .type     = &cap_type,
+                                              .address  = slot,
+                                              .is_void  = is_void,
+                                              .is_alias = is_alias});
         }
     }
 

@@ -781,7 +781,18 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
-    const auto operand{expr(node.matcher)};
+    // A capture by reference aliases a field, element or pointee where it lives
+    const bool         aliases{std::ranges::any_of(node.arms, [](const auto& arm) {
+        return arm.capture && (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr());
+    })};
+    const ast::node_id matcher{node.matcher};
+    const bool in_place{aliases && (matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
+                                    matcher.is<ast::dereference_expr>())};
+    const auto operand{[&] {
+        if (!in_place) { return expr(node.matcher); }
+        const auto target{place(node.matcher, use::MUTATE)};
+        return target.is_place ? add_un(tag::load, target.value, 0, id) : target.value;
+    }()};
     u32        bits{0};
     if (node.is_comptime) { bits |= flags::MATCH_COMPTIME; }
     if (node.is_binding) { bits |= flags::MATCH_BINDING; }

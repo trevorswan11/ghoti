@@ -406,8 +406,10 @@ auto compilation::declare_function(const unit&           u,
         }
 
         if (modifier != 0) { return unsupported(u, param_src, "a parameter modifier"); }
-        auto& type{*TRY(sig.eval_type(type_body, param_src))};
-        if (!gs::is_value_type(type.get_kind()) || gs::is_comptime_numeric(type.get_kind())) {
+        auto&      type{*TRY(sig.eval_type(type_body, param_src))};
+        const bool is_void{type.get_kind() == gs::type_kind::VOID_};
+        if ((!gs::is_value_type(type.get_kind()) && !is_void) ||
+            gs::is_comptime_numeric(type.get_kind())) {
             return unsupported(u, param_src, "a parameter of a comptime-only or generic type");
         }
 
