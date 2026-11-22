@@ -1,0 +1,50 @@
+//! This allocator wraps another allocator and provides an interface that
+//! facilities multiple allocations that are freed all at once. The allocator
+//! is as thread-safe as its backing allocator.
+//!
+//! Based on MIT licensed implementations:
+//! - https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/heap/ArenaAllocator.zig
+//! - https://github.com/trevorswan11/stdx/blob/v3.3.1/include/stdx/arena.hh
+import std;
+
+const mem = std.mem;
+const Allocator = mem.Allocator;
+const Alignment = mem.Alignment;
+
+pub const ArenaAllocator = struct {};
+
+impl mem.AllocatorVTable for ArenaAllocator {
+    pub const alloc = fn(
+        &mut self,
+        len: usize,
+        alignment: std.mem.Alignment,
+    ): std.Option(^mut u8) {
+        unreachable;
+    };
+
+    pub const resize = fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): bool {
+        unreachable;
+    };
+
+    pub const remap = fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8) {
+        unreachable;
+    };
+
+    pub const free = fn(
+        &mut self,
+        memory: []mut u8,
+        _: std.mem.Alignment,
+    ): void {
+        unreachable;
+    };
+}

@@ -24,4 +24,10 @@ import "allocator_test_suite.gh" as allocator_test_suite;
     pub let mut page_allocator: std.mem.Allocator = .{
         .vtable = ^mut page_alloc_impl,
     };
+
+    import "arena_allocator.gh" as arena_alloc;
+
+    test {
+        import "arena_allocator.gh";
+    }
 }
