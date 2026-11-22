@@ -79,11 +79,11 @@ struct int_bounds {
 }
 
 [[nodiscard]] auto union_field_name(const types::union_t& u, usize i) -> std::string_view {
-    return u.enclosing.ast.get_as<ast::identifier_expr>(u.ast_fields[i].name).name;
+    return u.field_names[i];
 }
 
 [[nodiscard]] auto enum_variant_name(const types::enum_t& e, usize i) -> std::string_view {
-    return e.enclosing.ast.get_as<ast::identifier_expr>(e.ast_enumerations[i].name).name;
+    return e.variant_names[i];
 }
 
 // An implicit `.name`, or the member of a qualified `Type.name`
@@ -388,8 +388,7 @@ class elaborator {
                                  error::UNKNOWN_FIELD,
                                  location_of(value));
         }
-        if (&struct_data.enclosing != &cx_.mod &&
-            !struct_data.ast_fields[proxy->index].is_public()) {
+        if (&struct_data.enclosing != &cx_.mod && !struct_data.is_field_public(proxy->index)) {
             return make_sema_err(fmt::format("Field '{}' of '{}' is private",
                                              field_name,
                                              cx_.ctx.type_display_name(column)),
@@ -560,7 +559,7 @@ class elaborator {
         if (const auto enum_data{column.get_data().as_opt<types::enum_t>()}) {
             const auto en{folded->as_opt<gir::const_enum>()};
             if (en) {
-                for (usize i{0}; i < enum_data->ast_enumerations.size(); ++i) {
+                for (usize i{0}; i < enum_data->variant_count(); ++i) {
                     if (enum_variant_name(*enum_data, i) == en->name) {
                         auto out{make_node(node_kind::ENUM_VALUE, id, column)};
                         out->index = i;
@@ -983,9 +982,9 @@ class tree_builder {
                                                .target = target});
         }
 
-        if (listed.size() < enum_data.ast_enumerations.size() || enum_data.non_exhaustive) {
+        if (listed.size() < enum_data.variant_count() || enum_data.non_exhaustive) {
             std::vector<std::string> missing;
-            for (usize i{0}; i < enum_data.ast_enumerations.size(); ++i) {
+            for (usize i{0}; i < enum_data.variant_count(); ++i) {
                 const auto named{std::ranges::any_of(
                     listed, [&](gsl::not_null<const node*> l) { return l->index == i; })};
                 if (!named) {

@@ -50,7 +50,10 @@ TEST_CASE("UIR Sema's GIR matches the old pipeline's over the file corpus", "[.u
     mod::file_loader             loader;
     std::map<std::string, usize> counts; // ordered for deterministic printing
     std::vector<std::string>     failures;
+    // `GHOTI_UIR_CORPUS_FILTER=<text>` runs only the files whose path contains it
+    const auto filter{get_env("GHOTI_UIR_CORPUS_FILTER")};
     for (const auto& file : corpus_files(std::filesystem::path{*repo})) {
+        if (filter && !file.generic_string().contains(*filter)) { continue; }
         const auto diff{helpers::diff_pipelines(loader, file, libraries, {})};
         helpers::report_uir_diff(diff, file.generic_string());
         counts[std::string{helpers::uir_diff_status_name(diff.status)}] += 1;

@@ -253,8 +253,7 @@ auto analyzer::struct_info(gs::type& type, const source& src) -> result<ip::inde
                                      : pool.intern(ip::nullptr_value{}, opaque_ptr)},
             info_field{"alignment",
                        info_int(st.explicit_field_alignment(i), builtin(gs::type_kind::USIZE))},
-            info_field{"is_pub",
-                       info_bool(i < st.ast_fields.size() && st.ast_fields[i].is_public())},
+            info_field{"is_pub", info_bool(st.is_field_public(i))},
         };
         fields.emplace_back(TRY(info_struct("StructFieldInfo", field, src)));
     }

@@ -242,13 +242,13 @@ TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer wid
 }
 
 TEST_CASE("Target builtins constant eval", "[uir]") {
-    // Their values are enums and strings, which arrive in phase 5
-    check_later_phase("const os_name = @targetOs();", "@targetOs");
+    CHECK(accepted("const os_name = @targetOs();").has_value("os_name"));
     check_later_phase("const ptr_bits = @targetPtrBits();", "@targetPtrBits");
 }
 
 TEST_CASE("Target enum comparison folds against a bare member", "[uir]") {
-    check_later_phase("const here = @targetOs(); const eq = @targetOs() == here;", "@targetOs");
+    const auto run{accepted("const here = @targetOs(); const eq = @targetOs() == here;")};
+    CHECK(run.bool_value("eq"));
 }
 
 TEST_CASE("MulAdd and TagName constant eval", "[uir]") {

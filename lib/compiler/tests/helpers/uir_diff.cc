@@ -95,7 +95,8 @@ namespace {
             args.find("param.") != std::string_view::npos) {
             continue;
         }
-        if (legacy_text.find(stdx::string::substr(uir_text, at, open - at + 1)) ==
+        // The same callee may still be called elsewhere with runtime arguments
+        if (legacy_text.find(stdx::string::substr(uir_text, at, close - at + 1)) ==
             std::string_view::npos) {
             return true;
         }
@@ -142,6 +143,8 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A later global is typed on its own, not by the `return` that first reads it"},
     // A compile-time slice global read at runtime stores its backing array into the slice's slot
     std::string_view{"A compile-time slice used at runtime is backed by a stack array"},
+    // An interface default method's parameter of an associated type is typed `type`
+    std::string_view{"A `dyn` of an interface with a defaulted associated type"},
 };
 
 [[nodiscard]] auto shows_legacy_bug() -> bool {

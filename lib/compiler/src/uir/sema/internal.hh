@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -400,6 +401,16 @@ struct nominal {
     stdx::option<const instance&> creator{};
     // The declaration whose value it is, which an interface's default methods are declared under
     stdx::option<decl_id> declaring_decl{};
+    // Built by `@Struct`, `@Union`, `@Enum` or `||`, so `inst` is no aggregate declaration
+    bool synthesized{false};
+};
+
+// One field of a struct or union a builtin builds
+struct synthetic_field {
+    std::string              name;
+    gsl::not_null<gs::type*> type;
+    u64                      alignment{0};
+    bool                     is_public{true};
 };
 
 // An `impl` block, registered before any analysis so member lookups can find it
@@ -430,6 +441,8 @@ struct impl_instance {
 struct interface_method {
     std::string_view name;
     inst_id          func;
+    // The closure over the interface's associated items a method that reads them is lowered to
+    stdx::option<inst_id> closure{};
 };
 
 struct impl_key {
@@ -544,6 +557,18 @@ class compilation {
     [[nodiscard]] auto vtable_for(impl_instance& applied) -> result<std::string_view>;
     // Whether an interface declares associated types or constants
     [[nodiscard]] static auto declares_associated_items(const nominal& iface) -> bool;
+    // Whether every associated item of an interface has a default
+    [[nodiscard]] static auto defaults_every_associated_item(const nominal& iface) -> bool;
+    // An associated item's value: the impl's own, else the interface's default
+    [[nodiscard]] auto associated_value(const nominal&               iface,
+                                        stdx::option<impl_instance&> applied,
+                                        std::string_view             name,
+                                        const source&                use) -> result<ip::index>;
+    // The values a method's closure over the interface's associated items captures
+    [[nodiscard]] auto associated_captures(const nominal&               iface,
+                                           inst_id                      closure,
+                                           stdx::option<impl_instance&> applied,
+                                           const source& use) -> result<std::vector<ip::index>>;
     // The program's root module, whose list of vtables codegen lowers
     [[nodiscard]] auto root_source() -> mod::module_t&;
 
@@ -626,7 +651,27 @@ class compilation {
 
     // The struct, union or enum `inst` declares, created the first time the current comptime call
     // reaches it
-    [[nodiscard]] auto declare_nominal(const unit& u, inst_id inst, gs::type_kind kind) -> nominal&;
+    [[nodiscard]] auto declare_nominal(const unit&            u,
+                                       inst_id                inst,
+                                       gs::type_kind          kind,
+                                       std::vector<ip::index> identity = {}) -> nominal&;
+    // An enum with no declaration in any AST, its variants given here
+    auto synthesize_enum(nominal&                                  n,
+                         gsl::span<const std::string>              names,
+                         std::vector<i64>                          values,
+                         gs::type&                                 underlying,
+                         bool                                      non_exhaustive,
+                         gsl::span<const gsl::not_null<gs::type*>> merged_from) -> void;
+    auto synthesize_struct(nominal& n, gsl::span<const synthetic_field> fields, bool is_extern)
+        -> void;
+    auto synthesize_union(nominal&                         n,
+                          gsl::span<const synthetic_field> fields,
+                          bool                             tagged,
+                          bool                             is_extern) -> void;
+    // `A || B`, one enum per pair of enums however many merges name it
+    [[nodiscard]] auto merged_enum(std::pair<const gs::type*, const gs::type*> key)
+        -> stdx::option<gs::type&>;
+    auto remember_merge(std::pair<const gs::type*, const gs::type*> key, gs::type& merged) -> void;
     [[nodiscard]] auto nominal_of(const gs::type& t) -> stdx::option<nominal&>;
     // A copy of `name` that lives as long as the context
     [[nodiscard]] auto lasting_name(std::string_view name) -> std::string_view;
@@ -758,7 +803,8 @@ class compilation {
     stdx::option<runtime_site>                                          runtime_site_;
     u32                                                                 next_frame_{0};
     std::vector<gsl::not_null<nominal*>>                                nominals_;
-    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>    nominal_ids_;
+    std::map<std::pair<const gs::type*, const gs::type*>, gsl::not_null<gs::type*>> merges_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>                nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
     stdx::option<lowered> prelude_;
@@ -1174,6 +1220,28 @@ class analyzer {
     [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
 
+    // Types with no declaration (synthesized.cc)
+    [[nodiscard]] auto analyze_merge_enums(inst_id inst) -> result<operand>;
+    // `@Enum(desc)`, one enum per call site and descriptor
+    [[nodiscard]] auto builtin_enum(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // `@Struct(desc)` and `@Union(desc)`, one type per call site and descriptor
+    [[nodiscard]] auto builtin_struct(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_union(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // The fields a `StructInfo` or `UnionInfo` lists
+    [[nodiscard]] auto descriptor_fields(ip::index        desc,
+                                         std::string_view builtin_name,
+                                         bool             is_struct,
+                                         const source& src) -> result<std::vector<synthetic_field>>;
+    // A field of a compile-time aggregate, none when it isn't known
+    [[nodiscard]] auto known_field(ip::index object, std::string_view name, const source& src)
+        -> result<stdx::option<ip::index>>;
+    // An enum value as the enum merged from it, its tag rewritten where the merge moved it
+    [[nodiscard]] auto widen_enum(const operand& op, gs::type& target, const source& src)
+        -> result<operand>;
+
     // Unwrapping (unwrap.cc)
     [[nodiscard]] auto analyze_unwrap(inst_id inst) -> result<operand>;
     // `if (x) |v| a else |e| b`
@@ -1511,6 +1579,21 @@ class analyzer {
     [[nodiscard]] auto builtin_layout(gsl::span<const ref> args, const source& src, bool size)
         -> result<operand>;
     [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
+        -> result<operand>;
+    // A type builtin's descriptor argument as the prelude's `info_name`, known at compile time
+    [[nodiscard]] auto descriptor(gsl::span<const ref> args,
+                                  std::string_view     builtin_name,
+                                  std::string_view     info_name,
+                                  const source&        src) -> result<ip::index>;
+    [[nodiscard]] auto builtin_int_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_float_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // `@targetOs`, `@targetArch`, `@targetAbi` and `@targetFamily` as the prelude's enums
+    [[nodiscard]] auto builtin_target(syntax::builtin_t which, const source& src)
+        -> result<operand>;
+    // A runtime `@assert` or `@verify`, a call to the handler where the condition fails
+    [[nodiscard]] auto runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;

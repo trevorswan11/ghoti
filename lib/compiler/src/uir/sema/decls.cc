@@ -373,7 +373,8 @@ auto compilation::declare_function(const unit&           u,
         return unsupported(u, src, "a function without a body");
     }
 
-    if ((fn_flags & ~flags::EXPLICIT_CONV) != 0) {
+    // `@[testing]` only lets the body use the test builtins
+    if ((fn_flags & ~(flags::EXPLICIT_CONV | flags::TESTING)) != 0) {
         return unsupported(u, src, "a variadic, extern, erased or `impl` function");
     }
 

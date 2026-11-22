@@ -98,12 +98,16 @@ auto compilation::call_identity(const comptime_frame& frame) -> std::vector<ip::
     return args;
 }
 
-auto compilation::declare_nominal(const unit& u, inst_id inst, gs::type_kind kind) -> nominal& {
+auto compilation::declare_nominal(const unit&            u,
+                                  inst_id                inst,
+                                  gs::type_kind          kind,
+                                  std::vector<ip::index> identity) -> nominal& {
     nominal_key key{
         .unit = u.index,
         .inst = inst,
         .args = calls_.empty() ? std::vector<ip::index>{} : call_identity(calls_.back()),
     };
+    key.args.insert(key.args.end(), identity.begin(), identity.end());
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {
         return *nominals_[found->second];
     }

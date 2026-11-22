@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -68,6 +70,15 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TRAP:                     return builtin_trap(src);
     case builtin_t::AS:                       return builtin_as(args, src);
     case builtin_t::THIS:                     return builtin_this(src);
+    case builtin_t::INT:                      return builtin_int_type(args, src);
+    case builtin_t::ENUM:                     return builtin_enum(inst, args, src);
+    case builtin_t::STRUCT:                   return builtin_struct(inst, args, src);
+    case builtin_t::UNION:                    return builtin_union(inst, args, src);
+    case builtin_t::TARGET_OS:
+    case builtin_t::TARGET_ARCH:
+    case builtin_t::TARGET_ABI:
+    case builtin_t::TARGET_FAMILY:            return builtin_target(which, src);
+    case builtin_t::FLOAT:                    return builtin_float_type(args, src);
     case builtin_t::INT_CAST:
     case builtin_t::TRUNCATE:
     case builtin_t::BIT_CAST:
@@ -376,8 +387,8 @@ auto analyzer::builtin_trap(const source& src) -> result<operand> {
 
 auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
     -> result<operand> {
-    if (!is_comptime()) { return comp_.unsupported(u_, src, "a runtime `@assert`"); }
     if (args.empty()) { return comp_.unsupported(u_, src, "an `@assert` without a condition"); }
+    if (!is_comptime()) { return runtime_assert(args, src, verify); }
     const auto cond{TRY(resolve_value(args.front(), src))};
     if (TRY(known_bool(cond, src))) { return void_value(); }
 
@@ -397,6 +408,147 @@ auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool
         src,
         gs::error::COMPTIME_EVALUATION_FAILED,
         std::string{string_literal(mod(), args, 1).value_or(DEFAULT_ASSERT_FAILURE)});
+}
+
+auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
+    -> result<operand> {
+    auto&      ctx{comp_.ctx()};
+    const auto cond{TRY(resolve_value(args.front(), src))};
+
+    // A condition known to hold needs no check, and only `@verify` checks without safety
+    if (const auto known{TRY(speculated_value(args.front(), src))}) {
+        const auto held{comp_.constants().value_at(*known).data.as_opt<bool>()};
+        if (held && *held) { return void_value(); }
+    }
+
+    if (!verify && !ctx.runtime_safety) { return void_value(); }
+    const auto text{string_literal(mod(), args, 1)};
+    if (args.size() > 1 && !text) {
+        return comp_.unsupported(u_, src, "an `@assert` message that isn't a literal");
+    }
+
+    // The handler is emitted for the call codegen lowers the builtin to
+    DISCARD(TRY(comp_.prelude_function(verify ? "panic_handler" : "assert_handler", u_, src)));
+    const auto checked{TRY(condition(cond, src))};
+
+    auto& pool{comp_.constants()};
+    auto& u32_type{ctx.get_int(32, false)};
+    auto& text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
+    // The old emitter locates the check at the builtin's name
+    const auto callee{src.as_opt<ast::node_id>().and_then([&](ast::node_id id) {
+        return u_.source->ast.get_as_opt<ast::call_expr>(id).transform(
+            [](const ast::call_expr& call) { return source{ast::node_id{call.function}}; });
+    })};
+    const auto at{comp_.location_of(u_, callee.value_or(src)).one_based()};
+    const auto message{
+        text.value_or(verify ? std::string_view{"verification failed"} : "assertion failed")};
+    std::vector<gir::value> call_args;
+    call_args.emplace_back(checked);
+    call_args.emplace_back(constant(pool.intern(u_.source->path.string(), text_type), text_type));
+    call_args.emplace_back(constant(pool.intern(u64{at.line}, u32_type), u32_type));
+    call_args.emplace_back(constant(pool.intern(u64{at.column}, u32_type), u32_type));
+    call_args.emplace_back(constant(pool.intern(std::string{message}, text_type), text_type));
+    DISCARD(builder_.emit_builtin_call(
+        verify ? "@verify" : "@assert", std::move(call_args), builtin(gs::type_kind::VOID_)));
+    return void_value();
+}
+
+auto analyzer::descriptor(gsl::span<const ref> args,
+                          std::string_view     builtin_name,
+                          std::string_view     info_name,
+                          const source&        src) -> result<ip::index> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "a type builtin's arity"); }
+    auto&      info{*TRY(comp_.prelude_type(info_name, u_, src))};
+    const auto arg{TRY(resolve_value(args.front(), src))};
+    const auto typed{TRY(coerce_to(arg, info, src, {.what = use_site::kind::STORE}))};
+    const auto known{comptime_value(typed)};
+    if (!known) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name));
+    }
+
+    return *known;
+}
+
+auto analyzer::builtin_int_type(gsl::span<const ref> args, const source& src) -> result<operand> {
+    const auto desc{TRY(descriptor(args, "@Int", "IntInfo", src))};
+    auto&      pool{comp_.constants()};
+    const auto bits_field{TRY(comptime_field(desc, "bits", src))};
+    const auto sign_field{TRY(comptime_field(desc, "signedness", src))};
+    const auto bits_index{comptime_value(bits_field)};
+    const auto sign_index{comptime_value(sign_field)};
+    const auto bits{bits_index ? int_of(pool.value_at(*bits_index)) : stdx::none};
+    const auto sign{sign_index ? variant_name(*sign_index) : stdx::none};
+    if (!bits || !sign) { return comp_.unsupported(u_, src, "an `@Int` descriptor it can't read"); }
+
+    const bool is_signed{*sign == "signed"};
+    const auto width{bits->to_u128()};
+    if (!width || *width > 65'535 || (is_signed && *width == 0)) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::LITERAL_OUT_OF_RANGE,
+            fmt::format("'@Int' has no {} {}-bit integer type; widths are {}..65535",
+                        *sign,
+                        bits->to_string(),
+                        is_signed ? 1 : 0));
+    }
+
+    return interned_type(comp_.ctx().get_int(static_cast<u16>(*width), is_signed));
+}
+
+auto analyzer::builtin_float_type(gsl::span<const ref> args, const source& src) -> result<operand> {
+    const auto desc{TRY(descriptor(args, "@Float", "FloatInfo", src))};
+    const auto bits_field{TRY(comptime_field(desc, "bits", src))};
+    const auto bits_index{comptime_value(bits_field)};
+    const auto bits{bits_index ? int_of(comp_.constants().value_at(*bits_index)) : stdx::none};
+    if (!bits) { return comp_.unsupported(u_, src, "a `@Float` descriptor it can't read"); }
+
+    const auto width{bits->to_u128().value_or(0)};
+    const auto kind{[&] -> stdx::option<gs::type_kind> {
+        switch (static_cast<u64>(width)) {
+        case 16:  return gs::type_kind::F16;
+        case 32:  return gs::type_kind::F32;
+        case 64:  return gs::type_kind::F64;
+        case 80:  return gs::type_kind::F80;
+        case 128: return gs::type_kind::F128;
+        default:  return stdx::none;
+        }
+    }()};
+    if (!kind || width > 128) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::LITERAL_OUT_OF_RANGE,
+            fmt::format("'@Float' has no {}-bit floating-point type", bits->to_string()));
+    }
+
+    return interned_type(builtin(*kind));
+}
+
+auto analyzer::builtin_target(syntax::builtin_t which, const source& src) -> result<operand> {
+    const auto facts{codegen::target_facts::resolve(comp_.ctx().target_opts.triple_str)};
+    const auto [enum_name, member]{[&] -> std::pair<std::string_view, std::string_view> {
+        switch (which) {
+        case syntax::builtin_t::TARGET_OS:   return {"Os", facts.os};
+        case syntax::builtin_t::TARGET_ARCH: return {"Arch", facts.arch};
+        case syntax::builtin_t::TARGET_ABI:  return {"Abi", facts.abi};
+        default:                             return {"Family", facts.family};
+        }
+    }()};
+
+    auto&       enum_type{*TRY(comp_.prelude_type(enum_name, u_, src))};
+    const auto& en{enum_type.get_data().as<gs::types::enum_t>()};
+    const bool  listed{std::ranges::contains(en.variant_names, member)};
+    if (!listed) {
+        return comp_.unsupported(
+            u_, src, fmt::format("a target the `{}` enum doesn't list", enum_name));
+    }
+
+    return enum_constant(enum_type, member, src);
 }
 
 } // namespace ghoti::uir::sema

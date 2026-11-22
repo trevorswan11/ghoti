@@ -226,4 +226,53 @@ TEST_CASE("`?` in a function whose return type can't take the residual is report
           "'builtin.Rewrappable'");
 }
 
+TEST_CASE("A `dyn` of an interface with a defaulted associated type", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Sink = interface {
+            Error: type = u8;
+            pub const put = fn(&mut self, b: u8): i32;
+            pub const code = fn(&mut self, e: Error): i32 { return self.put(e) + 1; };
+        };
+        const Count = struct { n: i32 };
+        impl Sink for Count {
+            pub const put = fn(&mut self, b: u8): i32 {
+                self.n += 1;
+                return @intCast(b);
+            };
+        }
+        const twice = fn(s: &mut dyn Sink): i32 { return s.code(3) + s.put(4); };
+        pub const main = fn(): i32 {
+            let mut c: Count = .{ .n = 0 };
+            return twice(&mut c) + c.n;
+        };
+    )")};
+    INFO(diff.detail);
+    // The old GIR types the default method's `e: Error` as `type`, a recorded legacy bug
+    CHECK(diff.status == helpers::uir_diff_status::LEGACY_BUG);
+}
+
+TEST_CASE("A `dyn` names its associated types' defaults", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Sink = interface {
+            Error: type = u8;
+            pub const put = fn(&mut self, b: u8): i32;
+            pub const twice = fn(&mut self, b: u8): i32 { return self.put(b) + self.put(b); };
+        };
+        const Count = struct { n: i32 };
+        impl Sink for Count {
+            pub const put = fn(&mut self, b: u8): i32 {
+                self.n += 1;
+                return @intCast(b);
+            };
+        }
+        const run = fn(s: &mut dyn Sink): i32 { return s.twice(3); };
+        pub const main = fn(): i32 {
+            let mut c: Count = .{ .n = 0 };
+            return run(&mut c) + c.n;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

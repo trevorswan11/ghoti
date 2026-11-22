@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <string>
 #include <string_view>
@@ -266,19 +267,25 @@ auto compilation::default_method(impl_instance& applied, std::string_view name)
             return stdx::option<operand>{known->second};
         }
 
-        // A method of an interface with associated items closes over them
-        const auto func{yielded_inst(m, signature)};
-        if (!func || m.tag_of(*func) != tag::func) {
-            return unsupported(
-                u, m.src_of(iface->inst), "a default method of an interface with associated items");
+        // A method reading the interface's associated items closes over them
+        auto func{yielded_inst(m, signature)};
+        if (!func) { return stdx::option<operand>{}; }
+        std::vector<ip::index> captures;
+        if (m.tag_of(*func) == tag::closure) {
+            captures = TRY(associated_captures(*iface, *func, applied, m.src_of(*func)));
+            record_reader closure{m, m.data_of(*func).pl.extra};
+            func = as_inst(*closure.ref_field());
         }
+
+        if (!func || m.tag_of(*func) != tag::func) { return stdx::option<operand>{}; }
 
         record_reader fn{m, m.data_of(*func).pl.extra};
         fn.skip_body().skip_body().skip_body().skip_u32();
         if ((fn.u32_field() & flags::BODYLESS) != 0) { return stdx::option<operand>{}; }
 
         // A plain impl's default is named in the impl's scope, like the methods it writes out
-        auto              member{impl_context(applied)};
+        auto member{impl_context(applied)};
+        member.captures = std::move(captures);
         const auto&       impl_unit{*applied.entry->owner};
         const std::string symbol{
             applied.prefix.empty()
@@ -301,16 +308,30 @@ auto analyzer::analyze_interface_decl(inst_id inst) -> result<operand> {
 
     auto& n{comp_.declare_nominal(u_, inst, gs::type_kind::INTERFACE)};
 
-    // Only a `dyn`'s name reads the payload, so it lists no methods of its own
+    // Only a `dyn`'s name reads the payload, so it lists only the associated items' names
     if (n.state == nominal_state::DECLARED) {
+        auto&         ctx{comp_.ctx()};
+        record_reader rec{record(inst)};
+        for (u32 i{0}, count{rec.count()}; i < count; ++i) { rec.skip_ref().skip_u32().skip_str(); }
+        rec.skip_body();
+        std::array<gsl::span<std::string_view>, 2> names;
+        for (auto& list : names) {
+            const auto count{rec.count()};
+            list = make_uninit_span<std::string_view>(ctx.arena, count);
+            for (u32 i{0}; i < count; ++i) {
+                list[i] = comp_.lasting_name(rec.str_field());
+                rec.skip_body().skip_body();
+            }
+        }
+
         n.type->resolve<gs::type::data_t>(gs::types::interface_t{
             .method_sigs        = {},
             .method_src_indices = {},
             .method_names       = {},
             .method_is_pub      = {},
             .requirement_count  = 0,
-            .assoc_type_names   = {},
-            .assoc_const_names  = {},
+            .assoc_type_names   = names[0],
+            .assoc_const_names  = names[1],
             .ast_methods        = {},
             .ast_assoc_types    = {},
             .ast_assoc_consts   = {},

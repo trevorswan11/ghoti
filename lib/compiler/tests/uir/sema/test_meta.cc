@@ -208,4 +208,51 @@ TEST_CASE("A comptime_int built from reflected bits folds exactly", "[uir]") {
     CHECK(run.gir().contains("const max64: bool = true"));
 }
 
+TEST_CASE("A runtime `@assert` and `@verify` call their handlers", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const f = fn(x: i32): i32 {
+            @assert(x > 0, "x must be positive");
+            @verify(x < 10);
+            @assert(true);
+            return x;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`@Int` and `@Float` build the types their descriptors name", "[uir]") {
+    const auto diff{diff_source(R"(
+        const U12 = @Int(.{ .bits = 12, .signedness = .unsigned });
+        const I7 = @Int(.{ .bits = 7, .signedness = .signed });
+        const F = @Float(.{ .bits = 64 });
+        pub const widen = fn(x: U12, y: I7, z: F): F {
+            return z + @floatFromInt(x) + @floatFromInt(y);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`@Int` with a width it has no type for is reported", "[uir]") {
+    const auto run{helpers::uir_rejected(R"(
+        const T = @Int(.{ .bits = 0, .signedness = .signed });
+        pub const f = fn(x: T): T { return x; };
+    )")};
+    CHECK(run.codes() == std::vector{error::LITERAL_OUT_OF_RANGE});
+    CHECK(run.messages().front() == "'@Int' has no signed 0-bit integer type; widths are 1..65535");
+}
+
+TEST_CASE("The target builtins name the prelude's enums", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const on_64 = fn(): bool {
+            return @targetArch() == .x86_64 or @targetArch() == .aarch64;
+        };
+        pub const is_windows = fn(): bool { return @targetOs() == .windows; };
+        pub const family = fn(): builtin.Family { return @targetFamily(); };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

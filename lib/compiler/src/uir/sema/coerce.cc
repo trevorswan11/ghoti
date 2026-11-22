@@ -94,6 +94,10 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
     if (gs::is_same_unqualified(from, target)) { return op; }
     if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
+    if (from.get_kind() == gs::type_kind::ENUM && target.get_kind() == gs::type_kind::ENUM &&
+        gs::is_enum_widenable(from, target)) {
+        return operand{TRY(widen_enum(op, target, src))};
+    }
 
     // An array of references is an array of pointers to the same values
     if (const auto value{op.as_opt<gir::value>()}; value && decays_to(from, target)) {

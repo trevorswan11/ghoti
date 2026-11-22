@@ -68,11 +68,22 @@ auto compilation::interface_methods(const nominal& iface) -> std::vector<interfa
         rec.skip_u32();
         const auto signature{rec.body_field()};
         rec.skip_body();
-        const auto func{signature.empty() || m.tag_of(signature.back()) != tag::yield
-                            ? stdx::none
-                            : as_inst(m.data_of(signature.back()).un.operand)};
-        if (!func) { continue; }
-        methods.emplace_back<interface_method>({.name = name, .func = *func});
+        const auto yielded{signature.empty() || m.tag_of(signature.back()) != tag::yield
+                               ? stdx::none
+                               : as_inst(m.data_of(signature.back()).un.operand)};
+        if (!yielded) { continue; }
+
+        // A method reading an associated item is a closure over it
+        if (m.tag_of(*yielded) == tag::closure) {
+            record_reader closure{m, m.data_of(*yielded).pl.extra};
+            const auto    func{as_inst(*closure.ref_field())};
+            if (!func) { continue; }
+            methods.emplace_back<interface_method>(
+                {.name = name, .func = *func, .closure = *yielded});
+            continue;
+        }
+
+        methods.emplace_back<interface_method>({.name = name, .func = *yielded});
     }
 
     return methods;
@@ -112,6 +123,73 @@ auto compilation::declares_associated_items(const nominal& iface) -> bool {
     return rec.count() != 0;
 }
 
+auto compilation::defaults_every_associated_item(const nominal& iface) -> bool {
+    const auto&   m{*iface.owner->uir};
+    record_reader rec{m, m.data_of(iface.inst).pl.extra};
+    for (u32 i{0}, count{rec.count()}; i < count; ++i) { rec.skip_ref().skip_u32().skip_str(); }
+    rec.skip_body();
+    for (u32 list{0}; list < 2; ++list) {
+        for (u32 i{0}, count{rec.count()}; i < count; ++i) {
+            rec.skip_str().skip_body();
+            if (rec.body_field().empty()) { return false; }
+        }
+    }
+
+    return true;
+}
+
+auto compilation::associated_value(const nominal&               iface,
+                                   stdx::option<impl_instance&> applied,
+                                   std::string_view             name,
+                                   const source&                use) -> result<ip::index> {
+    const auto& owner{*iface.owner};
+    if (applied) {
+        if (const auto member{TRY(impl_member(*applied, name, use))}) {
+            if (const auto index{member->as_opt<ip::index>()}) { return *index; }
+            return unsupported(owner, use, "an associated item that isn't known at compile time");
+        }
+    }
+
+    // The interface's default, read in its own module
+    const auto&   m{*owner.uir};
+    record_reader rec{m, m.data_of(iface.inst).pl.extra};
+    for (u32 i{0}, count{rec.count()}; i < count; ++i) { rec.skip_ref().skip_u32().skip_str(); }
+    rec.skip_body();
+    for (u32 list{0}; list < 2; ++list) {
+        for (u32 i{0}, count{rec.count()}; i < count; ++i) {
+            const auto item{rec.str_field()};
+            rec.skip_body();
+            const auto fallback{rec.body_field()};
+            if (item != name || fallback.empty()) { continue; }
+            analyzer    a{*this, owner};
+            const auto& at{m.src_of(fallback.back())};
+            if (list == 0) { return TRY(a.eval_type(fallback, at))->get_ip_index(); }
+            const auto value{TRY(a.eval_comptime(fallback))};
+            if (const auto index{value.as_opt<ip::index>()}) { return *index; }
+            return unsupported(
+                owner, at, "an associated constant that isn't known at compile time");
+        }
+    }
+
+    return unsupported(owner, use, fmt::format("an associated item `{}` with no value", name));
+}
+
+auto compilation::associated_captures(const nominal&               iface,
+                                      inst_id                      closure,
+                                      stdx::option<impl_instance&> applied,
+                                      const source& use) -> result<std::vector<ip::index>> {
+    const auto&   m{*iface.owner->uir};
+    record_reader rec{m, m.data_of(closure).pl.extra};
+    rec.skip_ref();
+    std::vector<ip::index> values;
+    for (u32 i{0}, count{rec.count()}; i < count; ++i) {
+        rec.skip_ref().skip_u32();
+        values.emplace_back(TRY(associated_value(iface, applied, rec.str_field(), use)));
+    }
+
+    return values;
+}
+
 auto compilation::root_source() -> mod::module_t& {
     for (const auto& u : units_) {
         if (u.source.get() == prog_.root.get()) { return *u.source; }
@@ -130,11 +208,21 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
     }
 
     const auto n{comp_.nominal_of(iface)};
-    if (!n || comp_.declares_associated_items(*n)) {
-        return comp_.unsupported(u_, src, "a `dyn` of an interface with associated items");
+    if (!n) { return comp_.unsupported(u_, src, "a `dyn` of an interface UIR didn't declare"); }
+    if (comp_.declares_associated_items(*n) && !comp_.defaults_every_associated_item(*n)) {
+        return comp_.unsupported(u_, src, "a `dyn` of an associated item with no default");
     }
 
-    return interned_type(comp_.ctx().get_dyn(iface, {}));
+    // Each associated type is bound to its default
+    auto&       ctx{comp_.ctx()};
+    const auto& names{iface.get_data().as<gs::types::interface_t>().assoc_type_names};
+    auto        bindings{ctx.pool.get_many_unsafe(names.size())};
+    for (usize i{0}; i < names.size(); ++i) {
+        const auto value{TRY(comp_.associated_value(*n, stdx::none, names[i], src))};
+        bindings[i] = &comp_.constants().type_at(value);
+    }
+
+    return interned_type(ctx.get_dyn(iface, bindings));
 }
 
 auto analyzer::coerce_to_dyn(const operand& op, gs::type& target, const source& src)
@@ -208,6 +296,11 @@ auto analyzer::call_dyn(const operand&       object,
     const auto    params{params_of(m, rec.body_field())};
     const auto    ret{rec.body_field()};
     analyzer      sig{comp_, owner};
+    if (slot != methods.end() && slot->closure) {
+        sig.enter(member_context{
+            .captures = TRY(comp_.associated_captures(*iface, *slot->closure, stdx::none, src))});
+    }
+
     if (params.size() != args.size() + 1) {
         return comp_.report(
             u_,

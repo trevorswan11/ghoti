@@ -287,6 +287,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::ret:             return analyze_ret(inst);
     case tag::ret_value:       return analyze_ret_value(inst);
     case tag::unwrap:          return analyze_unwrap(inst);
+    case tag::merge_enums:     return analyze_merge_enums(inst);
     case tag::unwrap_branch:   return analyze_unwrap_branch(inst);
     case tag::residual:        return analyze_residual(inst);
     case tag::ret_residual:    return analyze_ret_residual(inst);
