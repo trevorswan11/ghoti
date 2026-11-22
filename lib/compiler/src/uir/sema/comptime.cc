@@ -363,7 +363,7 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     const auto found{values_.find(*inst)};
     if (found == values_.end()) { return resolve(r, src); }
 
-    // An aggregate global is its value at compile time, as is a comptime parameter's slot
+    // An aggregate global is its value at compile time
     if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
     if (const auto s{found->second.as_opt<slot_value>()}; s && s->known) { return *s->known; }
     // A field or element address is computed again on its object's compile-time value

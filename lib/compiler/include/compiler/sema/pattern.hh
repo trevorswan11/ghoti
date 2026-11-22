@@ -154,7 +154,7 @@ struct switch_case {
     bool                       boolean{false};
     big_int                    lo{};
     big_int                    hi{};
-    stdx::option<ast::node_id> source{}; // ENUM's variant, as written
+    stdx::option<ast::node_id> source{}; // ENUM's variant as written
     usize                      target{0};
 };
 

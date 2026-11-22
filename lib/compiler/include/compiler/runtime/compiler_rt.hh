@@ -31,8 +31,7 @@ namespace ghoti::runtime {
                                        const codegen::target_options& target_opts)
     -> stdx::result<std::vector<std::string>, codegen::diagnostic>;
 
-// Functions whose own compiled body calls back into themselves through a runtime libcall, as in
-// `__addtf3` written with `f128` addition. `asm_text` is the archive's assembly.
+// Functions whose own compiled body calls back into themselves through a runtime libcall
 [[nodiscard]] auto find_self_calling_libcalls(std::string_view               asm_text,
                                               const codegen::target_options& target_opts)
     -> std::vector<std::string>;

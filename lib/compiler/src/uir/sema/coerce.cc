@@ -255,7 +255,7 @@ auto analyzer::comptime_slice_of(ip::index array, gs::type& from, gs::type& targ
         return stdx::none;
     }
 
-    // A compile-time slice holds its elements, as the array did
+    // A compile-time slice holds its elements
     auto&       pool{comp_.constants()};
     const auto& data{pool.value_at(array).data};
     if (const auto agg{data.as_opt<ip::aggregate_value>()}) {

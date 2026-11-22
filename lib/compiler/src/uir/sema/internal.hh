@@ -514,7 +514,7 @@ class compilation {
     [[nodiscard]] auto
     import_target(const unit& u, import_id import, std::string_view name, const source& src)
         -> result<operand>;
-    // The module-level declaration `name` of `m`, as `user` sees it
+    // The module-level declaration `name` of `m`
     [[nodiscard]] auto
     module_member(const module_ref& m, std::string_view name, const unit& user, const source& src)
         -> result<operand>;
@@ -1007,7 +1007,7 @@ class analyzer {
 
     // `dyn` (dyn.cc)
     [[nodiscard]] auto analyze_dyn_type(inst_id inst) -> result<operand>;
-    // A pointer or reference to a type that implements the interface, as a `&dyn I` or `^dyn I`
+    // A pointer or reference to a type that implements the interface as a `&dyn I` or `^dyn I`
     [[nodiscard]] auto coerce_to_dyn(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
     // A method call through a `dyn` object's vtable, none when the object isn't one

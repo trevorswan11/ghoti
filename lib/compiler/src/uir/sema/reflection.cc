@@ -294,7 +294,7 @@ auto analyzer::union_info(gs::type& type, const source& src) -> result<ip::index
 
 auto analyzer::field_default_value(gs::type& type, usize index, const source& src)
     -> result<stdx::option<ip::index>> {
-    // A default that can't be folded reports none, as the field had no default
+    // A default that can't be folded reports none
     const auto defaults{TRY(field_defaults(type, src))};
     if (index >= defaults.size() || defaults[index].empty()) { return stdx::none; }
     const auto scope{comptime_scope()};

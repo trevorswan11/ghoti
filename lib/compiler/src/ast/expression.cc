@@ -368,7 +368,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         default:                             return stdx::none;
         }
     }()};
-    // `@Vector(n, T)` builds its type at compile time, as `[n]T` does
+    // `@Vector(n, T)` builds its type at compile time
     stdx::option<syntax::parser::array_length_scope> type_construction_scope;
     if (builtin && builds_type(*builtin)) { type_construction_scope.emplace(parser); }
 

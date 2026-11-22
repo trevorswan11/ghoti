@@ -240,7 +240,7 @@ TEST_CASE("Type translate untagged extern union types") {
     const auto [union_sym, union_data, union_type]{
         ctx->get_type_sym_info<sema::symbols::node_t>("RawUnion", idx)};
     auto* union_llvm{translator.translate(union_type)};
-    // Stored as its most aligned member, as clang does
+    // Stored as its most aligned member like clang does
     REQUIRE(union_llvm->isStructTy());
     CHECK(union_llvm->getStructNumElements() == 1);
     CHECK(union_llvm->getStructElementType(0)->isDoubleTy());

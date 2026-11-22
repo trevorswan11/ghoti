@@ -385,7 +385,7 @@ using raw_shape = std::pair<std::string_view, llvm::Type*>;
     auto* v4f{llvm::FixedVectorType::get(f32, 4)};
     auto* v2f{llvm::FixedVectorType::get(f32, 2)};
 
-    // Each union stores the member clang would, as the type translator lays them out
+    // Each union stores the member clang would
     codegen::union_member_map unions;
     const auto                union_of{[&](llvm::Type* storage, std::vector<llvm::Type*> members) {
         auto* union_ty{llvm::StructType::create(context, {storage})};
@@ -417,7 +417,7 @@ auto check_raw_signatures(std::string_view triple, const std::vector<expectation
     }
 }
 
-// Small float structs lowered under the RISC-V float ABI `abi`, as `-mabi` would pick it
+// Small float structs lowered under the RISC-V float ABI `abi`
 auto check_flagged_signatures(std::string_view                triple,
                               std::string_view                abi,
                               const std::vector<expectation>& expected) -> void {

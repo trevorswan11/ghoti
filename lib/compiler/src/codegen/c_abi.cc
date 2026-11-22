@@ -814,7 +814,7 @@ class classifier {
         return plan;
     }
 
-    // AAPCS returns at most 4 bytes in r0, as the narrowest integer on little-endian targets
+    // AAPCS returns at most 4 bytes in r0 as the narrowest integer on little-endian targets
     [[nodiscard]] auto arm_return(llvm::Type* ty, bool vfp) const -> value_plan {
         if (vfp && homogeneous_member(ty, true)) { return direct(ty); }
         const auto size{alloc_size(ty)};
@@ -978,8 +978,7 @@ class classifier {
     u32                      riscv_gprs_{8};
 };
 
-// Moves values between their ghoti and C ABI shapes through stack memory, as clang does, and
-// leaves the round trips for later passes to fold
+// Moves values between their ghoti and C ABI shapes through stack memory
 class abi_rewriter {
   public:
     abi_rewriter(llvm::Module&            module,

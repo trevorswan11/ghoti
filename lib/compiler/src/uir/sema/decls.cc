@@ -620,7 +620,7 @@ auto analyzer::analyze_global(decl_id                        decl,
     global.visibility = attrs.visibility;
     global.alignment  = attrs.alignment;
     comp_.note_storage(u_, decl);
-    // A string array is read where the global stores it, as an aggregate is
+    // A string array is read where the global stores it
     const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
     if (!is_mutable && !is_aggregate && !text_array) { return stored; }
     const auto& symbol{comp_.own_symbol(u_, decl, global.name)};

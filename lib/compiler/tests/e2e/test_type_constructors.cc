@@ -1073,7 +1073,7 @@ TEST_CASE("a rejecting ctor from another module works in a generic signature") {
         "pub " + std::string{stdx::string::substr(REJECTING_CTOR, REJECTING_CTOR.find("const"))}};
     const std::vector imports{helpers::mock_file{"lib.gh", lib, "lib"}};
 
-    SECTION("qualified, as a parameter type") {
+    SECTION("qualified as a parameter type") {
         CHECK(helpers::compile_and_run(R"(
             import "lib.gh" as lib;
             const shift = fn(comptime T: type, x: T, s: lib.Log2Int(T)): T { return x << s; };
@@ -1085,7 +1085,7 @@ TEST_CASE("a rejecting ctor from another module works in a generic signature") {
         )",
                                        imports) == 12);
     }
-    SECTION("through an alias, as a return type") {
+    SECTION("through an alias as a return type") {
         CHECK(helpers::compile_and_run(R"(
             import "lib.gh" as lib;
             const Log2Int = lib.Log2Int;

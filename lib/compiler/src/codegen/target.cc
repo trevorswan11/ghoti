@@ -410,7 +410,7 @@ struct machine_baseline {
 
 // What `generic` means per target: the baseline its OS ABI already assumes. A requested feature
 // comes after the defaults, so `-cx16` still turns one off
-// The build machine's model and every feature it has, as `+name` / `-name`, then `requested`
+// The build machine's model and every feature it has as `+name` / `-name`, then `requested`
 [[nodiscard]] auto native_baseline(std::string_view requested) -> machine_baseline {
     std::string features;
     for (const auto& [name, enabled] : llvm::sys::getHostCPUFeatures()) {
@@ -706,7 +706,7 @@ auto create_target_machine(const target_options& options)
 namespace {
 
 // The ABI name the RISC-V backend uses, which without an explicit one follows the widest float
-// extension the machine has, as LLVM's `computeDefaultABI` does
+// extension the machine has
 [[nodiscard]] auto riscv_abi_name(const llvm::TargetMachine& machine) -> std::string {
     const auto requested{machine.Options.MCOptions.getABIName()};
     if (!requested.empty()) { return requested.str(); }

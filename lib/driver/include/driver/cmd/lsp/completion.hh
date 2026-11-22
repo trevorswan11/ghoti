@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/module/module.hh"
@@ -29,7 +30,7 @@ struct attribute_context {
     stdx::option<ast::attribute_kind> in_args_of{};
     // The identifier being typed (or hovered), possibly empty
     std::string_view word{};
-    // The word directly follows a `.`, as in `visibility(.hid`
+    // The word directly follows a `.`
     bool after_dot{false};
 };
 

@@ -137,7 +137,7 @@ TEST_CASE("RISC-V Linux defaults to RV64GC with the hard-float ABI") {
     CHECK(linux_out.contains("amoadd.w"));
     CHECK_FALSE(linux_out.contains("__muldf3"));
     CHECK_FALSE(linux_out.contains("__atomic"));
-    // A double argument arrives in `fa0`, as glibc's lp64d expects
+    // A double argument arrives in `fa0` as glibc's lp64d expects
     CHECK(linux_out.contains("fa0"));
 
     // Bare metal keeps the bare `generic` CPU
@@ -154,7 +154,7 @@ TEST_CASE("A big-endian arch is its base arch with a big endian") {
     CHECK(facts.endian == "big");
 }
 
-TEST_CASE("A library can leave its panic_handler out, as compiler_rt does") {
+TEST_CASE("A library can leave its panic_handler out") {
     constexpr std::string_view source{R"(
         extern("kernel32") const GetStdHandle: extern fn(n: u32): ^opaque;
         pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {

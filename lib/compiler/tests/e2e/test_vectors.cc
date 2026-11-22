@@ -248,7 +248,7 @@ TEST_CASE("@Vector rejects lanes and lengths it can't hold") {
         "pub const f = fn(): void { let a: @Vector(0, f32) = undefined; };")};
     CHECK(empty.message_contains("'@Vector' has 0 lanes"));
 
-    // A lane count makes the parameter it reads compile-time, as an array length does
+    // A lane count makes the parameter it reads compile-time
     const auto unknown{helpers::type_check_diags(R"(
         const f = fn(n: usize): i32 { let a: @Vector(n, i32) = undefined; return a[0]; };
         pub const g = fn(): i32 { let mut k: usize = 4; k += 1; return f(k); };

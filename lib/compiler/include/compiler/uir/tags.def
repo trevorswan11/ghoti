@@ -58,7 +58,7 @@ UIR_TAG(interface_decl, PL)
 
 // Names and access
 UIR_TAG(decl_val, UN)             // aux: the declaration's index
-UIR_TAG(decl_ref, UN)             // a module or member `let mut`, as a place
+UIR_TAG(decl_ref, UN)             // a module or member `let mut`
 UIR_TAG(import, UN)               // aux: the import's index
 UIR_TAG(capture, UN)              // aux: a capture of the innermost function or aggregate
 UIR_TAG(undeclared, STR)          // a name no scope declares, in an arm only `comptime` may prune
