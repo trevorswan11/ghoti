@@ -16,6 +16,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -394,6 +395,26 @@ struct fold_input {
                           in.type == "f80" || in.type == "f128"};
     if (float_type && in.kind == "widen_cast" && ops.size() == 1 && is_number_text(ops[0])) {
         return std::string{ops[0]};
+    }
+
+    // Arithmetic on known floats rounds once into the instruction's format
+    if (float_type && ops.size() == 2 && is_number_text(ops[0]) && is_number_text(ops[1]) &&
+        (in.kind == "add" || in.kind == "sub" || in.kind == "mul")) {
+        const auto format{in.type == "f16"   ? float_format::HALF
+                          : in.type == "f32" ? float_format::SINGLE
+                          : in.type == "f64" ? float_format::DOUBLE
+                          : in.type == "f80" ? float_format::X87
+                                             : float_format::QUAD};
+        const auto l{f128::parse(ops[0])};
+        const auto r{f128::parse(ops[1])};
+        if (l.status != float_parse_status::OK || r.status != float_parse_status::OK) {
+            return stdx::none;
+        }
+
+        const auto value{in.kind == "add"   ? add(l.value, r.value, format)
+                         : in.kind == "sub" ? subtract(l.value, r.value, format)
+                                            : multiply(l.value, r.value, format)};
+        return value.to_string();
     }
 
     const auto shape{int_shape_of(in.type)};

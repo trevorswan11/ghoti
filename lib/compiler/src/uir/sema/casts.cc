@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -588,6 +589,15 @@ auto analyzer::fold_cast(builtin_t       which,
         return gir::value::constant(pool, number->round_to(format_of(target)), target)
             .constant_index();
     }
+    case builtin_t::PTR_FROM_INT: {
+        // A pointer known at compile time is its address as an integer
+        const auto address{exact ? exact->to_u128() : stdx::none};
+        if (!address || *address > std::numeric_limits<u64>::max()) {
+            return comp_.unsupported(u_, src, "a `@ptrFromInt` of this value at compile time");
+        }
+
+        return pool.intern(static_cast<u64>(*address), target);
+    }
     default: break;
     }
 
@@ -654,9 +664,8 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
                                             : ""));
         }
 
-        if (known && is_comptime()) {
-            return comp_.unsupported(u_, src, "an `@intFromPtr` at compile time");
-        }
+        // The old emitter folds a known address only where an immutable `let` takes it
+        if (known) { return comp_.unsupported(u_, src, "an `@intFromPtr` of a known address"); }
 
         TRY(require_runtime(src));
         return cast_value(instruction_kind::INT_FROM_PTR,

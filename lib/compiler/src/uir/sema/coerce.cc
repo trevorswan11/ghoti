@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -65,7 +66,43 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         return operand{TRY(materialize_merge(*m, target, src))};
     }
 
+    if (const auto call{op.as_opt<implicit_call>()}) {
+        const auto kind{target.get_kind()};
+        if (kind != gs::type_kind::STRUCT && kind != gs::type_kind::UNION &&
+            kind != gs::type_kind::ENUM) {
+            return stdx::none;
+        }
+
+        auto       rec{record(call->inst)};
+        const auto literal{as_inst(*rec.ref_field())};
+        rec.skip_ref();
+        const auto args{rec.refs_field()};
+        const auto name{mod().string(mod().data_of(*literal).str)};
+        const auto member{TRY(member_of(target, name, src))};
+        const auto result{TRY(call_operand(member, args, src, src))};
+        return operand{TRY(coerce_to(result, target, src, {.what = use_site::kind::STORE}))};
+    }
+
     if (const auto literal{op.as_opt<enum_literal>()}) {
+        // `.name` of a struct or union is its member constant, unless it names a union's field
+        const auto name{mod().string(mod().data_of(literal->inst).str)};
+        const auto kind{target.get_kind()};
+        const auto union_field{[&] {
+            const auto ut{target.get_data().as_opt<gs::types::union_t>()};
+            return ut && std::ranges::contains(ut->field_names, name);
+        }};
+        if ((kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION) && !union_field()) {
+            TRY(comp_.require_fields(u_, src, target));
+            auto member{TRY(member_of(target, name, src))};
+
+            // Compile time reads a constant's value rather than its global
+            if (const auto g{member.as_opt<global_const>()}; g && is_comptime()) {
+                member = operand{g->value};
+            }
+
+            return operand{TRY(coerce_to(member, target, src, {.what = use_site::kind::STORE}))};
+        }
+
         if (target.get_kind() != gs::type_kind::ENUM) { return stdx::none; }
         return enum_constant(target, mod().string(mod().data_of(literal->inst).str), src);
     }
@@ -94,6 +131,10 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
     if (gs::is_same_unqualified(from, target)) { return op; }
     if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
+    if (from.get_kind() == gs::type_kind::ENUM && target.get_kind() == gs::type_kind::ENUM &&
+        gs::is_enum_widenable(from, target)) {
+        return operand{TRY(widen_enum(op, target, src))};
+    }
 
     // An array of references is an array of pointers to the same values
     if (const auto value{op.as_opt<gir::value>()}; value && decays_to(from, target)) {
@@ -128,6 +169,15 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         if (!comptime_value(op)) {
             const auto base{TRY(operand_address(op, src))};
             return array_as_slice(base.address, from, target);
+        }
+
+        // A known array a runtime body slices is built, then copied into a slot of its own
+        if (const auto known{comptime_value(op)};
+            !comp_.constants().is_type(*known) &&
+            comp_.constants().value_at(*known).data.is<ip::aggregate_value>()) {
+            const auto built{TRY(as_runtime(op, src))};
+            const auto slot{spill(built, from, false)};
+            return array_as_slice(slot.address, from, target);
         }
     }
 
@@ -289,6 +339,27 @@ auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> resu
     return gir::value{builder_.emit_load(gir::value{slot, slice_type}, slice_type), slice_type};
 }
 
+auto analyzer::comptime_referent(const operand& op) -> stdx::option<ip::index> {
+    const auto known{comptime_value(op)};
+    if (!known || comp_.constants().is_type(*known)) { return stdx::none; }
+    const auto address{comp_.constants().value_at(*known).data.as_opt<ip::address_value>()};
+    if (!address || address->pointee.size() != 1) { return stdx::none; }
+    return address->pointee.front();
+}
+
+auto analyzer::read_through_reference(const operand& op, const source& src) -> result<operand> {
+    auto& type{type_of(op)};
+    if (type.get_kind() != gs::type_kind::REFERENCE) { return op; }
+
+    // A compile-time reference holds what it refers to
+    if (const auto referent{comptime_referent(op)}) { return operand{*referent}; }
+    if (is_comptime()) { return op; }
+    auto&      referent{*gs::pointee_of(type)};
+    const auto address{TRY(as_runtime(op, src))};
+    return operand{
+        gir::value{builder_.emit_load(gir::value{address.data, referent}, referent), referent}};
+}
+
 auto analyzer::coerce_to(const operand&  op,
                          gs::type&       target,
                          const source&   src,
@@ -309,6 +380,14 @@ auto analyzer::coerce_to(const operand&  op,
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
 
+    // A reference is read where a value is wanted
+    if (from.get_kind() == gs::type_kind::REFERENCE && !is_comptime() &&
+        target.get_kind() != gs::type_kind::REFERENCE &&
+        target.get_kind() != gs::type_kind::POINTER) {
+        const auto read{TRY(read_through_reference(op, src))};
+        return coerce_to(read, target, src, site);
+    }
+
     // Functions as values arrive with erased callables and closures
     const auto callable{[](const gs::type& t) {
         const auto pointee{gs::pointee_of(t)};
@@ -318,6 +397,11 @@ auto analyzer::coerce_to(const operand&  op,
     }};
     if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
         return comp_.unsupported(u_, src, "a conversion between function types");
+    }
+
+    // Vector values arrive with their lane operations
+    if (from.get_kind() == gs::type_kind::VECTOR || target.get_kind() == gs::type_kind::VECTOR) {
+        return comp_.unsupported(u_, src, "a vector value");
     }
     switch (site.what) {
     case use_site::kind::STORE:
@@ -406,6 +490,15 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
             return materialize(*index, src);
         }
 
+        // A global's known address is read where it lives
+        if (const auto address{data.as_opt<ip::address_value>()};
+            address && address->pointee.empty()) {
+            TRY(require_runtime(src));
+            auto&             type{type_of(typed)};
+            const std::string symbol{address->symbol};
+            return gir::value{builder_.emit_global_addr(symbol, type, type.is_constant()), type};
+        }
+
         if (const auto text{data.as_opt<std::string>()};
             text && type_of(typed).get_kind() == gs::type_kind::SLICE) {
             TRY(require_runtime(src));
@@ -415,7 +508,7 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
         return constant(*index, type_of(typed));
     }
 
-    if (typed.is<anon_init>() || typed.is<enum_literal>()) {
+    if (typed.is<anon_init>() || typed.is<enum_literal>() || typed.is<implicit_call>()) {
         return comp_.unsupported(u_, src, "an untyped literal with no type to take");
     }
 

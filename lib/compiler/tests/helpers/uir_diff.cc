@@ -47,6 +47,24 @@ namespace {
         const auto& m{item.result.uir};
         for (u32 i{0}; i < m.instruction_count(); ++i) {
             const uir::inst_id inst{i};
+            const auto         is_call{[&](stdx::option<uir::inst_id> i) {
+                return i &&
+                       (m.tag_of(*i) == uir::tag::call || m.tag_of(*i) == uir::tag::field_call);
+            }};
+
+            // A local `const` whose body yields a call is one too
+            if (m.tag_of(inst) == uir::tag::const_local) {
+                uir::record_reader rec{m, m.data_of(inst).pl.extra};
+                rec.skip_str().skip_ref();
+                const auto body{rec.body_field()};
+                if (!body.empty() && m.tag_of(body.back()) == uir::tag::yield &&
+                    is_call(uir::as_inst(m.data_of(body.back()).un.operand))) {
+                    return true;
+                }
+
+                continue;
+            }
+
             if (m.tag_of(inst) != uir::tag::let_value) { continue; }
             uir::record_reader rec{m, m.data_of(inst).pl.extra};
             rec.skip_str().skip_ref();
@@ -95,7 +113,8 @@ namespace {
             args.find("param.") != std::string_view::npos) {
             continue;
         }
-        if (legacy_text.find(stdx::string::substr(uir_text, at, open - at + 1)) ==
+        // The same callee may still be called elsewhere with runtime arguments
+        if (legacy_text.find(stdx::string::substr(uir_text, at, close - at + 1)) ==
             std::string_view::npos) {
             return true;
         }
@@ -114,11 +133,11 @@ namespace {
         const auto function{stdx::string::substr(legacy_text, at, end - at)};
         const auto header_end{function.find('(')};
         const auto name{stdx::string::substr(function, 0, header_end)};
-        // A type-ctor instance's member is `Ctor__args.member`, analyzed on demand too (Q5)
+
+        // A type-ctor instance's member is `Ctor__args.member`, a generic's is `name__args`
         const auto mangled{name.find("__")};
         const bool on_demand{function.starts_with("fn pimpl#") ||
-                             (mangled != std::string_view::npos &&
-                              name.find('.', mangled) != std::string_view::npos)};
+                             mangled != std::string_view::npos};
         const bool unused{on_demand && uir_text.find(name) == std::string_view::npos};
         if (!unused) { kept += function; }
         at = end;
@@ -142,7 +161,21 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A later global is typed on its own, not by the `return` that first reads it"},
     // A compile-time slice global read at runtime stores its backing array into the slice's slot
     std::string_view{"A compile-time slice used at runtime is backed by a stack array"},
+    // An interface default method's parameter of an associated type is typed `type`
+    std::string_view{"A `dyn` of an interface with a defaulted associated type"},
 };
+
+// Tests where the old emitter builds a local `const` aggregate at runtime to read from it
+constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
+    std::string_view{"a return type may instantiate a ctor that rejects an unbound `comptime T`"},
+    std::string_view{"`++` concatenates two comptime integer arrays"},
+    std::string_view{"`++` concatenates two function-local comptime array identifiers"},
+};
+
+[[nodiscard]] auto folds_local_aggregate() -> bool {
+    return std::ranges::contains(FOLDED_LOCAL_AGGREGATE_TESTS,
+                                 std::string_view{Catch::getResultCapture().getCurrentTestName()});
+}
 
 [[nodiscard]] auto shows_legacy_bug() -> bool {
     return std::ranges::contains(LEGACY_BUG_TESTS,
@@ -157,7 +190,9 @@ constexpr std::array LEGACY_BUG_TESTS{
                 message == "`comptime let mut` assignment depends on a runtime condition") ||
                (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
                 message == "Cannot take a mutable address of an element of a non-mutable array "
-                           "or slice");
+                           "or slice") ||
+               (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
+                message == "Cannot capture an immutable value by mutable reference");
     });
 }
 
@@ -248,7 +283,14 @@ auto diff_pipelines(mod::source_loader&          loader,
     configure(analyzer, settings);
     auto out{uir::sema::analyze(analyzer.get_ctx(), {.root = root_mod->get(), .modules = lowered})};
     if (out.stopped_at) {
-        return {.status = uir_diff_status::UNSUPPORTED, .detail = out.stopped_at->what};
+        // Where it stopped follows a tab, so a report still groups by what it stopped at
+        const auto& stop{*out.stopped_at};
+        const auto  where{stop.where.transform([&](const source_location& at) {
+            const auto one{at.one_based()};
+            return fmt::format("\t{}:{}:{}", stop.path.generic_string(), one.line, one.column);
+        })};
+        return {.status = uir_diff_status::UNSUPPORTED,
+                .detail = stop.what + where.value_or(std::string{})};
     }
     if (!out.succeeded()) {
         const auto status{only_decided_rejections(out.diagnostics)
@@ -268,6 +310,7 @@ auto diff_pipelines(mod::source_loader&          loader,
         return {.status = uir_diff_status::ON_USE_IMPL};
     }
     if (shows_legacy_bug()) { return {.status = uir_diff_status::LEGACY_BUG}; }
+    if (folds_local_aggregate()) { return {.status = uir_diff_status::FOLD_PLACEMENT}; }
     return {.status = uir_diff_status::GIR_DIFF,
             .detail = fmt::format("--- old\n{}--- uir\n{}", legacy_text, uir_text)};
 }

@@ -80,6 +80,10 @@ auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) ->
 }
 
 auto astgen::emit_return(ast::node_id id, ref value) -> void {
+    // The value is built before the defers run
+    if (!functions_.back().defers.empty() && as_well_known(value) != well_known::void_value) {
+        value = add_un(tag::ret_value, value, 0, id);
+    }
     if (!has_errdefers(0)) {
         emit_defers(0, stdx::none);
         DISCARD(add_un(tag::ret, value, 0, id));

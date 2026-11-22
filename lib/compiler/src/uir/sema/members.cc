@@ -147,9 +147,22 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
                             .mut   = gs::types::mut::CONSTANT};
     }
 
-    // A compile-time evaluation would need comptime addresses
+    // At compile time a read-only method takes a reference holding the object's value
     if (!gir_fn_ || is_comptime()) {
-        return comp_.unsupported(u_, src, "a method taking its object's address at compile time");
+        const bool reads_only{how == modifier::REF || how == modifier::POLY_REF};
+        const auto object{TRY(resolve_value(object_ref, src))};
+        const auto known{comptime_value(object)};
+        if (!reads_only || !known) {
+            return comp_.unsupported(
+                u_, src, "a method taking its object's address at compile time");
+        }
+
+        auto& ref_type{
+            comp_.ctx().get_reference(gs::types::mut::CONSTANT, *gs::pointee_of(self_type))};
+        const auto held{comptime_referent(object).value_or(*known)};
+        return receiver_arg{.value = comp_.constants().intern(
+                                ip::address_value{.symbol = {}, .pointee = {held}}, ref_type),
+                            .mut = gs::types::mut::CONSTANT};
     }
     TRY(require_runtime(src));
 

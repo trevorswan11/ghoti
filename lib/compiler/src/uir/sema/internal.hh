@@ -32,6 +32,7 @@
 #include "compiler/sema/pattern.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
@@ -145,6 +146,11 @@ struct enum_literal {
     inst_id inst;
 };
 
+// `.name(args)`, a call of the member of the type it is coerced to
+struct implicit_call {
+    inst_id inst;
+};
+
 // A module-level aggregate `const`, which runtime code reads through its GIR global
 struct global_const {
     gsl::not_null<const std::string*> symbol;
@@ -184,7 +190,8 @@ using operand = stdx::variant<ip::index,      // a comptime value
                               global_const,   // a module-level aggregate `const`
                               module_ref,     // an imported module
                               cast_ref,       // a cast waiting for its target type
-                              pack_ref>;      // a pack parameter's values
+                              pack_ref,       // a pack parameter's values
+                              implicit_call>; // a `.name(args)` waiting for its type
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -400,6 +407,16 @@ struct nominal {
     stdx::option<const instance&> creator{};
     // The declaration whose value it is, which an interface's default methods are declared under
     stdx::option<decl_id> declaring_decl{};
+    // Built by `@Struct`, `@Union`, `@Enum` or `||`, so `inst` is no aggregate declaration
+    bool synthesized{false};
+};
+
+// One field of a struct or union a builtin builds
+struct synthetic_field {
+    std::string              name;
+    gsl::not_null<gs::type*> type;
+    u64                      alignment{0};
+    bool                     is_public{true};
 };
 
 // An `impl` block, registered before any analysis so member lookups can find it
@@ -430,6 +447,8 @@ struct impl_instance {
 struct interface_method {
     std::string_view name;
     inst_id          func;
+    // The closure over the interface's associated items a method that reads them is lowered to
+    stdx::option<inst_id> closure{};
 };
 
 struct impl_key {
@@ -442,6 +461,19 @@ struct impl_key {
 struct impl_key_hash {
     using is_avalanching = void;
     [[nodiscard]] auto operator()(const impl_key& key) const noexcept -> u64;
+};
+
+// The two enums an `A || B` merges, in order
+struct merge_key {
+    gsl::not_null<const gs::type*> lhs;
+    gsl::not_null<const gs::type*> rhs;
+
+    [[nodiscard]] auto operator==(const merge_key&) const noexcept -> bool = default;
+};
+
+struct merge_key_hash {
+    using is_avalanching = void;
+    [[nodiscard]] auto operator()(const merge_key& key) const noexcept -> u64;
 };
 
 // A nominal type's instruction and the comptime call it was created in
@@ -544,6 +576,18 @@ class compilation {
     [[nodiscard]] auto vtable_for(impl_instance& applied) -> result<std::string_view>;
     // Whether an interface declares associated types or constants
     [[nodiscard]] static auto declares_associated_items(const nominal& iface) -> bool;
+    // Whether every associated item of an interface has a default
+    [[nodiscard]] static auto defaults_every_associated_item(const nominal& iface) -> bool;
+    // An associated item's value: the impl's own, else the interface's default
+    [[nodiscard]] auto associated_value(const nominal&               iface,
+                                        stdx::option<impl_instance&> applied,
+                                        std::string_view             name,
+                                        const source&                use) -> result<ip::index>;
+    // The values a method's closure over the interface's associated items captures
+    [[nodiscard]] auto associated_captures(const nominal&               iface,
+                                           inst_id                      closure,
+                                           stdx::option<impl_instance&> applied,
+                                           const source& use) -> result<std::vector<ip::index>>;
     // The program's root module, whose list of vtables codegen lowers
     [[nodiscard]] auto root_source() -> mod::module_t&;
 
@@ -626,7 +670,29 @@ class compilation {
 
     // The struct, union or enum `inst` declares, created the first time the current comptime call
     // reaches it
-    [[nodiscard]] auto declare_nominal(const unit& u, inst_id inst, gs::type_kind kind) -> nominal&;
+    [[nodiscard]] auto declare_nominal(const unit&            u,
+                                       inst_id                inst,
+                                       gs::type_kind          kind,
+                                       std::vector<ip::index> identity = {}) -> nominal&;
+    // An enum with no declaration in any AST, its variants given here
+    auto synthesize_enum(nominal&                                  n,
+                         gsl::span<const std::string>              names,
+                         std::vector<i64>                          values,
+                         gs::type&                                 underlying,
+                         bool                                      non_exhaustive,
+                         gsl::span<const gsl::not_null<gs::type*>> merged_from) -> void;
+    // An `extern` function's declaration, called by its link name
+    [[nodiscard]] auto declare_extern(const unit& u, decl_id decl, gs::type& type)
+        -> result<operand>;
+    auto synthesize_struct(nominal& n, gsl::span<const synthetic_field> fields, bool is_extern)
+        -> void;
+    auto synthesize_union(nominal&                         n,
+                          gsl::span<const synthetic_field> fields,
+                          bool                             tagged,
+                          bool                             is_extern) -> void;
+    // `A || B`, one enum per pair of enums however many merges name it
+    [[nodiscard]] auto merged_enum(const merge_key& key) -> stdx::option<gs::type&>;
+    auto               remember_merge(const merge_key& key, gs::type& merged) -> void;
     [[nodiscard]] auto nominal_of(const gs::type& t) -> stdx::option<nominal&>;
     // A copy of `name` that lives as long as the context
     [[nodiscard]] auto lasting_name(std::string_view name) -> std::string_view;
@@ -758,7 +824,8 @@ class compilation {
     stdx::option<runtime_site>                                          runtime_site_;
     u32                                                                 next_frame_{0};
     std::vector<gsl::not_null<nominal*>>                                nominals_;
-    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>    nominal_ids_;
+    ankerl::unordered_dense::map<merge_key, gsl::not_null<gs::type*>, merge_key_hash> merges_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>                nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
     stdx::option<lowered> prelude_;
@@ -923,6 +990,43 @@ class analyzer {
         gsl::not_null<gs::type*> type;
         gir::value               address;
         bool                     is_void;
+        // A `&v` or `^v` capture holds the address of what it names
+        bool is_alias;
+    };
+
+    // Where a runtime `match` takes its scrutinee apart
+    struct match_root {
+        gir::value address;
+        bool       is_const;
+        // A temporary's copy can't be captured by mutable reference
+        bool is_addressable;
+        // Reached through a `mut?` reference
+        bool is_poly;
+    };
+
+    // What a type's `builtin.Unwrappable` impl gives `?` and `!`
+    struct unwrap_shape {
+        gsl::not_null<impl_instance*> applied;
+        gsl::not_null<gs::type*>      output;
+        gsl::not_null<gs::type*>      residual;
+    };
+
+    // The `Flow` that `branch` returned, spilled, and whether it breaks
+    struct flow_result {
+        gir::value slot;
+        gir::value is_break;
+        // Where the operand lives, which a capture by reference is checked against
+        bool is_const;
+        bool is_poly;
+    };
+
+    // A `?` whose failure body is being analyzed
+    struct propagation {
+        flow_result                   flow;
+        unwrap_shape                  shape;
+        gsl::not_null<impl_instance*> rewrap;
+        gsl::not_null<gs::type*>      from;
+        stdx::option<operand>         rewrapped{};
     };
 
     // A runtime `match` while its decision tree is emitted
@@ -1123,12 +1227,87 @@ class analyzer {
                                   const gs::pattern::decision_tree&          tree,
                                   ref                                        operand_ref,
                                   const operand&                             scrutinee,
+                                  gs::type&                                  type,
                                   const source& src) -> result<operand>;
-    [[nodiscard]] auto
-    scrutinee_address(ref operand_ref, const operand& scrutinee, bool aggregate, const source& src)
-        -> result<gir::value>;
+    [[nodiscard]] auto scrutinee_address(ref            operand_ref,
+                                         const operand& scrutinee,
+                                         gs::type&      type,
+                                         bool           aggregate,
+                                         bool           aliased,
+                                         const source&  src) -> result<match_root>;
+    // A capture's slot type, a `&v` or `^v` capture's checked against where it's reached
+    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, const match_root& root)
+        -> result<gsl::not_null<gs::type*>>;
     [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
+
+    // Types with no declaration (synthesized.cc)
+    [[nodiscard]] auto analyze_merge_enums(inst_id inst) -> result<operand>;
+    // `@Enum(desc)`, one enum per call site and descriptor
+    [[nodiscard]] auto builtin_enum(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // `@Struct(desc)` and `@Union(desc)`, one type per call site and descriptor
+    [[nodiscard]] auto builtin_struct(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_union(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // The fields a `StructInfo` or `UnionInfo` lists
+    [[nodiscard]] auto descriptor_fields(ip::index        desc,
+                                         std::string_view builtin_name,
+                                         bool             is_struct,
+                                         const source& src) -> result<std::vector<synthetic_field>>;
+    // A field of a compile-time aggregate, none when it isn't known
+    [[nodiscard]] auto known_field(ip::index object, std::string_view name, const source& src)
+        -> result<stdx::option<ip::index>>;
+    // An enum value as the enum merged from it, its tag rewritten where the merge moved it
+    [[nodiscard]] auto widen_enum(const operand& op, gs::type& target, const source& src)
+        -> result<operand>;
+
+    // `a ++ b` of two compile-time arrays or slices (concat.cc)
+    [[nodiscard]] auto analyze_concat(inst_id inst) -> result<operand>;
+
+    // Unwrapping (unwrap.cc)
+    [[nodiscard]] auto analyze_unwrap(inst_id inst) -> result<operand>;
+    // `if (x) |v| a else |e| b`
+    [[nodiscard]] auto analyze_unwrap_branch(inst_id inst) -> result<operand>;
+    // The shape an `if` or `while` capture unwraps, its `else` capture checked
+    [[nodiscard]] auto capture_shape(const operand&                      op,
+                                     const stdx::option<ast::capture_t>& residual,
+                                     std::string_view                    construct,
+                                     const source&                       cond_src,
+                                     const source& src) -> result<unwrap_shape>;
+    // Binds an unwrapping capture's `bind` in `body` to `value`
+    auto bind_unwrapped(gsl::span<const inst_id> body, u32 slot, const operand& value) -> void;
+    // A `|v|` payload capture's slot, a copy or the address the `Flow` holds
+    [[nodiscard]] auto payload_capture(const ast::capture_t& capture,
+                                       const flow_result&    flow,
+                                       const unwrap_shape&   shape) -> result<operand>;
+    [[nodiscard]] auto residual_capture(const flow_result& flow, const unwrap_shape& shape)
+        -> operand;
+    [[nodiscard]] auto analyze_residual(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_ret_residual(inst_id inst) -> result<operand>;
+    // The impl of the `builtin` interface `name` for `target`, none when it has none
+    [[nodiscard]] auto prelude_impl(gs::type& target, std::string_view name, const source& src)
+        -> result<stdx::option<impl_instance&>>;
+    [[nodiscard]] auto associated_type(impl_instance&   applied,
+                                       std::string_view name,
+                                       const source&    src) -> result<stdx::option<gs::type&>>;
+    [[nodiscard]] auto call_impl_method(impl_instance&       applied,
+                                        std::string_view     name,
+                                        std::vector<operand> args,
+                                        const source&        src) -> result<operand>;
+    [[nodiscard]] auto unwrap_shape_of(gs::type& operand_type, const source& src)
+        -> result<stdx::option<unwrap_shape>>;
+    // Calls `branch` on the operand's address and tests the `Flow` it returns
+    [[nodiscard]] auto
+    emit_flow(ref operand_ref, const operand& op, const unwrap_shape& shape, const source& src)
+        -> result<flow_result>;
+    // Reads the `continue` payload through the reference the `Flow` holds
+    [[nodiscard]] auto flow_output(const flow_result& flow, const unwrap_shape& shape)
+        -> gir::value;
+    [[nodiscard]] auto propagation_for(const operand&      op,
+                                       const unwrap_shape& shape,
+                                       const source&       src) -> result<propagation>;
 
     // Initializers (init.cc)
     [[nodiscard]] auto analyze_init_struct(inst_id inst) -> result<operand>;
@@ -1225,7 +1404,8 @@ class analyzer {
         -> result<gir::value>;
     // A `.{...}` or `.name` that takes its type from where it is used
     [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
-        return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>();
+        return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>() ||
+               op.is<implicit_call>();
     }
     [[nodiscard]] auto concrete(const operand& op, const source& src) -> result<operand>;
 
@@ -1257,6 +1437,12 @@ class analyzer {
     [[nodiscard]] auto analyze_break(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto analyze_ret_value(inst_id inst) -> result<operand>;
+    // What a compile-time reference refers to, none for any other operand
+    [[nodiscard]] auto comptime_referent(const operand& op) -> stdx::option<ip::index>;
+    // What a reference refers to, loaded, and any other operand as it is
+    [[nodiscard]] auto read_through_reference(const operand& op, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto analyze_unreachable(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_block_comptime(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_condbr_comptime(inst_id inst) -> result<operand>;
@@ -1292,6 +1478,8 @@ class analyzer {
                                     gir::segment_id              merge,
                                     const source&                src) -> result<operand>;
     [[nodiscard]] auto target_of(ref r) -> target&;
+    // Whether `r` is a loop being unrolled at runtime, which its jumps leave per iteration
+    [[nodiscard]] auto unrolls(ref r) const -> bool;
     auto               arrive(target& t, const operand& value, const source& src) -> void;
     [[nodiscard]] auto condition(const operand& op, const source& src) -> result<gir::value>;
     [[nodiscard]] auto void_value() -> operand;
@@ -1299,6 +1487,12 @@ class analyzer {
     // Calls (calls.cc)
     [[nodiscard]] auto analyze_call(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_field_call(inst_id inst) -> result<operand>;
+    // A call whose arguments may expand packs, `f(rest...)`
+    [[nodiscard]] auto call_expanding(const operand&       callee,
+                                      gsl::span<const ref> args,
+                                      gsl::span<const u32> pack_mask,
+                                      const source&        src,
+                                      const source&        callee_src) -> result<operand>;
     // Calls a function or generic `callee` evaluated to
     [[nodiscard]] auto call_operand(const operand&       callee,
                                     gsl::span<const ref> args,
@@ -1310,6 +1504,11 @@ class analyzer {
                                      const source&        src,
                                      const source&        callee_src,
                                      bool                 through_member) -> result<operand>;
+    // A call whose `mut?` result takes the mutability its `mut?` argument has
+    [[nodiscard]] auto call_following_poly(instance&            target,
+                                           std::vector<operand> values,
+                                           const source&        src,
+                                           bool                 through_member) -> result<operand>;
     // A call of `target` on arguments that match its GIR parameters
     [[nodiscard]] auto
     call_with(instance& target, std::vector<operand> args, const source& src, bool through_member)
@@ -1416,6 +1615,56 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
+    // A type builtin's descriptor argument as the prelude's `info_name`, known at compile time
+    [[nodiscard]] auto descriptor(gsl::span<const ref> args,
+                                  std::string_view     builtin_name,
+                                  std::string_view     info_name,
+                                  const source&        src) -> result<ip::index>;
+    [[nodiscard]] auto builtin_int_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_float_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // A memory builtin's buffer taken apart: its first byte, element count and element size
+    struct mem_view {
+        gir::value data;
+        gir::value count;
+        // The destination's size in bytes, which the old emitter computes before the source
+        stdx::option<gir::value> bytes;
+    };
+
+    // Memory builtins (math.cc)
+    [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto byte_count(const gir::value& count, usize elem_bytes) -> gir::value;
+    // `@memcpy`, `@memmove` and `@memset`
+    [[nodiscard]] auto builtin_mem(syntax::builtin_t    which,
+                                   gsl::span<const ref> args,
+                                   const source&        src) -> result<operand>;
+
+    // Math builtins (math.cc)
+    [[nodiscard]] auto builtin_bit_count(syntax::builtin_t    which,
+                                         gsl::span<const ref> args,
+                                         const source&        src) -> result<operand>;
+    [[nodiscard]] auto builtin_abs(gsl::span<const ref> args, const source& src) -> result<operand>;
+    // `@min`, `@max` and the division builtins, whose operands meet at their peer type
+    [[nodiscard]] auto builtin_binary_math(syntax::builtin_t    which,
+                                           gsl::span<const ref> args,
+                                           const source&        src) -> result<operand>;
+    [[nodiscard]] auto builtin_float_math(syntax::builtin_t    which,
+                                          gsl::span<const ref> args,
+                                          const source&        src) -> result<operand>;
+    // `@Vector(n, T)` or `@Vector(desc)`
+    [[nodiscard]] auto builtin_vector_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // `@targetOs`, `@targetArch`, `@targetAbi` and `@targetFamily` as the prelude's enums
+    [[nodiscard]] auto builtin_target(syntax::builtin_t which, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_panic(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_implements(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // A runtime `@assert` or `@verify`, a call to the handler where the condition fails
+    [[nodiscard]] auto runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
+        -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;
     // Casts and conversions (casts.cc)
@@ -1517,6 +1766,14 @@ class analyzer {
     std::vector<target>                               targets_;
     std::vector<pending_merge>                        merges_;
     std::vector<std::vector<operand>>                 packs_;
+    std::vector<propagation>                          propagations_;
+    // The loops being unrolled into a runtime body, innermost last
+    std::vector<inst_id>                            unrolling_;
+    ankerl::unordered_dense::map<inst_id, mem_view> mem_views_;
+    // The segment each call returning a runtime reference ended in
+    ankerl::unordered_dense::map<inst_id, gir::segment_id> reference_segments_;
+    // The reference each binary operator read its left side through
+    ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // The values `capture` instructions read, and the type whose namespace holds the body

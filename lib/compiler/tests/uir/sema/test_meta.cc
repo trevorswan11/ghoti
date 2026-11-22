@@ -208,4 +208,97 @@ TEST_CASE("A comptime_int built from reflected bits folds exactly", "[uir]") {
     CHECK(run.gir().contains("const max64: bool = true"));
 }
 
+TEST_CASE("A runtime `@assert` and `@verify` call their handlers", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const f = fn(x: i32): i32 {
+            @assert(x > 0, "x must be positive");
+            @verify(x < 10);
+            @assert(true);
+            return x;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`@Int` and `@Float` build the types their descriptors name", "[uir]") {
+    const auto diff{diff_source(R"(
+        const U12 = @Int(.{ .bits = 12, .signedness = .unsigned });
+        const I7 = @Int(.{ .bits = 7, .signedness = .signed });
+        const F = @Float(.{ .bits = 64 });
+        pub const widen = fn(x: U12, y: I7, z: F): F {
+            return z + @floatFromInt(x) + @floatFromInt(y);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`@Int` with a width it has no type for is reported", "[uir]") {
+    const auto run{helpers::uir_rejected(R"(
+        const T = @Int(.{ .bits = 0, .signedness = .signed });
+        pub const f = fn(x: T): T { return x; };
+    )")};
+    CHECK(run.codes() == std::vector{error::LITERAL_OUT_OF_RANGE});
+    CHECK(run.messages().front() == "'@Int' has no signed 0-bit integer type; widths are 1..65535");
+}
+
+TEST_CASE("The target builtins name the prelude's enums", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const on_64 = fn(): bool {
+            return @targetArch() == .x86_64 or @targetArch() == .aarch64;
+        };
+        pub const is_windows = fn(): bool { return @targetOs() == .windows; };
+        pub const family = fn(): builtin.Family { return @targetFamily(); };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("Math builtins fold known operands and call the builtin otherwise", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const counts = fn(x: u32): u32 { return @clz(x) + @ctz(x) + @popCount(x); };
+        pub const extremes = fn(a: i32, b: i32): i32 { return @max(a, b) - @min(a, 3) + @abs(a); };
+        pub const divide = fn(a: i64, b: i64): i64 {
+            return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
+        };
+        pub const roots = fn(x: f64): f64 { return @sqrt(x) + @floor(x) + @ceil(x) + @log2(x); };
+        pub const known = fn(): i32 { return @max(2, 5) + @abs(-3); };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`++` joins compile-time strings and `@panic` calls the handler", "[uir]") {
+    const auto diff{diff_source(R"(
+        const greet = fn(comptime who: []u8): []u8 { return "hello " ++ who ++ "!"; };
+        const nums = [2]i32{ 1, 2 } ++ [1]i32{ 3 };
+        pub const name = fn(): []u8 { return greet("there"); };
+        pub const third = fn(): i32 { return nums[2]; };
+        pub const fail = fn(x: i32): i32 {
+            if (x < 0) { @panic("negative"); }
+            return x;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`unroll while` copies its body per iteration under compile-time control", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const count = fn(x: i32): i32 {
+            comptime let mut i: usize = 0;
+            let mut total: i32 = x;
+            unroll while (i < 4) {
+                i += 1;
+                if comptime (i == 2) { continue; }
+                total += @intCast(i);
+            }
+            return total;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
@@ -50,6 +51,11 @@ auto analyzer::condition(const operand& op, const source& src) -> result<gir::va
     }
 
     return as_runtime(op, src);
+}
+
+auto analyzer::unrolls(ref r) const -> bool {
+    const auto inst{as_inst(r)};
+    return inst && std::ranges::contains(unrolling_, *inst);
 }
 
 auto analyzer::target_of(ref r) -> target& {
@@ -226,12 +232,33 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     const auto body{rec.body_field()};
     const auto cont_body{rec.body_field()};
     const auto else_body{rec.body_field()};
-    if ((loop_flags & (flags::UNROLL | flags::UNWRAPS)) != 0) {
-        return comp_.unsupported(u_, src, "an unrolled or unwrapping loop");
+    // An unrolled loop runs its control at compile time and copies its body per iteration
+    if ((loop_flags & flags::UNROLL) != 0) {
+        if ((loop_flags & flags::UNWRAPS) != 0) {
+            return comp_.unsupported(u_, src, "an unrolled unwrapping loop");
+        }
+
+        if (is_comptime()) { return run_loop(inst); }
+        unrolling_.emplace_back(inst);
+        const auto unrolled{gsl::finally([this] { unrolling_.pop_back(); })};
+        return run_loop(inst);
+    }
+
+    // `while (x) |v|` runs `x.branch()` on every iteration
+    const bool unwraps{(loop_flags & flags::UNWRAPS) != 0};
+    if (unwraps && is_comptime()) {
+        return comp_.unsupported(u_, src, "an unwrapping `while` at compile time");
     }
 
     if (is_comptime()) { return run_loop(inst); }
-    const auto branch{runtime_branch()};
+    const auto unwrapping{
+        unwraps
+            ? stdx::option<const ast::while_loop_expr&>{u_.source->ast.get_as<ast::while_loop_expr>(
+                  *src.as_opt<ast::node_id>())}
+            : stdx::none};
+    stdx::option<flow_result>  flow;
+    stdx::option<unwrap_shape> shape;
+    const auto                 branch{runtime_branch()};
 
     const bool has_cond{(loop_flags & flags::HAS_COND) != 0};
     const bool do_while{(loop_flags & flags::DO_WHILE) != 0};
@@ -255,6 +282,17 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
         }
 
+        if (unwrapping) {
+            const auto cond_ref{mod().data_of(cond_body.back()).un.operand};
+            const auto cond_src{as_inst(cond_ref).transform([&](inst_id i) { return src_of(i); })};
+            shape.emplace(TRY(capture_shape(
+                *out.yielded, unwrapping->else_capture, "while", cond_src.value_or(src), src)));
+            flow.emplace(TRY(emit_flow(cond_ref, *out.yielded, *shape, src)));
+            normal_exit = builder_.get_segment()->get_id();
+            builder_.emit_cond_goto(flow->is_break, else_seg.value_or(exit), body_seg);
+            return {};
+        }
+
         const auto c{TRY(condition(*out.yielded, src))};
         normal_exit = builder_.get_segment()->get_id();
         builder_.emit_cond_goto(c, body_seg, else_seg.value_or(exit));
@@ -264,11 +302,21 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     emit_goto(has_cond && !do_while ? *cond_seg : body_seg);
     if (has_cond && !do_while) { TRY(analyze_cond()); }
 
+    // The payload is captured again where the continuation reads it
+    const auto capture_payload{[&] -> result<void> {
+        if (!flow) { return {}; }
+        const auto captured{TRY(payload_capture(*unwrapping->payload_capture, *flow, *shape))};
+        bind_unwrapped(body, 0, captured);
+        return {};
+    }};
+
     switch_to(body_seg);
+    TRY(capture_payload());
     DISCARD(TRY(analyze_body(body)));
     if (!terminated()) { emit_goto(repeat); }
     if (cont_seg) {
         switch_to(*cont_seg);
+        TRY(capture_payload());
         DISCARD(TRY(analyze_body(cont_body)));
         if (!terminated()) { emit_goto(cond_seg.value_or(body_seg)); }
     }
@@ -278,6 +326,10 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     stdx::option<incoming> normal;
     if (else_seg) {
         switch_to(*else_seg);
+        if (flow && unwrapping->else_capture) {
+            bind_unwrapped(else_body, 1, residual_capture(*flow, *shape));
+        }
+
         const auto out{TRY(analyze_body(else_body))};
         if (out.yielded && !terminated()) {
             normal.emplace(builder_.get_segment()->get_id(), *out.yielded, src);
@@ -296,7 +348,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     const auto  value{TRY(resolve_value(d.bin.rhs, src))};
-    if (is_comptime()) {
+    if (is_comptime() || unrolls(d.bin.lhs)) {
         jump_.emplace(jump::kind::BREAK, *as_inst(d.bin.lhs), value);
         return void_value();
     }
@@ -307,7 +359,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
 
 auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
     const auto& operand_ref{mod().data_of(inst).un.operand};
-    if (is_comptime()) {
+    if (is_comptime() || unrolls(operand_ref)) {
         jump_.emplace(jump::kind::REPEAT, *as_inst(operand_ref), stdx::none);
         return void_value();
     }
@@ -346,6 +398,18 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     }
 
     return void_value();
+}
+
+auto analyzer::analyze_ret_value(inst_id inst) -> result<operand> {
+    const auto& src{src_of(inst)};
+    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
+    auto&      ret{*fn_->return_type};
+    if (ret.get_kind() == gs::type_kind::AUTO) { return value; }
+
+    const auto returned{TRY(coerce_to(value, ret, src, {.what = use_site::kind::RETURN}))};
+    if (is_comptime() || ret.get_kind() == gs::type_kind::VOID_) { return returned; }
+    return operand{TRY(as_runtime(returned, src))};
 }
 
 auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {
@@ -412,6 +476,7 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
     const auto owns{
         [&](jump::kind k) { return jump_ && jump_->what == k && jump_->target == inst; }};
     const auto holds{[&] -> result<bool> {
+        const auto scope{comptime_scope()};
         const auto out{TRY(analyze_body(cond_body))};
         if (jump_ || !out.yielded) {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
@@ -434,6 +499,9 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
 
         for (const auto part : {body, cont_body}) {
             DISCARD(TRY(analyze_body(part)));
+
+            // An unrolled body that leaves at runtime, like a `return`, ends the loop there
+            if (!is_comptime() && !jump_ && terminated()) { return void_value(); }
             if (owns(jump::kind::REPEAT)) {
                 jump_.reset();
             } else if (owns(jump::kind::BREAK)) {

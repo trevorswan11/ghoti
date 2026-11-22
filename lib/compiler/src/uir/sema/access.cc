@@ -382,13 +382,23 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return member;
     }
 
-    // A field of a compile-time value is known, so reading it needs no storage
+    // A field of a compile-time value is known, so reading it needs no storage, and a
+    // compile-time reference's field is the field of what it holds
+    if (const auto referent{comptime_referent(object)}; referent && !assigned) {
+        return comptime_field(*referent, name, src);
+    }
+
     if (const auto known{comptime_value(object)}; known && !assigned) {
         return comptime_field(*known, name, src);
     }
 
     if (const auto g{object.as_opt<global_const>()}; g && is_comptime() && !assigned) {
         return comptime_field(g->value, name, src);
+    }
+
+    // A runtime body folding a condition can't read a runtime local
+    if (is_comptime() && gir_fn_ && (object.is<place>() || object.is<slot_value>())) {
+        return comp_.needs_runtime(u_, src);
     }
 
     if (is_comptime() || object.is<comptime_place>()) {
@@ -590,6 +600,15 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
                                         : ctx.get_reference(mut, pointee));
     }
 
+    // A global's address is a constant, which a global's initializer may hold
+    if (const auto global{target.as_opt<global_ref>()}; global && is_comptime() && !gir_fn_) {
+        auto& pointee{*global->type};
+        auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
+                                      : ctx.get_reference(mut, pointee)};
+        return comp_.constants().intern(
+            ip::address_value{.symbol = std::string{*global->symbol}, .pointee = {}}, address_type);
+    }
+
     if (is_comptime()) { return comp_.unsupported(u_, src, "an address at compile time"); }
 
     auto& target_type{type_of(target)};
@@ -768,6 +787,13 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
 
     const auto small{index->to_i128()};
     const auto count{agg ? agg->elements.size() : text->size()};
+
+    // A sentinel-terminated array's sentinel sits just past its elements
+    const auto arr{value.type ? value.type->get_data().as_opt<gs::types::array>() : stdx::none};
+    if (small && *small == static_cast<i128>(count) && arr && arr->null_terminated) {
+        return intern_int(pool, big_int{i128{0}}, *elem_type);
+    }
+
     if (!small || *small < 0 || *small >= static_cast<i128>(count)) {
         return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
     }

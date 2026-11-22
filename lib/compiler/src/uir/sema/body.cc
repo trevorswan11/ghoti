@@ -201,6 +201,15 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             continue;
         }
 
+        // Where a call returned a runtime reference, for a read of it that must follow at once
+        const bool is_call{mod().tag_of(inst) == tag::call ||
+                           mod().tag_of(inst) == tag::field_call};
+        if (const auto made{value->as_opt<gir::value>()};
+            is_call && made && made->type && made->type->get_kind() == gs::type_kind::REFERENCE &&
+            !is_comptime()) {
+            reference_segments_.insert_or_assign(inst, builder_.get_segment()->get_id());
+        }
+
         values_.insert_or_assign(inst, std::move(*value));
         if (jump_) { return flow{}; }
         if (!is_comptime() && terminated()) { return flow{}; }
@@ -276,6 +285,14 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::break_to:        return analyze_break(inst);
     case tag::repeat:          return analyze_repeat(inst);
     case tag::ret:             return analyze_ret(inst);
+    case tag::ret_value:       return analyze_ret_value(inst);
+    case tag::mem_view:        return analyze_mem_view(inst);
+    case tag::concat:          return analyze_concat(inst);
+    case tag::unwrap:          return analyze_unwrap(inst);
+    case tag::merge_enums:     return analyze_merge_enums(inst);
+    case tag::unwrap_branch:   return analyze_unwrap_branch(inst);
+    case tag::residual:        return analyze_residual(inst);
+    case tag::ret_residual:    return analyze_ret_residual(inst);
     case tag::call:            return analyze_call(inst);
     case tag::field_call:      return analyze_field_call(inst);
 
@@ -411,7 +428,8 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const global_const& g) -> gs::type& { return *g.type; },
         [&](const module_ref&) -> gs::type& { return builtin(gs::type_kind::VOID_); },
         [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
-        [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); });
+        [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); },
+        [&](implicit_call) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

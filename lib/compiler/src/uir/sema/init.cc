@@ -199,6 +199,13 @@ auto analyzer::field_defaults(gs::type& type, const source& src)
     -> result<std::vector<gsl::span<const inst_id>>> {
     const auto n{comp_.nominal_of(type)};
     if (!n) { return comp_.unsupported(u_, src, "an initializer of a type UIR didn't declare"); }
+
+    // A built type's fields have no defaults
+    if (n->synthesized) {
+        const auto st{type.get_data().as_opt<gs::types::struct_t>()};
+        return std::vector<gsl::span<const inst_id>>(st ? st->fields.size() : 0);
+    }
+
     const auto&   m{*n->owner->uir};
     record_reader rec{m, m.data_of(n->inst).pl.extra};
     rec.skip_u32();
@@ -220,13 +227,28 @@ auto analyzer::field_default(gs::type&                type,
                              usize                    index,
                              gsl::span<const inst_id> body,
                              const source&            src) -> result<operand> {
-    const auto n{comp_.nominal_of(type)};
+    const auto  n{comp_.nominal_of(type)};
+    const auto& st{type.get_data().as<gs::types::struct_t>()};
+
+    // A default declared in another module is evaluated there, at compile time
     if (n->owner->index != u_.index) {
-        return comp_.unsupported(u_, src, "a field default declared in another module");
+        analyzer   owner{comp_, *n->owner};
+        const auto out{TRY(owner.analyze_body(body))};
+        if (!out.yielded || owner.jump_) {
+            return comp_.unsupported(u_, src, "a field default that leaves");
+        }
+
+        const auto typed{TRY(owner.coerce_to(
+            *out.yielded, st.type_at(index), src, {.what = use_site::kind::STORE}))};
+        const auto known{owner.comptime_value(typed)};
+        if (!known) {
+            return comp_.unsupported(u_, src, "a runtime field default declared in another module");
+        }
+
+        return operand{*known};
     }
 
-    const auto& st{type.get_data().as<gs::types::struct_t>()};
-    const auto  out{TRY(analyze_body(body))};
+    const auto out{TRY(analyze_body(body))};
     if (!out.yielded || jump_) { return comp_.unsupported(u_, src, "a field default that leaves"); }
     return coerce_to(*out.yielded, st.type_at(index), src, {.what = use_site::kind::STORE});
 }

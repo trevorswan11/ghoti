@@ -314,9 +314,11 @@ struct enum_t {
     // Each variant's declared name, in declaration order
     gsl::span<const std::string_view> variant_names{};
 
+    [[nodiscard]] auto variant_count() const noexcept -> usize { return variant_names.size(); }
+
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
-        const auto enumeration_count{ast_enumerations.size()};
+        const auto enumeration_count{variant_count()};
         ASSERT(idx < enumeration_count + members.size(), "Index exceeds enum's types");
         if (idx < enumeration_count) { return object_type; }
         return *members[idx - enumeration_count];
@@ -324,8 +326,8 @@ struct enum_t {
     // `none` for a member whose type is still being resolved
     [[nodiscard]] auto type_at_opt(usize idx, type& object_type) const noexcept
         -> stdx::option<type&> {
-        if (idx < ast_enumerations.size()) { return object_type; }
-        const auto member{idx - ast_enumerations.size()};
+        if (idx < variant_count()) { return object_type; }
+        const auto member{idx - variant_count()};
         if (member >= members.size()) { return stdx::none; }
         return members[member];
     }
@@ -372,9 +374,16 @@ struct struct_t {
     gsl::span<u64>                           field_alignments;
     // Each field's declared name, in declaration order
     gsl::span<const std::string_view> field_names{};
+    // Whether each field is `pub`, for a struct with no declaration in any AST
+    gsl::span<const bool> field_public{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
+    }
+
+    [[nodiscard]] constexpr auto is_field_public(usize idx) const noexcept -> bool {
+        if (idx < ast_fields.size()) { return ast_fields[idx].is_public(); }
+        return idx < field_public.size() && field_public[idx];
     }
 
     // The `@[align(n)]` requested for field `idx`, or 0 when it keeps its natural alignment

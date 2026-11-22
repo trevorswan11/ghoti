@@ -123,6 +123,8 @@ UIR_TAG(pat_deref, UN)
 UIR_TAG(unwrap, PL)               // `x?` / `x!`
 UIR_TAG(residual, NONE)           // in a `?` failure body: the residual that propagates
 UIR_TAG(ret_residual, UN)         // returns a residual through the function's `From`
+UIR_TAG(mem_view, UN)             // a memory builtin's slice or array, taken apart where it is
+UIR_TAG(ret_value, UN)            // a returned value converted to the return type before defers run
 UIR_TAG(ret_failure, UN)          // whether a returned value fails, for errdefer
 UIR_TAG(failure_is_set, UN)
 UIR_TAG(failure_residual, UN)

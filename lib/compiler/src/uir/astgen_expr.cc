@@ -486,7 +486,29 @@ auto astgen::builtin_call(source                src,
                syntax::builtin_name(builtin));
     }
     if (builtin == builtin_t::TYPE_OF) { return type_of(src, node); }
+
+    // A memory builtin takes each buffer apart right after evaluating it
+    const bool copies{builtin == builtin_t::MEMCPY || builtin == builtin_t::MEMMOVE};
+    if (copies || builtin == builtin_t::MEMSET) {
+        std::vector<ref> viewed;
+        for (usize i{0}; i < node.arguments.size(); ++i) {
+            const auto arg{
+                node.arguments[i].visit([this](ast::expr_handle e) { return expr(e); },
+                                        [this](ast::explicit_type_id t) { return type(t); })};
+            const bool   buffer{i == 0 || (i == 1 && copies)};
+            const source at{
+                node.arguments[i].visit([](ast::expr_handle e) { return source{ast::node_id{e}}; },
+                                        [](ast::explicit_type_id t) { return source{t}; })};
+            const u32 is_dest{i == 0 ? 1U : 0U};
+            viewed.emplace_back(buffer ? add_un(tag::mem_view, arg, is_dest, at) : arg);
+        }
+
+        return add_pl(
+            tag::builtin, writer().u32_field(static_cast<u32>(builtin)).refs_field(viewed), src);
+    }
+
     auto [args, mask]{call_args(node)};
+
     return add_pl(
         tag::builtin, writer().u32_field(static_cast<u32>(builtin)).refs_field(args), src);
 }
@@ -781,7 +803,18 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
-    const auto operand{expr(node.matcher)};
+    // A capture by reference aliases a field, element or pointee where it lives
+    const bool         aliases{std::ranges::any_of(node.arms, [](const auto& arm) {
+        return arm.capture && (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr());
+    })};
+    const ast::node_id matcher{node.matcher};
+    const bool in_place{aliases && (matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
+                                    matcher.is<ast::dereference_expr>())};
+    const auto operand{[&] {
+        if (!in_place) { return expr(node.matcher); }
+        const auto target{place(node.matcher, use::MUTATE)};
+        return target.is_place ? add_un(tag::load, target.value, 0, id) : target.value;
+    }()};
     u32        bits{0};
     if (node.is_comptime) { bits |= flags::MATCH_COMPTIME; }
     if (node.is_binding) { bits |= flags::MATCH_BINDING; }
