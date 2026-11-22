@@ -146,6 +146,11 @@ struct enum_literal {
     inst_id inst;
 };
 
+// `.name(args)`, a call of the member of the type it is coerced to
+struct implicit_call {
+    inst_id inst;
+};
+
 // A module-level aggregate `const`, which runtime code reads through its GIR global
 struct global_const {
     gsl::not_null<const std::string*> symbol;
@@ -185,7 +190,8 @@ using operand = stdx::variant<ip::index,      // a comptime value
                               global_const,   // a module-level aggregate `const`
                               module_ref,     // an imported module
                               cast_ref,       // a cast waiting for its target type
-                              pack_ref>;      // a pack parameter's values
+                              pack_ref,       // a pack parameter's values
+                              implicit_call>; // a `.name(args)` waiting for its type
 
 // Mutable compile-time state, which only stores change
 struct comptime_alloc {
@@ -662,6 +668,9 @@ class compilation {
                          gs::type&                                 underlying,
                          bool                                      non_exhaustive,
                          gsl::span<const gsl::not_null<gs::type*>> merged_from) -> void;
+    // An `extern` function's declaration, called by its link name
+    [[nodiscard]] auto declare_extern(const unit& u, decl_id decl, gs::type& type)
+        -> result<operand>;
     auto synthesize_struct(nominal& n, gsl::span<const synthetic_field> fields, bool is_extern)
         -> void;
     auto synthesize_union(nominal&                         n,
@@ -1118,6 +1127,8 @@ class analyzer {
 
     // Field and element access (access.cc)
     [[nodiscard]] auto analyze_field_val(inst_id inst) -> result<operand>;
+    // Whether a runtime body reads a field of a local `const` holding a known aggregate
+    [[nodiscard]] auto reads_local_aggregate(ref object_ref, ip::index known) -> bool;
     [[nodiscard]] auto analyze_field_ptr(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_elem_val(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_elem_ptr(inst_id inst) -> result<operand>;
@@ -1380,7 +1391,8 @@ class analyzer {
         -> result<gir::value>;
     // A `.{...}` or `.name` that takes its type from where it is used
     [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
-        return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>();
+        return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>() ||
+               op.is<implicit_call>();
     }
     [[nodiscard]] auto concrete(const operand& op, const source& src) -> result<operand>;
 
@@ -1589,6 +1601,37 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_float_type(gsl::span<const ref> args, const source& src)
         -> result<operand>;
+    // A memory builtin's buffer taken apart: its first byte, element count and element size
+    struct mem_view {
+        gir::value data;
+        gir::value count;
+        // The destination's size in bytes, which the old emitter computes before the source
+        stdx::option<gir::value> bytes;
+    };
+
+    // Memory builtins (math.cc)
+    [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
+    [[nodiscard]] auto byte_count(const gir::value& count, usize elem_bytes) -> gir::value;
+    // `@memcpy`, `@memmove` and `@memset`
+    [[nodiscard]] auto builtin_mem(syntax::builtin_t    which,
+                                   gsl::span<const ref> args,
+                                   const source&        src) -> result<operand>;
+
+    // Math builtins (math.cc)
+    [[nodiscard]] auto builtin_bit_count(syntax::builtin_t    which,
+                                         gsl::span<const ref> args,
+                                         const source&        src) -> result<operand>;
+    [[nodiscard]] auto builtin_abs(gsl::span<const ref> args, const source& src) -> result<operand>;
+    // `@min`, `@max` and the division builtins, whose operands meet at their peer type
+    [[nodiscard]] auto builtin_binary_math(syntax::builtin_t    which,
+                                           gsl::span<const ref> args,
+                                           const source&        src) -> result<operand>;
+    [[nodiscard]] auto builtin_float_math(syntax::builtin_t    which,
+                                          gsl::span<const ref> args,
+                                          const source&        src) -> result<operand>;
+    // `@Vector(n, T)` or `@Vector(desc)`
+    [[nodiscard]] auto builtin_vector_type(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
     // `@targetOs`, `@targetArch`, `@targetAbi` and `@targetFamily` as the prelude's enums
     [[nodiscard]] auto builtin_target(syntax::builtin_t which, const source& src)
         -> result<operand>;
@@ -1697,6 +1740,7 @@ class analyzer {
     std::vector<pending_merge>                        merges_;
     std::vector<std::vector<operand>>                 packs_;
     std::vector<propagation>                          propagations_;
+    ankerl::unordered_dense::map<inst_id, mem_view>   mem_views_;
     // The segment each call returning a runtime reference ended in
     ankerl::unordered_dense::map<inst_id, gir::segment_id> reference_segments_;
     // The reference each binary operator read its left side through

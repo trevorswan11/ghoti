@@ -606,6 +606,16 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
         if (!gs::is_numeric(type.get_kind())) { break; }
         return operand_value;
     case tag::bool_not: {
+        // `!p` of a pointer tests it against null
+        if (type.get_kind() == gs::type_kind::POINTER && !comptime_value(operand_value)) {
+            TRY(require_runtime(src));
+            auto&      bool_type{builtin(gs::type_kind::BOOL)};
+            const auto v{TRY(as_runtime(operand_value, src))};
+            const auto null{constant(pool.intern(ip::nullptr_value{}, type), type)};
+            return gir::value{builder_.emit_binary(instruction_kind::EQ, v, null, bool_type),
+                              bool_type};
+        }
+
         if (!is_bool(type)) { break; }
         if (const auto index{comptime_value(operand_value)}) {
             return operand{pool.intern(!*pool.value_at(*index).data.as_opt<bool>(), type)};

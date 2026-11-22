@@ -78,6 +78,23 @@ auto compilation::prelude_decl(std::string_view name, const unit& user, const so
 
 auto compilation::prelude_function(std::string_view name, const unit& user, const source& use)
     -> result<gsl::not_null<instance*>> {
+    // A program's own module-level function of the name overrides the `weak` default
+    auto& names{*TRY(declared_names(user, use))};
+    if (const auto found{names.candidates.find(std::string{name})};
+        found != names.candidates.end()) {
+        for (const auto& candidate : found->second) {
+            if (prelude_unit_ && candidate.unit == *prelude_unit_) { continue; }
+            const auto& u{units_[candidate.unit]};
+            const auto& d{u.uir->decl_at(candidate.decl)};
+            if (d.has(decl_flags::WEAK) || d.owner) { continue; }
+            const auto value{TRY(analyze_decl(u, candidate.decl, *d.node))};
+            if (const auto fn{value.as_opt<function_ref>()}) {
+                request_body(*fn->fn);
+                return fn->fn;
+            }
+        }
+    }
+
     const auto value{TRY(prelude_decl(name, user, use))};
     const auto fn{value.as_opt<function_ref>()};
     if (!fn) { return unsupported(user, use, fmt::format("the `builtin` module's `{}`", name)); }

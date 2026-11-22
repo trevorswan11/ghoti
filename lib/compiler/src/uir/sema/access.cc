@@ -290,6 +290,20 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     };
 }
 
+auto analyzer::reads_local_aggregate(ref object_ref, ip::index known) -> bool {
+    if (is_comptime() || !comp_.constants().value_at(known).data.is<ip::aggregate_value>()) {
+        return false;
+    }
+
+    // The old emitter builds a local `const` aggregate anew at each runtime read
+    auto at{as_inst(object_ref)};
+    while (at && (mod().tag_of(*at) == tag::field_val || mod().tag_of(*at) == tag::field_ptr)) {
+        at = as_inst(*record(*at).ref_field());
+    }
+
+    return at && mod().tag_of(*at) == tag::const_local;
+}
+
 auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -321,6 +335,10 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
             const auto copy{spill(built, *slice_type, false)};
             const auto field{TRY(field_place(copy, name, src))};
             return operand{TRY(read(field, src))};
+        }
+
+        if (reads_local_aggregate(object_ref, *index)) {
+            return comp_.unsupported(u_, src, "a runtime read of a local compile-time aggregate");
         }
 
         return comptime_field(*index, name, src);
@@ -384,11 +402,20 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
 
     // A field of a compile-time value is known, so reading it needs no storage
     if (const auto known{comptime_value(object)}; known && !assigned) {
+        if (reads_local_aggregate(object_ref, *known)) {
+            return comp_.unsupported(u_, src, "a runtime read of a local compile-time aggregate");
+        }
+
         return comptime_field(*known, name, src);
     }
 
     if (const auto g{object.as_opt<global_const>()}; g && is_comptime() && !assigned) {
         return comptime_field(g->value, name, src);
+    }
+
+    // A runtime body folding a condition can't read a runtime local
+    if (is_comptime() && gir_fn_ && (object.is<place>() || object.is<slot_value>())) {
+        return comp_.needs_runtime(u_, src);
     }
 
     if (is_comptime() || object.is<comptime_place>()) {
@@ -588,6 +615,15 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
         auto& pointee{comp_.constants().type_at(*index)};
         return interned_type(is_pointer ? ctx.get_pointer(mut, pointee)
                                         : ctx.get_reference(mut, pointee));
+    }
+
+    // A global's address is a constant, which a global's initializer may hold
+    if (const auto global{target.as_opt<global_ref>()}; global && is_comptime() && !gir_fn_) {
+        auto& pointee{*global->type};
+        auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
+                                      : ctx.get_reference(mut, pointee)};
+        return comp_.constants().intern(
+            ip::address_value{.symbol = std::string{*global->symbol}, .pointee = {}}, address_type);
     }
 
     if (is_comptime()) { return comp_.unsupported(u_, src, "an address at compile time"); }

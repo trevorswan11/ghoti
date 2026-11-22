@@ -255,4 +255,18 @@ TEST_CASE("The target builtins name the prelude's enums", "[uir]") {
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("Math builtins fold known operands and call the builtin otherwise", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const counts = fn(x: u32): u32 { return @clz(x) + @ctz(x) + @popCount(x); };
+        pub const extremes = fn(a: i32, b: i32): i32 { return @max(a, b) - @min(a, 3) + @abs(a); };
+        pub const divide = fn(a: i64, b: i64): i64 {
+            return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
+        };
+        pub const roots = fn(x: f64): f64 { return @sqrt(x) + @floor(x) + @ceil(x) + @log2(x); };
+        pub const known = fn(): i32 { return @max(2, 5) + @abs(-3); };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

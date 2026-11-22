@@ -286,6 +286,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::repeat:          return analyze_repeat(inst);
     case tag::ret:             return analyze_ret(inst);
     case tag::ret_value:       return analyze_ret_value(inst);
+    case tag::mem_view:        return analyze_mem_view(inst);
     case tag::unwrap:          return analyze_unwrap(inst);
     case tag::merge_enums:     return analyze_merge_enums(inst);
     case tag::unwrap_branch:   return analyze_unwrap_branch(inst);
@@ -426,7 +427,8 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const global_const& g) -> gs::type& { return *g.type; },
         [&](const module_ref&) -> gs::type& { return builtin(gs::type_kind::VOID_); },
         [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
-        [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); });
+        [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); },
+        [&](implicit_call) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

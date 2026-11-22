@@ -217,10 +217,11 @@ TEST_CASE("Compile-time builtins constant eval", "[uir]") {
     }
 
     SECTION("Arrays") { CHECK(accepted("const sz = @sizeOf([4]u8);").int_value("sz") == 4); }
-    SECTION("Math builtins, phase 7") {
-        check_later_phase("const v_abs = @abs(-42);", "@abs");
-        check_later_phase("const v_clz = @clz(1);", "@clz");
-        check_later_phase("const v_pop = @popCount(7);", "@popCount");
+    SECTION("Math builtins") {
+        CHECK(accepted("const v_abs = @abs(-42);").int_value("v_abs") == 42);
+        CHECK(accepted("const x: u8 = 1; const v_clz = @clz(x);").int_value("v_clz") == 7);
+        CHECK(accepted("const x: u32 = 7; const v_pop = @popCount(x);").int_value("v_pop") == 3);
+        CHECK(accepted("const v_max = @max(3, 9);").int_value("v_max") == 9);
     }
 }
 

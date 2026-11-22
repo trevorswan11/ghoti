@@ -71,6 +71,32 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::AS:                       return builtin_as(args, src);
     case builtin_t::THIS:                     return builtin_this(src);
     case builtin_t::INT:                      return builtin_int_type(args, src);
+    case builtin_t::CLZ:
+    case builtin_t::CTZ:
+    case builtin_t::POPCOUNT:                 return builtin_bit_count(which, args, src);
+    case builtin_t::ABS:                      return builtin_abs(args, src);
+    case builtin_t::MEMCPY:
+    case builtin_t::MEMMOVE:
+    case builtin_t::MEMSET:                   return builtin_mem(which, args, src);
+    case builtin_t::MIN:
+    case builtin_t::MAX:
+    case builtin_t::DIV_TRUNC:
+    case builtin_t::DIV_FLOOR:
+    case builtin_t::DIV_EXACT:
+    case builtin_t::REM:
+    case builtin_t::MOD:                      return builtin_binary_math(which, args, src);
+    case builtin_t::SQRT:
+    case builtin_t::SIN:
+    case builtin_t::COS:
+    case builtin_t::TAN:
+    case builtin_t::EXP:
+    case builtin_t::EXP2:
+    case builtin_t::LOG:
+    case builtin_t::LOG2:
+    case builtin_t::LOG10:
+    case builtin_t::FLOOR:
+    case builtin_t::CEIL:                     return builtin_float_math(which, args, src);
+    case builtin_t::VECTOR:                   return builtin_vector_type(args, src);
     case builtin_t::ENUM:                     return builtin_enum(inst, args, src);
     case builtin_t::STRUCT:                   return builtin_struct(inst, args, src);
     case builtin_t::UNION:                    return builtin_union(inst, args, src);
@@ -549,6 +575,68 @@ auto analyzer::builtin_target(syntax::builtin_t which, const source& src) -> res
     }
 
     return enum_constant(enum_type, member, src);
+}
+
+auto analyzer::builtin_vector_type(gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    auto&      ctx{comp_.ctx()};
+    auto&      pool{comp_.constants()};
+    const auto arg_src{[&](usize i) {
+        return i < args.size()
+                   ? as_inst(args[i]).transform([&](inst_id a) { return src_of(a); }).value_or(src)
+                   : src;
+    }};
+    const auto unknown{[&](usize arg, std::string_view what) -> result<operand> {
+        return comp_.report(u_,
+                            arg_src(arg),
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            fmt::format("'@Vector' needs a compile-time-known {}", what));
+    }};
+
+    stdx::option<big_int>   len;
+    stdx::option<gs::type&> lane;
+    if (args.size() == 1) {
+        const auto desc{TRY(descriptor(args, "@Vector", "VectorInfo", src))};
+        const auto len_index{TRY(known_field(desc, "len", src))};
+        const auto child_index{TRY(known_field(desc, "child", src))};
+        if (len_index) { len = int_of(pool.value_at(*len_index)); }
+        if (!len) { return unknown(0, "'len' field"); }
+        if (!child_index || !pool.is_type(*child_index)) { return unknown(0, "'child' field"); }
+        lane.emplace(pool.type_at(*child_index));
+    } else if (args.size() == 2) {
+        const auto count{TRY(resolve_value(args[0], src))};
+        const auto count_index{comptime_value(count)};
+        if (count_index) { len = int_of(pool.value_at(*count_index)); }
+        if (!len) { return unknown(0, "lane count"); }
+        lane.emplace(*TRY(resolve_type(args[1], arg_src(1))));
+    } else {
+        return comp_.unsupported(u_, src, "a `@Vector` arity");
+    }
+
+    const auto count{len->to_i128()};
+    if (!count || *count < 1 || *count > i128{gs::MAX_VECTOR_LEN}) {
+        const auto shown{count ? std::clamp<i128>(*count, 0, i128{gs::MAX_VECTOR_LEN} + 1)
+                               : i128{0}};
+        return comp_.report(u_,
+                            arg_src(0),
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'@Vector' has {} lanes; it needs 1..{}",
+                                        static_cast<i64>(shown),
+                                        gs::MAX_VECTOR_LEN));
+    }
+
+    auto& lane_type{ctx.as_lane(*lane)};
+    if (const auto why{gs::vector_lane_rejection(lane_type)}) {
+        return comp_.report(u_,
+                            arg_src(args.size() == 1 ? 0 : 1),
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'{}' can't be a '@Vector' lane: {}",
+                                        ctx.type_display_name(lane_type),
+                                        *why));
+    }
+
+    return interned_type(
+        ctx.get_vector(gs::types::mut::CONSTANT, static_cast<u32>(*count), lane_type));
 }
 
 } // namespace ghoti::uir::sema

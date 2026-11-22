@@ -290,7 +290,7 @@ auto compilation::default_method(impl_instance& applied, std::string_view name)
         const std::string symbol{
             applied.prefix.empty()
                 ? TRY(scoped_symbol(impl_unit, applied.entry->inst, method, u, m.src_of(*func)))
-                : std::string{method}};
+                : fmt::format("{}.{}", applied.prefix, method)};
         member.symbol = symbol;
         const auto owner_decl{*iface->declaring_decl};
         const auto value{TRY(declare_function(u, owner_decl, *func, member))};

@@ -37,8 +37,10 @@ constexpr std::string_view GLOBAL_CONSTANT{
     "global variable initializer must be a constant expression"};
 
 // A function whose every call runs at compile time, which has no runtime body
+// A function returning a type or an untyped number runs only at compile time
 [[nodiscard]] auto is_comptime_only(const gs::type& return_type) noexcept -> bool {
-    return return_type.get_kind() == gs::type_kind::TYPE;
+    return return_type.get_kind() == gs::type_kind::TYPE ||
+           gs::is_comptime_numeric(return_type.get_kind());
 }
 
 } // namespace
@@ -224,8 +226,11 @@ auto compilation::collides(const std::string& name, const unit& user, const sour
         if (c.certain || is_named(c)) { continue; }
         const auto& u{units_[c.unit]};
         auto&       state{decls_[c.unit][std::to_underlying(c.decl)]};
+        // One still being analyzed reads a value from the declaration being named, so it holds
+        // a value too, and a value has storage
         if (state.status == decl_status::IN_PROGRESS) {
-            return unsupported(user, use, "a name whose qualification depends on its own value");
+            ++count;
+            continue;
         }
 
         DISCARD(analyze_decl(u, c.decl, *u.uir->decl_at(c.decl).node));
@@ -468,6 +473,45 @@ auto compilation::declare_function(const unit&           u,
     return function_ref{&fn};
 }
 
+auto compilation::declare_extern(const unit& u, decl_id decl, gs::type& type) -> result<operand> {
+    const auto& m{*u.uir};
+    const auto& d{m.decl_at(decl)};
+    const auto& sig{type.get_data().as<gs::types::function>()};
+    if (sig.is_variadic) { return unsupported(u, source{*d.node}, "a variadic extern function"); }
+
+    const std::string name{m.string(d.name)};
+    const auto        target{d.extern_target.len != 0 ? std::string{m.string(d.extern_target)}
+                                                      : std::string{"c"}};
+    auto& gir_fn{gir_.add_function(name, type, false, false, false, gir::linkage::EXTERN, target)};
+    gir_fn.set_link_name(d.link_name.len != 0 ? std::string{m.string(d.link_name)} : name);
+    gir_fn.set_calling_conv(sig.conv);
+    gir_fn.set_weak(d.has(decl_flags::WEAK));
+    std::vector<gsl::not_null<gs::type*>> params;
+    for (usize i{0}; i < sig.params.size(); ++i) {
+        DISCARD(gir_fn.add_param(fmt::format("param.{}", i), *sig.params[i]));
+        params.emplace_back(sig.params[i]);
+    }
+
+    // Its body is the linker's, so nothing is queued for it
+    auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{
+        .owner         = &units_[u.index],
+        .decl          = decl,
+        .func          = inst_id{0},
+        .symbol        = name,
+        .type          = &type,
+        .params        = std::move(params),
+        .return_type   = &sig.return_type,
+        .linkage       = gir::linkage::EXTERN,
+        .weak          = d.has(decl_flags::WEAK),
+        .queued        = true,
+        .comptime_only = false,
+        .bindings      = {},
+        .infers_return = false,
+        .analyzed      = true,
+    }))};
+    return function_ref{&fn};
+}
+
 auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     PROFILE_FUNCTION();
     const auto& d{mod().decl_at(decl)};
@@ -475,6 +519,18 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     const source src{*d.node};
     if (d.kind == decl_kind::IMPORT) {
         return comp_.import_target(u_, *d.import, mod().string(d.name), src);
+    }
+
+    // An `extern` function is declared with its type alone, for the linker to find
+    if (d.has(decl_flags::EXTERN) && !d.value_body && d.type_body) {
+        const auto unhandled{d.flags & ~(HANDLED_FLAGS | decl_flags::EXTERN)};
+        auto&      type{*TRY(eval_type(mod().body(*d.type_body), src))};
+        if (unhandled != decl_flags::NONE || type.get_kind() != gs::type_kind::FUNCTION ||
+            (d.attrs_body && !mod().body(*d.attrs_body).empty())) {
+            return comp_.unsupported(u_, src, "an extern declaration other than a plain function");
+        }
+
+        return comp_.declare_extern(u_, decl, type);
     }
 
     const bool comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
@@ -610,13 +666,21 @@ auto analyzer::analyze_global(decl_id                        decl,
 
     // A ctor instance's scalar constant is folded wherever it is read
     if (scope_ && scope_->in_call && !is_mutable && !is_aggregate) { return stored; }
-    auto  symbol_name{TRY(global_symbol(decl, src))};
+    // The old emitter writes a global address as the symbol it names. Interning that may move
+    // `data`, so what it says is read first
+    const bool is_undefined{data.is<ip::undefined_value>()};
+    const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
+    const auto address{data.as_opt<ip::address_value>()};
+    const auto init_index{address && address->pointee.empty()
+                              ? pool.intern(std::string{address->symbol}, type)
+                              : index};
+    auto       symbol_name{TRY(global_symbol(decl, src))};
     auto& global{comp_.gir().add_global(std::move(symbol_name),
                                         type,
                                         !is_mutable,
-                                        data.is<ip::undefined_value>() || is_aggregate
+                                        is_undefined || is_aggregate
                                             ? stdx::none
-                                            : stdx::option<gir::value>{constant(index, type)},
+                                            : stdx::option<gir::value>{constant(init_index, type)},
                                         compilation::linkage_of(d))};
     if (is_aggregate) { global.const_init.emplace(index); }
     global.is_weak    = d.has(decl_flags::WEAK);
@@ -624,7 +688,6 @@ auto analyzer::analyze_global(decl_id                        decl,
     global.alignment  = attrs.alignment;
     comp_.note_storage(u_, decl);
     // A string array is read where the global stores it
-    const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
     if (!is_mutable && !is_aggregate && !text_array) { return stored; }
     const auto& symbol{comp_.own_symbol(u_, decl, global.name)};
     if (!is_mutable) { return global_const{.symbol = &symbol, .type = &type, .value = index}; }

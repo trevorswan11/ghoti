@@ -253,7 +253,14 @@ auto diff_pipelines(mod::source_loader&          loader,
     configure(analyzer, settings);
     auto out{uir::sema::analyze(analyzer.get_ctx(), {.root = root_mod->get(), .modules = lowered})};
     if (out.stopped_at) {
-        return {.status = uir_diff_status::UNSUPPORTED, .detail = out.stopped_at->what};
+        // Where it stopped follows a tab, so a report still groups by what it stopped at
+        const auto& stop{*out.stopped_at};
+        const auto  where{stop.where.transform([&](const source_location& at) {
+            const auto one{at.one_based()};
+            return fmt::format("\t{}:{}:{}", stop.path.generic_string(), one.line, one.column);
+        })};
+        return {.status = uir_diff_status::UNSUPPORTED,
+                .detail = stop.what + where.value_or(std::string{})};
     }
     if (!out.succeeded()) {
         const auto status{only_decided_rejections(out.diagnostics)

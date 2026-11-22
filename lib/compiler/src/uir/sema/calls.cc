@@ -29,6 +29,9 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
     const auto callee{TRY(resolve_value(callee_ref, src))};
     const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
+
+    // `.name(args)` calls the member of whatever type the call is used as
+    if (callee.is<enum_literal>() && !expands) { return implicit_call{inst}; }
     if (!expands) { return call_operand(callee, args, src, callee_src.value_or(src)); }
 
     // `f(rest...)` passes each of the pack's values as an argument of its own
@@ -149,6 +152,11 @@ auto analyzer::call_with(instance&            target,
                          const source&        src,
                          bool                 through_member) -> result<operand> {
     TRY(comp_.infer_return(target, u_, src));
+
+    // An `extern` function's body is the linker's, so it only runs at runtime
+    if (target.linkage == gir::linkage::EXTERN && is_comptime()) {
+        return comp_.needs_runtime(u_, src);
+    }
 
     // A call returning `type` always runs at compile time
     if (is_comptime() || target.comptime_only) {

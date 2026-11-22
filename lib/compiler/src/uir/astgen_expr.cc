@@ -486,7 +486,29 @@ auto astgen::builtin_call(source                src,
                syntax::builtin_name(builtin));
     }
     if (builtin == builtin_t::TYPE_OF) { return type_of(src, node); }
+
+    // A memory builtin takes each buffer apart right after evaluating it
+    const bool copies{builtin == builtin_t::MEMCPY || builtin == builtin_t::MEMMOVE};
+    if (copies || builtin == builtin_t::MEMSET) {
+        std::vector<ref> viewed;
+        for (usize i{0}; i < node.arguments.size(); ++i) {
+            const auto arg{
+                node.arguments[i].visit([this](ast::expr_handle e) { return expr(e); },
+                                        [this](ast::explicit_type_id t) { return type(t); })};
+            const bool   buffer{i == 0 || (i == 1 && copies)};
+            const source at{
+                node.arguments[i].visit([](ast::expr_handle e) { return source{ast::node_id{e}}; },
+                                        [](ast::explicit_type_id t) { return source{t}; })};
+            const u32 is_dest{i == 0 ? 1U : 0U};
+            viewed.emplace_back(buffer ? add_un(tag::mem_view, arg, is_dest, at) : arg);
+        }
+
+        return add_pl(
+            tag::builtin, writer().u32_field(static_cast<u32>(builtin)).refs_field(viewed), src);
+    }
+
     auto [args, mask]{call_args(node)};
+
     return add_pl(
         tag::builtin, writer().u32_field(static_cast<u32>(builtin)).refs_field(args), src);
 }

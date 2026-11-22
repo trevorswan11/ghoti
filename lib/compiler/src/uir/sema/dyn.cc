@@ -13,6 +13,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -95,9 +96,13 @@ auto compilation::vtable_for(impl_instance& applied) -> result<std::string_view>
 
     // Every method goes in the vtable, so each one's body is analyzed now, located at the impl
     // since the coercion asking may be in another module
-    const auto&     impl_unit{*applied.entry->owner};
-    const auto&     at_impl{impl_unit.uir->src_of(applied.entry->inst)};
-    mod::dyn_vtable vtable{.symbol = fmt::format("__vtable.{}", vtables_++), .slots = {}};
+    const auto& impl_unit{*applied.entry->owner};
+    const auto& at_impl{impl_unit.uir->src_of(applied.entry->inst)};
+    // A parameterized impl's vtable is named for the instance it serves
+    mod::dyn_vtable vtable{.symbol = applied.prefix.empty()
+                                         ? fmt::format("__vtable.{}", vtables_++)
+                                         : fmt::format("__vtable.{}", applied.prefix),
+                           .slots  = {}};
     for (const auto& method : interface_methods(*iface)) {
         const auto member{TRY(impl_member(applied, method.name, at_impl))};
         const auto fn{member ? member->as_opt<function_ref>() : stdx::none};
@@ -238,7 +243,23 @@ auto analyzer::coerce_to_dyn(const operand& op, gs::type& target, const source& 
     const auto applied{
         std::ranges::find_if(impls, [&](const auto impl) { return impl->interface == iface; })};
     if (applied == impls.end()) { return stdx::option<operand>{}; }
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a `dyn` value at compile time"); }
+    // A global's address and its vtable are both symbols, so the pair is a constant
+    if (is_comptime()) {
+        const auto known{comptime_value(op)};
+        const auto address{known
+                               ? comp_.constants().value_at(*known).data.as_opt<ip::address_value>()
+                               : stdx::none};
+        if (!address || !address->pointee.empty()) {
+            return comp_.unsupported(u_, src, "a `dyn` value at compile time");
+        }
+
+        std::string data_symbol{address->symbol};
+        const auto  vtable{TRY(comp_.vtable_for(**applied))};
+        return stdx::option<operand>{
+            comp_.constants().intern(ip::dyn_value{.data_symbol   = std::move(data_symbol),
+                                                   .vtable_symbol = std::string{vtable}},
+                                     target)};
+    }
 
     const auto vtable{TRY(comp_.vtable_for(**applied))};
     TRY(require_runtime(src));
@@ -311,12 +332,17 @@ auto analyzer::call_dyn(const operand&       object,
 
     std::vector<gir::value> values;
     TRY(require_runtime(src));
-    auto&      ctx{comp_.ctx()};
-    auto&      opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
-                                          ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
-    const auto fat{TRY(as_runtime(object, src))};
+    auto& ctx{comp_.ctx()};
+    auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
+                                     ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
+    // A field holding the `dyn` is read from where it lives
+    const auto fat{[&] -> result<gir::value> {
+        if (const auto p{object.as_opt<place>()}) { return read(*p, src); }
+        return as_runtime(object, src);
+    }()};
+    if (!fat) { return stdx::err{fat.error()}; }
     const auto spilled{builder_.emit_alloca(*dyn)};
-    builder_.emit_store(gir::value{spilled, *dyn}, fat);
+    builder_.emit_store(gir::value{spilled, *dyn}, *fat);
     const auto data_at{builder_.emit_get_element_ptr(
         gir::value{spilled, *dyn}, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
     const auto table_at{builder_.emit_get_element_ptr(

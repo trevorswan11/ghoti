@@ -387,6 +387,9 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
     // A runtime body folding a condition keeps a `let mut` global's read at runtime, while a
     // compile-time evaluation may only read its type, which `@TypeOf` would need
     if (is_comptime() && gir_fn_ && !as_place) { return comp_.needs_runtime(u_, src); }
+
+    // A global's initializer may take another global's address
+    if (is_comptime() && !gir_fn_ && as_place) { return value; }
     if (is_comptime()) {
         return comp_.unsupported(u_, src, "a compile-time use of a `let mut` global");
     }
