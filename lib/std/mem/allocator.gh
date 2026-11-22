@@ -75,10 +75,52 @@ pub const AllocatorVTable = interface {
 pub const Allocator = struct {
     pub vtable: ^dyn AllocatorVTable,
 
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_alloc = fn(
+        self,
+        len: usize,
+        alignment: Alignment,
+    ): std.Option(^mut u8) {
+        return self.vtable.alloc(len, alignment);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_resize = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): bool {
+        return self.vtable.resize(memory, alignment, new_len);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_remap = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8) {
+        return self.vtable.remap(memory, alignment, new_len);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_free = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+    ): void {
+        return self.vtable.free(memory, alignment);
+    };
+
     /// Returns a pointer to undefined memory.
     /// Call `destroy` with the result to free the memory.
     pub const create = fn(self, comptime T: type): std.Result(^mut T, AllocError) {
-        return match (self.vtable.alloc(@sizeOf(T), .of(T))) {
+        return match (self.raw_alloc(@sizeOf(T), .of(T))) {
             .some => |raw| .of(@ptrCast(^mut T, raw)),
             .none => .fail(.out_of_memory),
         };
@@ -89,7 +131,7 @@ pub const Allocator = struct {
     pub const destroy = fn(self, ptr: ^mut auto): void {
         const T = @TypeOf(*ptr);
         let raw = @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
-        return self.vtable.free(raw, .of(T));
+        return self.raw_free(raw, .of(T));
     };
 
     /// Allocates an array of `n` items of type `T` and sets all the
@@ -106,7 +148,7 @@ pub const Allocator = struct {
         if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
             return .fail(.out_of_memory);
         }
-        return match (self.vtable.alloc(size, .of(T))) {
+        return match (self.raw_alloc(size, .of(T))) {
             .some => |raw| .of(@sliceFromPtr(@ptrCast(^mut T, raw), len)),
             .none => .fail(.out_of_memory),
         };
@@ -122,7 +164,7 @@ pub const Allocator = struct {
         let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
         @assert(!overflowed, "Attempt to free overflowed allocation");
         let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
-        return self.vtable.free(raw, .of(T));
+        return self.raw_free(raw, .of(T));
     };
 
     /// Request to modify the size of an allocation in place.
@@ -154,7 +196,7 @@ pub const Allocator = struct {
         let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut old_size);
         @assert(!overflowed, "Attempt to resize overflowed allocation");
         let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), old_size);
-        return self.vtable.resize(raw, .of(T), new_size);
+        return self.raw_resize(raw, .of(T), new_size);
     };
 
     /// Attempt to expand or shrink memory, allowing relocation.
@@ -187,7 +229,7 @@ pub const Allocator = struct {
         let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut old_size);
         @assert(!overflowed, "Attempt to remap overflowed allocation");
         let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), old_size);
-        return match (self.vtable.remap(raw, .of(T), new_size)) {
+        return match (self.raw_remap(raw, .of(T), new_size)) {
             .some => |new_ptr| .of(@sliceFromPtr(@ptrCast(^mut T, new_ptr), new_len)),
             .none => .empty,
         };
