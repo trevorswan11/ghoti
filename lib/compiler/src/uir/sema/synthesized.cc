@@ -14,7 +14,10 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/arena.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -165,8 +168,7 @@ auto analyzer::analyze_merge_enums(inst_id inst) -> result<operand> {
         return comp_.unsupported(u_, src, "a merge of an enum UIR didn't declare");
     }
 
-    // The left enum keeps its values, so widening from it changes no bits. A tag only the right
-    // has follows the largest value so far, and a name both have is one tag
+    // The left enum keeps its values, so widening from it changes no bits
     const auto&              lhs_en{lhs.get_data().as<gs::types::enum_t>()};
     const auto&              rhs_en{rhs.get_data().as<gs::types::enum_t>()};
     std::vector<std::string> names;
@@ -176,9 +178,11 @@ auto analyzer::analyze_merge_enums(inst_id inst) -> result<operand> {
         values.emplace_back(lhs_n->enum_values[i]);
     }
 
+    // A tag only the right has follows the largest value so far
     i64 next{0};
     for (const auto v : values) { next = std::max(next, v + 1); }
     for (usize i{0}; i < rhs_en.variant_count(); ++i) {
+        // A name both have is one tag
         const std::string name{rhs_en.variant_names[i]};
         if (std::ranges::contains(names, name)) { continue; }
         names.emplace_back(name);

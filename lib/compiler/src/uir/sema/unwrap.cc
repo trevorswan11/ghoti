@@ -10,8 +10,10 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
@@ -130,10 +132,12 @@ auto analyzer::emit_flow(ref                 operand_ref,
         tag_value,
         constant(comp_.constants().intern(static_cast<i64>(break_index), i32_type), i32_type),
         bool_type)};
-    return flow_result{.slot     = slot,
-                       .is_break = gir::value{is_break, bool_type},
-                       .is_const = is_const,
-                       .is_poly  = is_poly};
+    return flow_result{
+        .slot     = slot,
+        .is_break = gir::value{is_break, bool_type},
+        .is_const = is_const,
+        .is_poly  = is_poly,
+    };
 }
 
 auto analyzer::flow_output(const flow_result& flow, const unwrap_shape& shape) -> gir::value {

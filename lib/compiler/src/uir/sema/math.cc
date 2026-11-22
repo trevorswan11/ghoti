@@ -10,6 +10,7 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/instruction.hh"
@@ -23,6 +24,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
 
@@ -325,11 +327,13 @@ auto analyzer::analyze_mem_view(inst_id inst) -> result<operand> {
         const auto count{usize_constant(arr->len)};
         mem_views_.insert_or_assign(
             inst,
-            mem_view{.data  = gir::value{first, byte_ptr},
-                     .count = count,
-                     .bytes = is_dest ? stdx::option<gir::value>{byte_count(
-                                            count, gir::size_of(arr->underlying, layout))}
-                                      : stdx::none});
+            mem_view{
+                .data  = gir::value{first, byte_ptr},
+                .count = count,
+                .bytes = is_dest ? stdx::option<gir::value>{byte_count(
+                                       count, gir::size_of(arr->underlying, layout))}
+                                 : stdx::none,
+            });
         return void_value();
     }
 

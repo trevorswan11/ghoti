@@ -145,9 +145,6 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }
 
     auto rhs{TRY(resolve_value(d.bin.rhs, src))};
-
-    // The old emitter reads a reference before the right side runs, so a right side that
-    // branches leaves the read in a later segment
     if (reference_reads_.contains(inst)) {
         const auto made{as_inst(d.bin.lhs).and_then([&](inst_id i) {
             const auto found{reference_segments_.find(i)};

@@ -140,8 +140,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
 
     if (is_comptime()) { return value; }
 
-    // An aggregate binding keeps one address for every use, so it gets a slot of its own. So
-    // does a reference taken directly of a place
+    // A reference binding keeps one address for every use
     auto& type{declared && gs::is_structural(declared->get_kind()) ? *declared : type_of(value)};
     const bool place_reference{[&] {
         const auto init_inst{as_inst(init_ref)};
@@ -160,6 +159,8 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
                (gs::is_numeric(pointee->get_kind()) || pointee->get_kind() == gs::type_kind::BOOL ||
                 pointee->get_kind() == gs::type_kind::ENUM);
     }()};
+
+    // An aggregate binding keeps one address for every use, so it gets a slot of its own
     if ((!gs::is_structural(type.get_kind()) && !place_reference) || value.is<merge_ref>()) {
         return value;
     }
@@ -285,6 +286,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
         type_of(target).get_kind() == gs::type_kind::REFERENCE) {
         const auto read{as_inst(d.bin.rhs).and_then([&](inst_id rhs) {
             const auto known{reference_reads_.find(rhs)};
+
             // `a += b` lowers its operator at the assignment, `a = a + b` at the `+`
             const bool compound{known != reference_reads_.end() &&
                                 mod().data_of(rhs).bin.lhs == d.bin.lhs &&
@@ -384,13 +386,12 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
         return value;
     }
 
-    // A runtime body folding a condition keeps a `let mut` global's read at runtime, while a
-    // compile-time evaluation may only read its type, which `@TypeOf` would need
-    if (is_comptime() && gir_fn_ && !as_place) { return comp_.needs_runtime(u_, src); }
-
-    // A global's initializer may take another global's address
-    if (is_comptime() && !gir_fn_ && as_place) { return value; }
     if (is_comptime()) {
+        // A runtime body folding a condition keeps a `let mut` global's read at runtime
+        if (gir_fn_ && !as_place) { return comp_.needs_runtime(u_, src); }
+
+        // A global's initializer may take another global's address
+        if (!gir_fn_ && as_place) { return value; }
         return comp_.unsupported(u_, src, "a compile-time use of a `let mut` global");
     }
 

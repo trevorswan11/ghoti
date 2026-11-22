@@ -94,10 +94,10 @@ auto compilation::vtable_for(impl_instance& applied) -> result<std::string_view>
     if (applied.vtable) { return std::string_view{*applied.vtable}; }
     const auto iface{nominal_of(*applied.interface)};
 
-    // Every method goes in the vtable, so each one's body is analyzed now, located at the impl
-    // since the coercion asking may be in another module
-    const auto& impl_unit{*applied.entry->owner};
+    // Every method goes in the vtable, so each one's body is analyzed now
+    const auto& impl_unit{*applied.entry->owner}; // The coercion asking may be in another module
     const auto& at_impl{impl_unit.uir->src_of(applied.entry->inst)};
+
     // A parameterized impl's vtable is named for the instance it serves
     mod::dyn_vtable vtable{.symbol = applied.prefix.empty()
                                          ? fmt::format("__vtable.{}", vtables_++)

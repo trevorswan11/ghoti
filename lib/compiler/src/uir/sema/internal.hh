@@ -33,6 +33,7 @@
 #include "compiler/sema/pattern.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"

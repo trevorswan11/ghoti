@@ -133,8 +133,8 @@ namespace {
         const auto function{stdx::string::substr(legacy_text, at, end - at)};
         const auto header_end{function.find('(')};
         const auto name{stdx::string::substr(function, 0, header_end)};
-        // A type-ctor instance's member is `Ctor__args.member` and a generic's instance is
-        // `name__args`, both analyzed on demand too (Q5)
+
+        // A type-ctor instance's member is `Ctor__args.member`, a generic's is `name__args`
         const auto mangled{name.find("__")};
         const bool on_demand{function.starts_with("fn pimpl#") ||
                              mangled != std::string_view::npos};
@@ -165,8 +165,7 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A `dyn` of an interface with a defaulted associated type"},
 };
 
-// Tests where the old emitter builds a local `const` aggregate at runtime to read from it, which
-// UIR folds instead
+// Tests where the old emitter builds a local `const` aggregate at runtime to read from it
 constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
     std::string_view{"a return type may instantiate a ctor that rejects an unbound `comptime T`"},
     std::string_view{"`++` concatenates two comptime integer arrays"},

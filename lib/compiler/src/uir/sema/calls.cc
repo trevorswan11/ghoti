@@ -161,8 +161,6 @@ auto analyzer::call_with(instance&            target,
                          const source&        src,
                          bool                 through_member) -> result<operand> {
     TRY(comp_.infer_return(target, u_, src));
-
-    // An `extern` function's body is the linker's, so it only runs at runtime
     if (target.linkage == gir::linkage::EXTERN && is_comptime()) {
         return comp_.needs_runtime(u_, src);
     }
