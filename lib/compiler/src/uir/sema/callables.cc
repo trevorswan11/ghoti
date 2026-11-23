@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <stdx/utility.hh>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,12 +13,15 @@
 #include <stdx/types.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
+#include "gsl/pointers"
 #include "internal.hh"
 
 namespace ghoti::uir::sema {
@@ -109,7 +113,7 @@ auto compilation::declare_local(const unit& u, const instance& enclosing, local_
         if (in_ctor) { g->fn->suffix += fmt::format("_in_{}", mangle_type(*owner->type)); }
     }
 
-    local_fns_.emplace_back(local_fn{
+    local_fns_.emplace_back<local_fn>({
         .unit_index = u.index,
         .inst       = decl.inst,
         .enclosing  = &enclosing,
@@ -198,7 +202,6 @@ auto compilation::with_environment(gs::type& signature, gs::type& env_type) -> g
 
 auto compilation::comptime_function(const instance& fn, gsl::span<const named_capture> captures)
     -> result<ip::index> {
-    // Named like the old emitter's `const_closure`: the literal's node and each capture's value
     const auto& u{*fn.owner};
     const auto  node{u.uir->src_of(fn.func).as_opt<ast::node_id>()};
     if (!node) { return unsupported(u, u.uir->src_of(fn.func), "a compile-time function value"); }
@@ -256,7 +259,7 @@ auto compilation::plain_function(ip::index value) -> stdx::option<instance&> {
 }
 
 auto compilation::mangle_value(ip::index value) -> std::string {
-    // A copy is spelled by what it was copied from, as the old emitter's `const_closure` is
+    // A copy is spelled by what it was copied from
     if (const auto copy{named_function(const_functions_, value)}) {
         return std::string{
             std::string_view{copy->symbol}.substr(std::string_view{"closureconst."}.size())};
@@ -496,8 +499,7 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
             continue;
         }
 
-        // A `const`, a compile-time parameter, a type or a function is known in the body, so
-        // it isn't stored
+        // A `const`, a compile-time parameter, a type or a function cannot be stored
         const auto value{TRY(resolve_value(value_ref, src))};
         const auto index{comptime_value(value)};
         const bool is_const{from && (mod().tag_of(*from) == tag::const_local ||
@@ -610,17 +612,20 @@ auto analyzer::build_environment(const closure_env& env, gsl::span<const gir::va
         builder_.emit_store(gir::value{field, storage}, stored[i]).is_initializer = true;
     }
 
-    auto& value_type{env.value_type ? *env.value_type : env_type};
-    return gir::value{builder_.emit_load(gir::value{slot, env_type}, env_type), value_type};
+    return gir::value{builder_.emit_load(gir::value{slot, env_type}, env_type),
+                      env.value_type.value_or(env_type)};
 }
 
 auto analyzer::bind_environment(const closure_env& env, const gir::value& self) -> void {
-    // Every capture is read once, up front, like the old emitter does
+    // Every capture is read once up front
     const auto& closure{env.type->get_data().as<gs::types::closure_t>()};
     env_values_.assign(env.fields.size(), stdx::none);
     if (env.self_slot) {
         env_values_[*env.self_slot] = slot_value{
-            .address = gir::value{self.data, *env.type}, .type = env.type, .is_mutable = true};
+            .address    = gir::value{self.data, *env.type},
+            .type       = env.type,
+            .is_mutable = true,
+        };
     }
 
     for (usize slot{0}; slot < env.fields.size(); ++slot) {

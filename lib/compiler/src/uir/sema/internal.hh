@@ -262,7 +262,7 @@ enum class decl_status : u8 {
 };
 
 struct decl_state {
-    decl_status                          status{decl_status::UNRESOLVED};
+    decl_status           status{decl_status::UNRESOLVED};
     stdx::option<operand> value{};
     // Whether its value was given a GIR global
     bool has_storage{false};
@@ -278,8 +278,7 @@ struct param_binding {
     stdx::option<usize> pack_size{};
 };
 
-// A function's signature, and the GIR function its body is analyzed into
-// A closure's environment, and the field each capture slot reads, none for one known at compile time
+// A closure's environment, and the field each capture slot reads
 struct closure_env {
     gsl::not_null<gs::type*>       type;
     std::vector<stdx::option<u32>> fields;
@@ -294,6 +293,7 @@ struct closure_env {
     u32 id{0};
 };
 
+// A function's signature, and the GIR function its body is analyzed into
 struct instance {
     gsl::not_null<const unit*> owner;
     decl_id                    decl;
@@ -395,8 +395,7 @@ struct named_capture {
     ip::index        value;
 };
 
-// A function literal a runtime body declares: what declares it, what it's bound to, and what it
-// captures
+// A function literal a runtime body declares
 struct local_decl {
     inst_id                                 inst;
     inst_id                                 func;
@@ -411,11 +410,11 @@ struct local_decl {
 
 // A function literal a runtime body declares, by its instruction, enclosing function and captures
 struct local_fn {
-    u32                      unit_index;
-    inst_id                  inst;
-    const instance*          enclosing;
-    std::vector<ip::index>   captures;
-    operand                  fn;
+    u32                    unit_index;
+    inst_id                inst;
+    const instance*        enclosing;
+    std::vector<ip::index> captures;
+    operand                fn;
 };
 
 // A generic function and every parameter's interned binding: a value, or a runtime type
@@ -604,7 +603,6 @@ class analyzer;
 class compilation {
   public:
     // What a speculative compile-time evaluation could leave behind, so it can be undone
-    // The attempt lasts as long as this does
     struct speculation {
         usize        diagnostics;
         usize        memo;
@@ -613,11 +611,8 @@ class compilation {
         compilation& owner;
 
         speculation(compilation& comp) noexcept;
-        speculation(const speculation&)                    = delete;
-        auto operator=(const speculation&) -> speculation& = delete;
-        speculation(speculation&&)                         = delete;
-        auto operator=(speculation&&) -> speculation&      = delete;
         ~speculation();
+        MAKE_PINNED(speculation);
     };
 
   public:
@@ -657,7 +652,7 @@ class compilation {
     // The body of the closure `type` is, if it is one
     [[nodiscard]] auto closure_body(const gs::type& type) -> stdx::option<instance&>;
     // A function's value at compile time, a copy of it with `captures` folded in
-    [[nodiscard]] auto comptime_function(const instance&                 fn,
+    [[nodiscard]] auto comptime_function(const instance&                fn,
                                          gsl::span<const named_capture> captures)
         -> result<ip::index>;
     // Leaves a just-declared function's body off the queue until a runtime use needs it
@@ -963,13 +958,15 @@ class compilation {
     std::vector<unit>                    units_;
     std::vector<std::vector<decl_state>> decls_;
     // Instances and nominals are referenced by address, so the arena keeps them in place
-    ghoti::arena                            arena_;
-    std::vector<gsl::not_null<instance*>>   instances_;
-    std::vector<local_fn>                   local_fns_;
-    ankerl::unordered_dense::map<const gs::type*, gsl::not_null<instance*>>   closure_bodies_;
-    ankerl::unordered_dense::map<const gs::type*, gsl::not_null<generic_fn*>> closure_generics_;
-    function_names                                                            const_functions_;
-    function_names                                                            plain_functions_;
+    ghoti::arena                          arena_;
+    std::vector<gsl::not_null<instance*>> instances_;
+    std::vector<local_fn>                 local_fns_;
+    ankerl::unordered_dense::map<gsl::not_null<const gs::type*>, gsl::not_null<instance*>>
+        closure_bodies_;
+    ankerl::unordered_dense::map<gsl::not_null<const gs::type*>, gsl::not_null<generic_fn*>>
+                                            closure_generics_;
+    function_names                          const_functions_;
+    function_names                          plain_functions_;
     u32                                     local_count_{0};
     u32                                     speculating_{0};
     std::vector<gsl::not_null<generic_fn*>> generics_;
@@ -993,7 +990,7 @@ class compilation {
     u32                                                                 literal_globals_{0};
     std::vector<gsl::not_null<nominal*>>                                nominals_;
     ankerl::unordered_dense::map<merge_key, gsl::not_null<gs::type*>, merge_key_hash> merges_;
-    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>                nominal_ids_;
+    ankerl::unordered_dense::map<nominal_key, u32, nominal_key_hash>                  nominal_ids_;
     // The `builtin` module, lowered here since the program's modules don't import it
     u32                   vtables_{0};
     stdx::option<lowered> prelude_;
@@ -1276,8 +1273,7 @@ class analyzer {
     // A function literal of a runtime body, with the compile-time values its captures read
     [[nodiscard]] auto local_function(inst_id                func,
                                       std::vector<ip::index> captures,
-                                      stdx::option<u32>      self_slot = stdx::none)
-        -> result<operand>;
+                                      stdx::option<u32> self_slot = stdx::none) -> result<operand>;
     // Whether a capture's source is the binding the literal initializes, not analyzed yet
     [[nodiscard]] auto names_itself(stdx::option<inst_id> from) const -> bool;
     // A closure that only runs at compile time
@@ -1371,8 +1367,10 @@ class analyzer {
     // A read of the lane `index_ref` names
     [[nodiscard]] auto vector_lane(const operand& vector, ref index_ref, const source& src)
         -> result<operand>;
-    [[nodiscard]] auto builtin_reduce(gsl::span<const ref> args, const source& src) -> result<operand>;
-    [[nodiscard]] auto builtin_select(gsl::span<const ref> args, const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_reduce(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_select(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
 
     // `dyn` (dyn.cc)
     [[nodiscard]] auto analyze_dyn_type(inst_id inst) -> result<operand>;
@@ -1387,10 +1385,9 @@ class analyzer {
                                 const source&        src) -> result<stdx::option<operand>>;
     // Loads a `dyn` receiver's data and vtable entry before the call's arguments are computed
     void prepare_dyn_call(inst_id call);
-    [[nodiscard]] auto load_dyn_entry(const operand& object,
-                                      gs::type&      dyn,
-                                      u64            index,
-                                      const source&  src) -> result<dyn_entry>;
+    [[nodiscard]] auto
+    load_dyn_entry(const operand& object, gs::type& dyn, u64 index, const source& src)
+        -> result<dyn_entry>;
     // The comptime values a type declaration captures from the body around it
     [[nodiscard]] auto captured_values(inst_id inst, gs::type_kind kind)
         -> result<std::vector<ip::index>>;
@@ -1421,7 +1418,8 @@ class analyzer {
     [[nodiscard]] auto analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand>;
     [[nodiscard]] auto analyze_deref(inst_id inst) -> result<operand>;
     // `*s[a..b]`, the array a range of known length spans
-    [[nodiscard]] auto deref_slice(ref operand_ref, const operand& slice, bool as_place, const source& src)
+    [[nodiscard]] auto
+    deref_slice(ref operand_ref, const operand& slice, bool as_place, const source& src)
         -> result<operand>;
     // The storage `r` names, spilling a value that has none into a slot
     [[nodiscard]] auto address_of(ref r, const source& src) -> result<place>;
@@ -1620,10 +1618,9 @@ class analyzer {
     // Each field's default, none for a field without one
     [[nodiscard]] auto field_defaults(gs::type& type, const source& src)
         -> result<std::vector<default_source>>;
-    [[nodiscard]] auto field_default(gs::type&             type,
-                                     usize                 index,
-                                     const default_source& from,
-                                     const source&         src) -> result<operand>;
+    [[nodiscard]] auto
+    field_default(gs::type& type, usize index, const default_source& from, const source& src)
+        -> result<operand>;
     // Builds a folded aggregate constant into runtime storage
     [[nodiscard]] auto materialize(ip::index index, const source& src) -> result<gir::value>;
     [[nodiscard]] auto materialize_slice(const ip::aggregate_value& agg,
@@ -1737,11 +1734,12 @@ class analyzer {
                                     ip::index                      value,
                                     const source&                  src) -> result<ip::index>;
     // An element or field of comptime memory, as a place within the same allocation
-    [[nodiscard]] auto comptime_elem_place(const comptime_place& p, ref index_ref, const source& src)
-        -> result<operand>;
-    [[nodiscard]] auto
-    comptime_field_place(const comptime_place& p, std::string_view name, const source& src)
-        -> result<operand>;
+    [[nodiscard]] auto comptime_elem_place(const comptime_place& p,
+                                           ref                   index_ref,
+                                           const source&         src) -> result<operand>;
+    [[nodiscard]] auto comptime_field_place(const comptime_place& p,
+                                            std::string_view      name,
+                                            const source&         src) -> result<operand>;
     [[nodiscard]] auto analyze_let_value(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_const_local(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_store(inst_id inst) -> result<operand>;
@@ -1977,7 +1975,8 @@ class analyzer {
     [[nodiscard]] auto analyze_asm(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
     // A buffer taken apart into its data, element count and, for a destination, byte count
-    [[nodiscard]] auto buffer_view(ref arg_ref, const operand& given, bool is_dest, const source& src)
+    [[nodiscard]] auto
+    buffer_view(ref arg_ref, const operand& given, bool is_dest, const source& src)
         -> result<mem_view>;
     [[nodiscard]] auto byte_count(const gir::value& count, usize elem_bytes) -> gir::value;
     // `@memcpy`, `@memmove` and `@memset`
@@ -2012,12 +2011,12 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_return_address(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_entry_main(const source& src) -> result<operand>;
-    [[nodiscard]] auto builtin_field(gsl::span<const ref> args, const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_field(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
     // `@tagName` of a value known only at runtime, tested against each name in turn
-    [[nodiscard]] auto runtime_tag_name(const operand& value,
-                                        gs::type&      type,
-                                        gs::type&      name_type,
-                                        const source&  src) -> result<operand>;
+    [[nodiscard]] auto
+    runtime_tag_name(const operand& value, gs::type& type, gs::type& name_type, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto builtin_name_location(const source& src) -> source_location;
     // `@expect` / `@require`, a test check whose failure calls a weak handler
     [[nodiscard]] auto builtin_expect(gsl::span<const ref> args, const source& src, bool require)
@@ -2130,11 +2129,11 @@ class analyzer {
     // Instructions whose analysis failed, so a later read is poisoned rather than unsupported
     ankerl::unordered_dense::set<inst_id> failed_;
     // Result slots an inner `and` / `or` already made for the ones it is the left side of
-    ankerl::unordered_dense::map<inst_id, gir::value> bool_slots_;
-    std::vector<target>                               targets_;
-    std::vector<pending_merge>                        merges_;
-    std::vector<std::vector<operand>>                 packs_;
-    std::vector<propagation>                          propagations_;
+    ankerl::unordered_dense::map<inst_id, gir::value>                     bool_slots_;
+    std::vector<target>                                                   targets_;
+    std::vector<pending_merge>                                            merges_;
+    std::vector<std::vector<operand>>                                     packs_;
+    std::vector<propagation>                                              propagations_;
     ankerl::unordered_dense::map<inst_id, stdx::option<returned_failure>> failures_;
     // The loops being unrolled into a runtime body, innermost last
     std::vector<inst_id>                            unrolling_;
@@ -2156,7 +2155,7 @@ class analyzer {
     // The local `const` initializers being analyzed
     usize const_inits_{0};
     // The values `capture` instructions read, and the type whose namespace holds the body
-    std::vector<ip::index>  captures_;
+    std::vector<ip::index> captures_;
     // A closure body's captures read from its environment, by capture slot
     std::vector<stdx::option<operand>> env_values_;
     // The environment the next call of a local generic's instance takes first
@@ -2164,7 +2163,7 @@ class analyzer {
     // A closure body's own environment parameter
     stdx::option<gir::value> env_self_;
     // The frame whose compile-time memory a compile-time closure's body may store to
-    stdx::option<u32> env_frame_;
+    stdx::option<u32>       env_frame_;
     stdx::option<nominal&>  scope_;
     stdx::option<gs::type&> self_type_;
     std::string             symbol_prefix_;

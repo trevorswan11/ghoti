@@ -504,6 +504,7 @@ auto analyzer::coerce_to(const operand&  op,
                t.get_kind() == gs::type_kind::AUTO ||
                (pointee && pointee->get_kind() == gs::type_kind::FUNCTION);
     }};
+
     // A generic function's value holds nothing until it captures
     if (const auto g{op.as_opt<generic_ref>()};
         g && comp_.closure_generic(target).transform([&](const generic_fn& f) {

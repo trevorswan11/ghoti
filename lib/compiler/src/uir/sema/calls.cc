@@ -159,8 +159,7 @@ auto analyzer::call_operand(const operand&       callee,
 
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) {
-        // A function value, such as `@entryMain()` with no entry point, is called through, and a
-        // `^fn(...)` the same way
+        // A function value or `^fn(...)` is called through
         auto&      callee_type{type_of(callee)};
         const auto pointee{callee_type.get_data().as_opt<gs::types::pointer>()};
         const auto fn_type{

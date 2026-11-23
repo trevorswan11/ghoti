@@ -82,8 +82,7 @@ namespace {
     return as_well_known(at) == well_known::auto_type;
 }
 
-// Whether a parameter's type is an `impl Fn(...)` bound, which binds whatever callable a call
-// passes
+// Whether a parameter's type is an `impl Fn(...)` bound, which binds the callable passed
 [[nodiscard]] auto is_impl_fn(const module_t& m, gsl::span<const inst_id> body) -> bool {
     if (body.empty() || m.tag_of(body.back()) != tag::yield) { return false; }
     const auto inst{as_inst(m.data_of(body.back()).un.operand)};

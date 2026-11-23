@@ -258,7 +258,6 @@ TEST_CASE("A returned failure runs the errdefers in scope with its residual", "[
     CHECK(agrees(diff));
 }
 
-// #446: a function stored in a compile-time struct is called through the global holding it
 TEST_CASE("A function in a constant struct is called through its field", "[uir]") {
     const auto diff{diff_source(R"(
         const inc = fn(x: i32): i32 { return x + 1; };
