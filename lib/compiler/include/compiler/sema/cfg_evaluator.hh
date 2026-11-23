@@ -87,8 +87,7 @@ class cfg_evaluator {
     auto gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     // Evaluates every module-scope `@cfgValue` constant once, reporting their errors
     auto resolve_all_cfg_values() -> void;
-    // Guard arms are only chosen, so an arm needing analysis (`@sizeOf`, `cpu.has`) is left to
-    // whoever lowers the chosen expression
+    // Guard arms are only chosen, so an arm needing analysis is left to lowering
     auto select_arms_only() noexcept -> void { select_only_ = true; }
 
     // The value of a `@cfgValue(...)` node, or none after reporting why it has none

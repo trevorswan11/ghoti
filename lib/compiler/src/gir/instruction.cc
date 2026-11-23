@@ -16,7 +16,6 @@
 
 namespace ghoti::gir {
 
-// Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
 auto asm_template(std::string_view src) -> std::string {
     std::string out;
     out.reserve(src.size());

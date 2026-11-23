@@ -12,11 +12,14 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/peer_type.hh"
@@ -25,6 +28,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/diagnostic.hh"
 #include "support/int128.hh"
 
 namespace ghoti::uir::sema {
@@ -150,8 +154,7 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
         const auto body{rec.body_field()};
         const auto value{TRY(unevaluated(body, src))};
 
-        // A type operand's type is the type itself, and a generic named in its own body is the
-        // instance being analyzed
+        // A type operand's type is the type itself
         const auto known{comptime_value(value)};
         const auto generic{value.as_opt<generic_ref>()};
         const bool own_instance{generic && fn_ && fn_->owner.get() == generic->fn->owner.get() &&

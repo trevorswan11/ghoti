@@ -218,16 +218,14 @@ auto compilation::collides(const std::string& name,
     for (const auto& c : found->second) {
         if (c.certain || is_named(c)) { continue; }
         const auto& u{units_[c.unit]};
-        // A `const` still resolving is on the way to what is being named, like an alias of it,
-        // which has storage of its own unless it names a function
+        // A `const` still resolving is on the way to what is being named
         auto& state{decls_[c.unit][std::to_underlying(c.decl)]};
         if (state.status == decl_status::IN_PROGRESS) {
             count += function ? 0 : 1;
             continue;
         }
 
-        // A candidate that can't be resolved yet, such as an alias of the declaration being
-        // named, is resolved again at its next use, and counts like one still resolving
+        // A candidate that can't be resolved yet is resolved again at its next use
         const auto before{speculate()};
         const auto probed{analyze_decl(u, c.decl, *u.uir->decl_at(c.decl).node)};
         if (stopped_at_) { return stdx::err{stop::UNSUPPORTED}; }

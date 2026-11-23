@@ -402,12 +402,12 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return member;
     }
 
-    // A field of a compile-time value is known, so reading it needs no storage, and a
-    // compile-time reference's field is the field of what it holds
+    // A compile-time reference's field is the field of what it holds
     if (const auto referent{comptime_referent(object)}; referent && !assigned) {
         return comptime_field(*referent, name, src);
     }
 
+    // A field of a compile-time value is known so reading it needs no storage
     if (const auto known{comptime_value(object)}; known && !assigned) {
         return comptime_field(*known, name, src);
     }
@@ -431,7 +431,7 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
 
     const auto base{TRY(address_of(object_ref, src))};
 
-    // An array's length is its type's, so it names no storage
+    // An array's length is its type's so it names no storage
     if (const auto arr{base.pointee->get_data().as_opt<gs::types::array>()};
         arr && name == "len" && !assigned) {
         return comp_.constants().intern(u64{arr->len}, builtin(gs::type_kind::USIZE));

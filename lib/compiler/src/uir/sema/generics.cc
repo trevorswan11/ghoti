@@ -138,8 +138,8 @@ auto compilation::declare_generic(const unit&           u,
     const bool unprefixed{in_instance || (member.symbol.empty() && member.symbol_prefix.empty())};
     auto       name{unprefixed ? std::string{u.uir->string(d.name)}
                                : TRY(member_symbol(u, decl, func, member))};
-    // An `impl` block's generic member is named after the type it implements, as is a ctor
-    // instance's
+
+    // An `impl` block's generic member is named after the type it implements
     const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl && member.self_type};
     const auto enclosing{in_instance ? stdx::option<gs::type&>{*member.scope->type}
                          : in_impl   ? stdx::option<gs::type&>{*member.self_type}
@@ -404,8 +404,7 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 continue;
             }
 
-            // An array argument, such as a string or a `++` of strings, keeps its array type in
-            // the symbol
+            // An array argument keeps its array type in the symbol
             const bool array_arg{!comp_.constants().is_type(index) &&
                                  type_of(arg).get_kind() == gs::type_kind::ARRAY};
             binding.mangled_params.emplace_back(comp_.mangle_type(array_arg ? type_of(arg) : type));

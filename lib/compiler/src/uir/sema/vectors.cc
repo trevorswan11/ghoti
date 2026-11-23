@@ -10,18 +10,18 @@
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
+#include "gsl/span"
 #include "internal.hh"
 #include "support/big_int.hh"
 
 namespace ghoti::uir::sema {
 
 auto analyzer::vector_at_runtime(const source& src) -> result<void> {
-    // A runtime vector waits for the old pipeline's folding through immutable bindings to be
-    // matched, so only compile-time vectors are analyzed for now
     TRY(require_runtime(src));
     return comp_.unsupported(u_, src, "a vector at runtime");
 }
@@ -143,8 +143,7 @@ auto analyzer::coerce_vector(const operand&  op,
         return stdx::option<operand>{operand{gir::value{value.data, target}}};
     }
 
-    // An array and a vector of the same lanes convert into each other by value, an immutable
-    // array binding by the value it holds
+    // An array and a vector of the same lanes convert into each other by value
     if (gs::is_array_vector_pair(from, target)) {
         const auto slot{op.as_opt<slot_value>()};
         if (const auto known{slot && slot->known ? slot->known : comptime_value(op)}) {
@@ -230,8 +229,7 @@ auto analyzer::vector_lane(const operand& vector, ref index_ref, const source& s
     auto&       usize_type{builtin(gs::type_kind::USIZE)};
     const auto  at{TRY(coerce_to(index, usize_type, src, {.what = use_site::kind::STORE}))};
 
-    // A known lane of a known vector is that lane at compile time, while a runtime body reads it
-    // from the vector
+    // A known lane of a known vector is that lane at compile time
     const auto known_at{comptime_value(at)};
     if (const auto lanes{lanes_of(read, vec.len)}; lanes && known_at && is_comptime()) {
         const auto i{int_of(comp_.constants().value_at(*known_at))};

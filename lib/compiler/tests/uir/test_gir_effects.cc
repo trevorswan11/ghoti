@@ -7,7 +7,6 @@ namespace ghoti::tests {
 using helpers::same_effects;
 
 TEST_CASE("Reading memory nothing writes later may move among the effects") {
-    // A dyn call's entry loaded before or after its arguments
     const auto entry_first{R"(fn f(w: &mut struct, x: usize) -> void
   seg 0:
     %0 = alloca dyn

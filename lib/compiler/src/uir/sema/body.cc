@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -183,10 +184,10 @@ auto analyzer::analyze_function() -> result<void> {
 }
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
-    // A `dyn` receiver's vtable entry is loaded before the call's arguments, and a call an `if`
-    // tests is tried at compile time before it is emitted
+    // A `dyn` receiver's vtable entry is loaded before the call's arguments
     if (!is_comptime()) {
         for (const auto inst : body) {
+            // A call an `if` tests is tried at compile time before it is emitted
             if (mod().tag_of(inst) == tag::condbr || mod().tag_of(inst) == tag::condbr_comptime) {
                 auto rec{record(inst)};
                 auto cond{as_inst(*rec.ref_field())};
@@ -233,7 +234,7 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
         auto value{tested_calls_.contains(inst) ? tested_call(inst) : analyze_inst(inst)};
         if (!value) {
             failed_.insert(inst);
-            // A failed instruction poisons only what uses it, so later root causes still report
+            // A failed instruction poisons only what uses it so later root causes still report
             if (value.error() == stop::UNSUPPORTED || is_comptime()) {
                 return stdx::err{value.error()};
             }
@@ -259,14 +260,11 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
 }
 
 auto analyzer::tested_call(inst_id inst) -> result<operand> {
-    // A call an `if` tests on known arguments folds when it can run at compile time, and runs at
-    // runtime otherwise
-    // One `if comptime` tests always folds, so it is always tried
+    // A call an `if` tests on known arguments folds when it can (or must) run at compile time
     if (!comptime_tests_.contains(inst) && !operands_known(inst)) { return analyze_inst(inst); }
     const auto before{comp_.speculate()};
 
-    // Run again like an analyzed instruction, so its operands, such as a global's place, are
-    // read at compile time too
+    // Run again like an analyzed instruction so operands are read at comptime too
     values_.insert_or_assign(inst, operand{gir::value{}});
     const auto folded{[&] {
         const auto scope{comptime_scope()};

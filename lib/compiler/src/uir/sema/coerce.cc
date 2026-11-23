@@ -648,8 +648,7 @@ auto analyzer::materialize_merge(merge_ref m, gs::type& type, const source& src)
             builder_.set_splice(was_splicing);
         })};
 
-        // Each arm converts where it arrives, which an initializer needs room in. Converting may
-        // add merges, so the arms are copied first
+        // Each arm converts where it arrives
         const auto arrivals{pending.arrivals};
         for (const auto& arrival : arrivals) {
             builder_.set_segment(*gir_fn_->get_segment(arrival.seg));

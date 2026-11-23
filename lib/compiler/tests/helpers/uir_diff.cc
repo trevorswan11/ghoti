@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -37,8 +38,10 @@
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
+#include "fmt/base.h"
 #include "helpers/gir_effects.hh"
 #include "helpers/gir_normalize.hh"
+#include "stdx/hash.hh"
 #include "support/diagnostic.hh"
 #include "support/env.hh"
 
@@ -530,7 +533,7 @@ auto diff_pipelines(mod::source_loader&          loader,
 
     // `GHOTI_UIR_DIFF_DUMP=<dir>` keeps both normalized dumps of every program that differs
     if (const auto dir{get_env("GHOTI_UIR_DIFF_DUMP")}) {
-        const auto stem{fmt::format("{}", std::hash<std::string>{}(root.generic_string()))};
+        const auto stem{fmt::format("{}", stdx::hash<std::string>{}(root.generic_string()))};
         const auto base{std::filesystem::path{*dir} / root.filename()};
         std::ofstream{base.string() + "." + stem + ".old"} << legacy_text;
         std::ofstream{base.string() + "." + stem + ".uir"} << uir_text;
@@ -547,8 +550,6 @@ auto diff_pipelines(mod::source_loader&          loader,
     if (shows_legacy_bug()) { return {.status = uir_diff_status::LEGACY_BUG}; }
     if (folds_local_aggregate()) { return {.status = uir_diff_status::FOLD_PLACEMENT}; }
 
-    // A program-wide fold still counts, as it did before functions were compared one at a time,
-    // so a program the function check can't place is never judged more strictly than that
     if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
         return {.status = uir_diff_status::FOLD_PLACEMENT};
     }

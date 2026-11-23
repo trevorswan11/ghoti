@@ -972,7 +972,6 @@ class analyzer {
         std::vector<incoming>         arrivals;
     };
 
-    // Arms that all carry untyped constants, waiting for a use to type them
     // An operator applied to an untyped merge, run once the merge takes its type
     struct merge_op {
         binary_info info;
@@ -980,6 +979,7 @@ class analyzer {
         bool        merge_left;
     };
 
+    // Arms that all carry untyped constants, waiting for a use to type them
     struct pending_merge {
         gir::segment_id          seg;
         std::vector<incoming>    arrivals;
@@ -1100,8 +1100,7 @@ class analyzer {
         std::string_view callee{};
         // The instruction that computed the value, which an integer conversion may fold
         stdx::option<ref> from{};
-        // Whether an operator with an untyped side computes in the target type, as a `let` or
-        // `return` does but an operand of another operator doesn't
+        // A `let` or `return` does but an operand of another operator doesn't
         bool computes_in_target{false};
     };
 
@@ -1636,7 +1635,6 @@ class analyzer {
                                     gsl::span<const ref> args,
                                     const source&        src,
                                     const source&        callee_src) -> result<operand>;
-    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     // `s.f()` where `f` is a field holding a plain function
     [[nodiscard]] auto call_through_field(ref                  object_ref,
                                           std::string_view     name,
@@ -1647,6 +1645,7 @@ class analyzer {
                                   const gs::types::function& fn,
                                   gsl::span<const ref>       args,
                                   const source&              src) -> result<operand>;
+    // A call of `target`. `through_member` calls a type's function by its name: `T.f(x)`
     [[nodiscard]] auto call_function(instance&            target,
                                      gsl::span<const ref> args,
                                      const source&        src,

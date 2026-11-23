@@ -294,11 +294,9 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
 
 auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
     -> result<stdx::option<gir::value>> {
-    // An operator with an untyped side, used where a wider integer is wanted, computes in that
-    // type with its typed side widened first, though that side's own operators keep their type
     const auto inst{as_inst(r)};
     if (!inst || !is_widenable_operator(mod().tag_of(*inst)) || is_comptime()) {
-        return stdx::option<gir::value>{};
+        return stdx::none;
     }
 
     const auto& d{mod().data_of(*inst)};
@@ -307,7 +305,7 @@ auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
     const auto  untyped{[&](const operand& op) {
         return comptime_value(op) && gs::is_comptime_numeric(type_of(op).get_kind());
     }};
-    if (untyped(lhs) == untyped(rhs)) { return stdx::option<gir::value>{}; }
+    if (untyped(lhs) == untyped(rhs)) { return stdx::none; }
 
     const auto widened{[&](const operand& op) -> result<gir::value> {
         if (untyped(op)) {
@@ -327,7 +325,7 @@ auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
     auto&      typed_type{untyped(lhs) ? type_of(rhs) : type_of(lhs)};
     if (!gs::is_integer(typed_type.get_kind()) || gs::is_same_unqualified(typed_type, target) ||
         !gs::is_implicit_widenable(typed_type, target)) {
-        return stdx::option<gir::value>{};
+        return stdx::none;
     }
 
     const auto lv{TRY(widened(lhs))};
@@ -343,8 +341,7 @@ auto analyzer::fold_into_merge(const binary_info& info,
                                const operand&     lhs,
                                const operand&     rhs,
                                const source&      src) -> result<stdx::option<operand>> {
-    // An untyped merge meeting a known untyped value stays untyped, the operator running once
-    // the merge takes its type
+    // An untyped merge meeting a known untyped value stays untyped
     if (info.cls == op_class::EQUALITY || info.cls == op_class::ORDERING ||
         info.cls == op_class::SHIFT) {
         return stdx::none;

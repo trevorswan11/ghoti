@@ -791,8 +791,7 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
                                             : ""));
         }
 
-        // A known address has no number at compile time, and folds at runtime only where an
-        // immutable `let` takes it
+        // A known address has no number at compile time
         if (known) {
             // An address made from an integer is that integer, read at runtime in a function
             if (const auto number{int_of(pool.value_at(*known))}) {

@@ -4,6 +4,7 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -13,7 +14,6 @@
 #include "compiler/sema/error.hh"
 #include "helpers/uir_diff.hh"
 #include "helpers/uir_run.hh"
-#include "support/int128.hh"
 
 namespace ghoti::tests {
 
@@ -152,7 +152,6 @@ TEST_CASE("`@llvmIntrinsic` and `@returnAddress` lower to builtin calls", "[uir]
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
-// #467: the old pipeline rejects `@returnAddress` in a function with comptime parameters
 TEST_CASE("`@returnAddress` works in a generic body", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         pub const plain = fn(comptime T: type): usize {
@@ -339,7 +338,6 @@ TEST_CASE("A `@Struct` field takes the default its descriptor points at", "[uir]
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
-// #459: the old pipeline only takes cfg terms as a `@cfgValue` arm
 TEST_CASE("A `@cfgValue` arm may need analysis, like `@sizeOf`", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const S = struct { a: u64, b: u8 };
@@ -388,7 +386,6 @@ TEST_CASE("A parameterized impl targets a ctor another module declares", "[uir]"
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
-// #460: the old pipeline can't store into an element of a global's compile-time initializer
 TEST_CASE("A global is built by a function storing into its elements", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const Lock = struct { locked: bool = false, id: u8 = 0 };
@@ -407,7 +404,6 @@ TEST_CASE("A global is built by a function storing into its elements", "[uir]") 
     CHECK(run.int_value("third") == 6);
 }
 
-// #453: the old pipeline reads a `[_]type{ ... }` literal as a runtime container
 TEST_CASE("`unroll for` walks a literal array of types", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         pub const use = fn(): u32 {
@@ -423,7 +419,6 @@ TEST_CASE("`unroll for` walks a literal array of types", "[uir]") {
     CHECK_THAT(run.gir(), Catch::Matchers::ContainsSubstring("fn use() -> u32"));
 }
 
-// #428: the old pipeline can't `@bitCast` an array at compile time or in a global
 TEST_CASE("`@bitCast` reinterprets an array's bytes at compile time", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const g: u32 = @bitCast(u32, [4]u8{ 1, 2, 3, 4 });
@@ -439,7 +434,6 @@ TEST_CASE("`@bitCast` reinterprets an array's bytes at compile time", "[uir]") {
     CHECK(run.int_value("low") == 0x0201);
 }
 
-// #429: an `f80` and a `u80` differ in ABI size on i686 but hold the same bits
 TEST_CASE("`@bitCast` compares bit widths, not padded sizes", "[uir]") {
     helpers::pipeline_settings settings;
     settings.target_opts.triple_str = "i686-unknown-linux-gnu";
@@ -459,7 +453,6 @@ TEST_CASE("`@bitCast` compares bit widths, not padded sizes", "[uir]") {
     CHECK(wrong.codes() == std::vector{sema::error::TYPE_MISMATCH});
 }
 
-// #427: a local `const n = @sizeOf(T)` names an array length in a generic `@ptrCast` target
 TEST_CASE("A generic's local constant sizes a pointer cast's array type", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const first = fn(comptime T: type, b: []u8): u8 {
@@ -474,7 +467,6 @@ TEST_CASE("A generic's local constant sizes a pointer cast's array type", "[uir]
     CHECK_THAT(run.gir(), Catch::Matchers::ContainsSubstring("first__u32"));
 }
 
-// #461: the old pipeline once said a `while (true)` returning from its body doesn't return
 TEST_CASE("A `while (true)` that only leaves by returning returns on every path", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         pub const find = fn(xs: []u8, x: u8): usize {
@@ -503,7 +495,6 @@ TEST_CASE("A `while (true)` that only leaves by returning returns on every path"
     CHECK(diff.status == helpers::uir_diff_status::LEGACY_REJECTED);
 }
 
-// #464: a generic parameter `&[2]T` takes a reference to an array of the bound type
 TEST_CASE("A generic takes a reference to an array of its type parameter", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const L = struct { v: i32 };
@@ -516,7 +507,6 @@ TEST_CASE("A generic takes a reference to an array of its type parameter", "[uir
     CHECK_THAT(run.gir(), Catch::Matchers::ContainsSubstring("arr: &[2]struct"));
 }
 
-// #465: a union constant keeps an `i128` payload whole
 TEST_CASE("A union constant holds an `i128` payload", "[uir]") {
     const auto run{helpers::uir_accepted(R"(
         const U = union(enum) { big: i128, small: u8 };

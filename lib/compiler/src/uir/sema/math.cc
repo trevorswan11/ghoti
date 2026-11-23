@@ -350,11 +350,13 @@ auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, cons
     const gir::value data{builder_.emit_load(gir::value{ptr_at, byte_ptr}, byte_ptr), byte_ptr};
     const gir::value count{builder_.emit_load(gir::value{len_at, usize_type}, usize_type),
                            usize_type};
-    return mem_view{.data  = data,
-                    .count = count,
-                    .bytes = is_dest ? stdx::option<gir::value>{byte_count(
-                                           count, gir::size_of(slice->underlying, layout))}
-                                     : stdx::none};
+    return mem_view{
+        .data  = data,
+        .count = count,
+        .bytes = is_dest ? stdx::option<gir::value>{byte_count(
+                               count, gir::size_of(slice->underlying, layout))}
+                         : stdx::none,
+    };
 }
 
 auto analyzer::builtin_mem(syntax::builtin_t which, gsl::span<const ref> args, const source& src)

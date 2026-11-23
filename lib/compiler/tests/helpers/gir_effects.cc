@@ -9,6 +9,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
@@ -20,37 +21,18 @@ namespace {
 constexpr std::string_view INDENT{"    "};
 
 // The operators that compute a value and touch nothing, so where they run doesn't matter
-constexpr std::array PURE_OPS{
-    std::string_view{"alloca"},
-    std::string_view{"load"},
-    std::string_view{"get_element_ptr"},
-    std::string_view{"address_of"},
-    std::string_view{"global_addr"},
-    std::string_view{"add"},
-    std::string_view{"sub"},
-    std::string_view{"mul"},
-    std::string_view{"div"},
-    std::string_view{"rem"},
-    std::string_view{"shl"},
-    std::string_view{"shr"},
-    std::string_view{"and"},
-    std::string_view{"or"},
-    std::string_view{"xor"},
-    std::string_view{"not"},
-    std::string_view{"neg"},
-    std::string_view{"eq"},
-    std::string_view{"ne"},
-    std::string_view{"lt"},
-    std::string_view{"le"},
-    std::string_view{"gt"},
-    std::string_view{"ge"},
-    std::string_view{"int_cast"},
-    std::string_view{"widen_cast"},
-    std::string_view{"trunc"},
-    std::string_view{"bit_cast"},
-    std::string_view{"float_cast"},
-    std::string_view{"ptr_cast"},
-};
+constexpr auto PURE_OPS{std::to_array<std::string_view>({
+    "alloca",     "load",        "get_element_ptr",
+    "address_of", "global_addr", "add",
+    "sub",        "mul",         "div",
+    "rem",        "shl",         "shr",
+    "and",        "or",          "xor",
+    "not",        "neg",         "eq",
+    "ne",         "lt",          "le",
+    "gt",         "ge",          "int_cast",
+    "widen_cast", "trunc",       "bit_cast",
+    "float_cast", "ptr_cast",
+})};
 
 struct instruction {
     std::string_view def;
@@ -196,9 +178,9 @@ class interner {
     std::vector<std::string>                       texts_;
 };
 
-// A function's values as expression trees, built twice: first without what loads read, to key
-// the stores and decide which loads are forwarded, then with it. The second trees share
-// `shared` with the function compared against
+// A function's values as expression trees, built twice:
+// - First without what loads read, to key the stores and decide which loads are forwarded
+// - Second trees share `shared` with the function compared against
 class canonicalizer {
   public:
     canonicalizer(function_text fn, interner& shared) : fn_{std::move(fn)}, shared_{shared} {
@@ -262,6 +244,7 @@ class canonicalizer {
         std::string_view value;
     };
 
+  private:
     [[nodiscard]] auto raw_id(usize i) -> u32 { return raw_names_.id(raw_tree(i)); }
     [[nodiscard]] auto final_id(usize i) -> u32 { return shared_.id(canonical(i)); }
 
@@ -361,8 +344,7 @@ class canonicalizer {
             "{}{{#{}}}{}", address.substr(0, open + 1), source, address.substr(close + 1)));
     }
 
-    // The value a slot holds when its one store, at entry, writes it and nothing else writes or
-    // addresses the slot
+    // The value a slot holds when its one store writes it and nothing else writes or addresses it
     [[nodiscard]] auto spilled_value(usize slot) -> stdx::option<std::string> {
         if (!held_.contains(slot)) { return stdx::none; }
         const auto found{stores_.find(raw_tree(slot))};
@@ -437,8 +419,7 @@ class canonicalizer {
                (scratch_.contains(*root) || built_.contains(*root) || held_.contains(*root));
     }
 
-    // A slot each of whose fields is stored once and which is only read whole, so where its
-    // fields were stored doesn't matter, only what they hold
+    // A slot each of whose fields is stored once and which is only read whole
     void find_built() {
         for (usize i{0}; i < fn_.lines.size(); ++i) {
             if (fn_.lines[i].op != "alloca" || scratch_.contains(i)) { continue; }
@@ -469,8 +450,6 @@ class canonicalizer {
             if (ok && read) { built_.insert(i); }
         }
 
-        // A slot written once, at entry or ahead of every read in one segment, holds that value,
-        // so the store is no effect
         for (usize i{0}; i < fn_.lines.size(); ++i) {
             if (fn_.lines[i].op != "alloca" || scratch_.contains(i) || built_.contains(i)) {
                 continue;
@@ -572,11 +551,11 @@ class canonicalizer {
     // Whether the memory a load reads is written at most once, at entry. A stack slot counts
     // every store into any part of it
     [[nodiscard]] auto written_once(usize address_line, const std::string& address) const -> bool {
-        const std::vector<usize>* writes{nullptr};
+        gsl::span<const usize> writes;
         if (const auto root{alloca_root(address_line)}) {
             const auto found{root_writes_.find(*root)};
             if (found == root_writes_.end()) { return true; }
-            writes = &found->second;
+            writes = found->second;
         } else {
             const auto found{stores_.find(address)};
             if (found == stores_.end()) { return true; }
@@ -584,9 +563,10 @@ class canonicalizer {
             return fn_.lines[found->second.front().line].segment == 0;
         }
 
-        return writes->size() == 1 && fn_.lines[writes->front()].segment == 0;
+        return writes.size() == 1 && fn_.lines[writes.front()].segment == 0;
     }
 
+  private:
     function_text                                                      fn_;
     interner&                                                          shared_;
     interner                                                           raw_names_;
