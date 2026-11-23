@@ -86,7 +86,7 @@ auto compilation::new_alloc(const comptime_alloc& alloc) -> comptime_place {
     return comptime_place{static_cast<u32>(allocs_.size() - 1)};
 }
 
-auto compilation::note_store(comptime_place p) -> void {
+auto compilation::note_store(const comptime_place& p) -> void {
     for (auto& frame : calls_) {
         if (p.alloc < frame.alloc_base) { frame.impure = true; }
     }
@@ -95,6 +95,7 @@ auto compilation::note_store(comptime_place p) -> void {
 auto compilation::speculate() const -> speculation {
     return speculation{
         .diagnostics  = diagnostics_.size(),
+        .memo         = memo_.size(),
         .stopped      = stopped_at_.has_value(),
         .runtime_site = runtime_site_.has_value(),
     };
@@ -102,6 +103,13 @@ auto compilation::speculate() const -> speculation {
 
 auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
     DISCARD(diagnostics_.split_off(s.diagnostics));
+
+    // A call that failed here lost its error with the diagnostics, so its next use runs it again
+    std::vector<memo_key> failed;
+    for (usize i{s.memo}; i < memo_.values().size(); ++i) {
+        if (!memo_.values()[i].second) { failed.emplace_back(memo_.values()[i].first); }
+    }
+    for (const auto& key : failed) { memo_.erase(key); }
     if (!s.stopped && !keep_unsupported) { stopped_at_.reset(); }
     if (!s.runtime_site) { runtime_site_.reset(); }
 }
@@ -188,6 +196,23 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
         if (binding && binding->value) {
             values_.insert_or_assign(param, operand{*binding->value});
             if (binding->has_slot) { ++arg; }
+            continue;
+        }
+
+        // A parameter the body writes lives in compile-time memory
+        record_reader p{record(param)};
+        p.skip_str().skip_body().skip_body();
+        if ((p.u32_field() & flags::PARAM_WRITTEN) != 0) {
+            const auto index{args[arg++]};
+            auto&      type{type_of(operand{index})};
+            values_.insert_or_assign(param,
+                                     operand{comp_.new_alloc({
+                                         .type                = type,
+                                         .value               = index,
+                                         .frame               = frame_,
+                                         .runtime_depth       = runtime_depth_,
+                                         .keeps_comptime_type = false,
+                                     })});
             continue;
         }
 
@@ -356,6 +381,61 @@ namespace {
 }
 
 } // namespace
+
+auto analyzer::operands_known(inst_id inst) const -> bool {
+    const auto operands{reevaluable_operands(mod(), inst)};
+    if (!operands) { return false; }
+    return std::ranges::all_of(*operands, [&](ref r) {
+        const auto operand_inst{as_inst(r)};
+        if (!operand_inst || mod().tag_of(*operand_inst) == tag::str) { return true; }
+        const auto found{values_.find(*operand_inst)};
+        if (found == values_.end()) { return false; }
+        const auto& op{found->second};
+        if (comptime_value(op) || op.is<global_const>() || op.is<function_ref>() ||
+            op.is<generic_ref>() || op.is<module_ref>() || op.is<enum_literal>()) {
+            return true;
+        }
+
+        // An immutable binding of a known value
+        if (const auto bound{op.as_opt<slot_value>()};
+            bound && !bound->is_mutable && bound->known) {
+            return true;
+        }
+
+        // An immutable member of a module or type, like `builtin.cpu`, is a constant too
+        const auto slot{op.as_opt<place>()};
+        if (!slot || slot->is_mutable || mod().tag_of(*operand_inst) != tag::field_ptr) {
+            return false;
+        }
+
+        record_reader rec{mod(), mod().data_of(*operand_inst).pl.extra};
+        const auto    owner{as_inst(*rec.ref_field())};
+        if (!owner) { return true; }
+        const auto held{values_.find(*owner)};
+        if (held == values_.end()) { return false; }
+        const auto index{comptime_value(held->second)};
+        const auto bound{held->second.as_opt<slot_value>()};
+        return held->second.is<module_ref>() || (index && comp_.constants().is_type(*index)) ||
+               (bound && bound->global_value);
+    });
+}
+
+auto analyzer::reaches_call(ref r) const -> bool {
+    const auto inst{as_inst(r)};
+    if (!inst || !values_.contains(*inst)) { return false; }
+    const auto t{mod().tag_of(*inst)};
+    if (t == tag::call || t == tag::field_call) { return true; }
+
+    // An address's number is only known at runtime
+    if (t == tag::builtin) {
+        record_reader rec{record(*inst)};
+        if (static_cast<syntax::builtin_t>(rec.u32_field()) == syntax::builtin_t::INT_FROM_PTR) {
+            return true;
+        }
+    }
+    const auto operands{reevaluable_operands(mod(), *inst)};
+    return operands && std::ranges::any_of(*operands, [&](ref o) { return reaches_call(o); });
+}
 
 auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     const auto inst{as_inst(r)};

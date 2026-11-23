@@ -79,7 +79,15 @@ auto analyzer::call_operand(const operand&       callee,
     }
 
     const auto fn{callee.as_opt<function_ref>()};
-    if (!fn) { return comp_.unsupported(u_, src, "a call through a value"); }
+    if (!fn) {
+        // A function value, such as `@entryMain()` with no entry point, is called through
+        const auto fn_type{type_of(callee).get_data().as_opt<gs::types::function>()};
+        if (!fn_type || fn_type->erased || is_comptime()) {
+            return comp_.unsupported(u_, src, "a call through a value");
+        }
+
+        return call_value(TRY(as_runtime(callee, src)), *fn_type, args, src);
+    }
 
     return call_function(*fn->fn, args, src, callee_src, false);
 }
@@ -108,12 +116,19 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
 
     const auto index{comptime_value(object)};
     if (!index || !comp_.constants().is_type(*index)) {
-        if (const auto through_vtable{TRY(call_dyn(object, name, args, src))}) {
+        if (const auto through_vtable{TRY(call_dyn(inst, object, name, args, src))}) {
             return *through_vtable;
         }
 
         const auto owner{receiver_type(object)};
         if (!owner) { return comp_.unsupported(u_, src, "a call through a field"); }
+
+        // `s.f()` of a field holding a function calls through the function value
+        if (const auto st{owner->get_data().as_opt<gs::types::struct_t>()};
+            st && std::ranges::contains(st->field_names, name)) {
+            return call_through_field(object_ref, name, args, src);
+        }
+
         return call_method(*owner, object_ref, name, args, src);
     }
 
@@ -137,12 +152,63 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     return call_function(*fn->fn, args, src, src, by_name);
 }
 
+auto analyzer::call_through_field(ref                  object_ref,
+                                  std::string_view     name,
+                                  gsl::span<const ref> args,
+                                  const source&        src) -> result<operand> {
+    TRY(require_runtime(src));
+    const auto base{TRY(address_of(object_ref, src))};
+    const auto field{TRY(field_place(base, name, src))};
+    auto&      field_type{*field.pointee};
+    const auto fn{field_type.get_data().as_opt<gs::types::function>()};
+    if (!fn || fn->erased) { return comp_.unsupported(u_, src, "a call through a field"); }
+    return call_value(TRY(read(field, src)), *fn, args, src);
+}
+
+auto analyzer::call_value(const gir::value&          callee,
+                          const gs::types::function& fn,
+                          gsl::span<const ref>       args,
+                          const source&              src) -> result<operand> {
+    if (args.size() != fn.params.size()) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Expected {} arguments, found {}", fn.params.size(), args.size()));
+    }
+
+    std::vector<gir::value> values;
+    values.reserve(args.size());
+    for (usize i{0}; i < args.size(); ++i) {
+        const auto given{TRY(resolve_value(args[i], src))};
+        const auto coerced{TRY(coerce_to(
+            given, *fn.params[i], src, {.what = use_site::kind::ARGUMENT, .arg_index = i + 1}))};
+        values.emplace_back(TRY(as_runtime(coerced, src)));
+    }
+
+    auto&      ret{fn.return_type};
+    const auto result{builder_.emit_indirect_call(callee, std::move(values), ret)};
+    if (!result) { return void_value(); }
+    return gir::value{*result, ret};
+}
+
 auto analyzer::call_function(instance&            target,
                              gsl::span<const ref> args,
                              const source&        src,
                              const source&        callee_src,
                              bool                 through_member) -> result<operand> {
-    if (args.size() != target.params.size()) {
+    // A C-variadic function takes any arguments after its parameters
+    const bool variadic{target.type->get_data().as<gs::types::function>().is_variadic};
+    if (variadic && args.size() < target.params.size()) {
+        return comp_.report(u_,
+                            callee_src,
+                            gs::error::ARITY_MISMATCH,
+                            fmt::format("Expected at least {} arguments, found {}",
+                                        target.params.size(),
+                                        args.size()));
+    }
+
+    if (!variadic && args.size() != target.params.size()) {
         return comp_.report(
             u_,
             callee_src,
@@ -196,6 +262,20 @@ auto analyzer::call_with(instance&            target,
     std::vector<gir::value> values;
     values.reserve(args.size());
     for (usize i{0}; i < args.size(); ++i) {
+        // A variadic argument is passed in its own type
+        if (i >= target.params.size()) {
+            // An untyped number goes as itself, which codegen promotes like C
+            const auto known{comptime_value(args[i])};
+            if (known && gs::is_comptime_numeric(type_of(args[i]).get_kind())) {
+                values.emplace_back(constant(*known, type_of(args[i])));
+                continue;
+            }
+
+            const auto extra{TRY(concrete(args[i], src))};
+            values.emplace_back(TRY(as_runtime(extra, src)));
+            continue;
+        }
+
         auto& param{*target.params[i]};
 
         // A type parameter's slot is left undefined, since the instance already knows it

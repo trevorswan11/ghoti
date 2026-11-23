@@ -163,7 +163,7 @@ auto cfg_evaluator::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_val
     } else {
         record.is_predicate = false;
 
-        const bool arms_ok{check_guard_arm_types(node, expr)};
+        const bool arms_ok{select_only_ || check_guard_arm_types(node, expr)};
         if (!expr.fallback) {
             fail(node,
                  error::CFG_VALUE_MISSING_FALLBACK,
@@ -181,7 +181,7 @@ auto cfg_evaluator::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_val
                     }
                     if (*b) {
                         record.chosen = ast::node_id{guard.value};
-                        result        = eval_term(guard.value);
+                        result        = chosen_term(guard.value);
                         matched       = true;
                         break;
                     }
@@ -190,7 +190,7 @@ auto cfg_evaluator::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_val
             }
             if (!matched) {
                 record.chosen = ast::node_id{*expr.fallback};
-                result        = eval_term(*expr.fallback);
+                result        = chosen_term(*expr.fallback);
             }
         }
     }
@@ -202,6 +202,19 @@ auto cfg_evaluator::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_val
         if (recorded_on_) { recorded_on_->cfg_value_results.emplace(key, record); }
     }
     return result;
+}
+
+auto cfg_evaluator::chosen_term(ast::expr_handle value) -> stdx::option<cfg_value> {
+    if (!select_only_) { return eval_term(value); }
+
+    // An arm that isn't a cfg term is still chosen, with no value of its own here
+    const auto before{diags_.size()};
+    const bool ok{ok_};
+    auto       term{eval_term(value)};
+    if (term) { return term; }
+    DISCARD(diags_.split_off(before));
+    ok_ = ok;
+    return cfg_value{cfgval::diverges{}};
 }
 
 auto cfg_evaluator::to_operand(const cfg_value& value) -> operand {

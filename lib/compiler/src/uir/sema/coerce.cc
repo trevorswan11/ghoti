@@ -117,8 +117,14 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         return operand{TRY(cast_target_inferred(*cast, target))};
     }
 
+    if (const auto lit{op.as_opt<slice_literal>()}) {
+        if (target.get_kind() != gs::type_kind::SLICE) { return stdx::none; }
+        return slice_literal_as(*lit, target, src);
+    }
+
     if (const auto init{op.as_opt<anon_init>()}) {
         const auto kind{target.get_kind()};
+        if (kind == gs::type_kind::VECTOR) { return coerce_vector(op, target, target, src); }
         if (kind != gs::type_kind::STRUCT && kind != gs::type_kind::UNION &&
             kind != gs::type_kind::ARRAY) {
             return stdx::none;
@@ -128,6 +134,34 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     }
 
     auto& from{type_of(op)};
+
+    // A compile-time reference used as a value is what it refers to
+    if (from.get_kind() == gs::type_kind::REFERENCE &&
+        target.get_kind() != gs::type_kind::REFERENCE &&
+        target.get_kind() != gs::type_kind::POINTER) {
+        if (const auto referent{comptime_referent(op)}) {
+            return operand{
+                TRY(coerce_to(operand{*referent}, target, src, {.what = use_site::kind::STORE}))};
+        }
+    }
+
+    // A known address of an untyped value points at that value in the target's pointee type
+    if (const auto from_pointee{gs::pointee_of(from)}, to_pointee{gs::pointee_of(target)};
+        from_pointee && to_pointee && from.get_kind() == target.get_kind() &&
+        gs::is_comptime_numeric(from_pointee->get_kind())) {
+        if (const auto known{comptime_value(op)}) {
+            auto&      pool{comp_.constants()};
+            const auto address{pool.value_at(*known).data.as_opt<ip::address_value>()};
+            if (address && address->pointee.size() == 1 && address->symbol.empty()) {
+                const auto pointee{address->pointee.front()};
+                const auto converted{TRY(coerce_to(
+                    operand{pointee}, *to_pointee, src, {.what = use_site::kind::STORE}))};
+                const auto typed{TRY(require_comptime(converted, src))};
+                return operand{
+                    pool.intern(ip::address_value{.symbol = {}, .pointee = {typed}}, target)};
+            }
+        }
+    }
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
     if (gs::is_same_unqualified(from, target)) { return op; }
     if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
@@ -295,6 +329,20 @@ auto analyzer::array_as_slice(const gir::value& address, gs::type& from, gs::typ
     return operand{TRY(slice_of_array(address, from))};
 }
 
+auto analyzer::known_bytes(const ip::aggregate_value& agg, gs::type& elem)
+    -> stdx::option<std::string> {
+    if (!gs::is_same_unqualified(elem, comp_.ctx().get_int(8, false))) { return stdx::none; }
+    std::string text;
+    for (const auto element : agg.elements) {
+        if (!element) { return stdx::none; }
+        const auto byte{comp_.constants().value_at(*element).data.as_opt<u64>()};
+        if (!byte || *byte > 0xFF) { return stdx::none; }
+        text += static_cast<char>(*byte);
+    }
+
+    return text;
+}
+
 auto analyzer::comptime_slice_of(ip::index array, gs::type& from, gs::type& target)
     -> stdx::option<operand> {
     const auto& arr{from.get_data().as<gs::types::array>()};
@@ -317,6 +365,58 @@ auto analyzer::comptime_slice_of(ip::index array, gs::type& from, gs::type& targ
     }
 
     return stdx::none;
+}
+
+auto analyzer::slice_literal_as(slice_literal lit, gs::type& target, const source& src)
+    -> result<operand> {
+    if (mod().tag_of(lit.init) != tag::init_array) {
+        return comp_.unsupported(u_, src, "a `^.{ ... }` with named fields");
+    }
+
+    auto rec{record(lit.init)};
+    rec.skip_ref();
+    const auto  count{rec.refs_field().size()};
+    const auto& slice{target.get_data().as<gs::types::slice>()};
+    auto&       elem{slice.underlying};
+    auto&       array{comp_.ctx().get_array(target.is_constant() ? gs::types::mut::CONSTANT
+                                                                 : gs::types::mut::MUTABLE,
+                                            slice.null_terminated,
+                                            count,
+                                            elem)};
+    // At compile time the slice holds the elements themselves
+    if (is_comptime()) {
+        const auto value{TRY(init_as(lit.init, array, src))};
+        const auto known{TRY(require_comptime(value, src))};
+        if (const auto slice_value{comptime_slice_of(known, array, target)}) {
+            return *slice_value;
+        }
+
+        return comp_.unsupported(u_, src, "a `^.{ ... }` at compile time");
+    }
+
+    // A known array lives in a hidden read-only global, so the slice may outlive the expression
+    const auto before{comp_.speculate()};
+    const auto folded{[&] {
+        const auto scope{comptime_scope()};
+        return init_as(lit.init, array, src);
+    }()};
+    const bool unsupported{!folded && folded.error() == stop::UNSUPPORTED};
+    comp_.abandon(before, unsupported);
+    if (unsupported) { return stdx::err{stop::UNSUPPORTED}; }
+
+    gir::value address;
+    if (const auto known{folded ? comptime_value(*folded) : stdx::option<ip::index>{}}) {
+        auto  name{comp_.literal_global_name("slice_lit")};
+        auto& global{comp_.gir().add_global(name, array, true, stdx::none, gir::linkage::INTERNAL)};
+        global.const_init.emplace(*known);
+        address = gir::value{builder_.emit_global_addr(std::move(name), array, true), array};
+    } else {
+        const auto value{TRY(init_as(lit.init, array, src))};
+        address = spill(TRY(as_runtime(value, src)), array, false).address;
+    }
+
+    const auto decayed{TRY(slice_of_array(address, array))};
+    return operand{gir::value{decayed.data, target}};
 }
 
 auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> result<gir::value> {
@@ -376,6 +476,15 @@ auto analyzer::coerce_to(const operand&  op,
         }
     }
 
+    // An expression with an untyped side computes in the wider integer type it is used as
+    if (const auto value{op.as_opt<gir::value>()};
+        value && site.from && site.computes_in_target && value->type &&
+        gs::is_integer(value->type->get_kind()) && gs::is_integer(target.get_kind())) {
+        if (const auto widened{TRY(widened_arithmetic(*site.from, target, src))}) {
+            return operand{*widened};
+        }
+    }
+
     if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
@@ -399,9 +508,8 @@ auto analyzer::coerce_to(const operand&  op,
         return comp_.unsupported(u_, src, "a conversion between function types");
     }
 
-    // Vector values arrive with their lane operations
     if (from.get_kind() == gs::type_kind::VECTOR || target.get_kind() == gs::type_kind::VECTOR) {
-        return comp_.unsupported(u_, src, "a vector value");
+        if (const auto converted{TRY(coerce_vector(op, from, target, src))}) { return *converted; }
     }
     switch (site.what) {
     case use_site::kind::STORE:
@@ -476,7 +584,7 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
     if (const auto global{typed.as_opt<global_const>()}) {
         TRY(require_runtime(src));
-        return load(global_place(*global->symbol, *global->type, false));
+        return load(global_place(global->symbol, *global->type, false));
     }
 
     if (const auto index{comptime_value(typed)}) {
@@ -497,6 +605,10 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
             auto&             type{type_of(typed)};
             const std::string symbol{address->symbol};
             return gir::value{builder_.emit_global_addr(symbol, type, type.is_constant()), type};
+        }
+
+        if (data.is<ip::address_value>()) {
+            return comp_.unsupported(u_, src, "the address of a value with no runtime storage");
         }
 
         if (const auto text{data.as_opt<std::string>()};
@@ -536,8 +648,10 @@ auto analyzer::materialize_merge(merge_ref m, gs::type& type, const source& src)
             builder_.set_splice(was_splicing);
         })};
 
-        // Each arm converts where it arrives, which an initializer needs room in
-        for (const auto& arrival : pending.arrivals) {
+        // Each arm converts where it arrives, which an initializer needs room in. Converting may
+        // add merges, so the arms are copied first
+        const auto arrivals{pending.arrivals};
+        for (const auto& arrival : arrivals) {
             builder_.set_segment(*gir_fn_->get_segment(arrival.seg));
             builder_.set_splice(true);
             const auto stored{
@@ -547,8 +661,27 @@ auto analyzer::materialize_merge(merge_ref m, gs::type& type, const source& src)
         }
     }
 
-    const gir::value loaded{builder_.emit_load(slot, type), type};
-    if (builder_.get_segment()->get_id() == pending.seg) { pending.materialized.emplace(loaded); }
+    gir::value loaded{builder_.emit_load(slot, type), type};
+
+    // Operators applied to the untyped merge run on it now that it has a type
+    const auto ops{merges_[m.index].ops};
+    for (const auto& op : ops) {
+        const auto other{TRY(coerce_to(op.other, type, src, {.what = use_site::kind::STORE}))};
+        const auto ov{TRY(as_runtime(other, src))};
+        const auto int_op{
+            gir::semantics::int_op_of(op.info.kind, op.info.wrapping, op.info.saturating)};
+        const bool checked{int_op && checks_overflow(*int_op, type)};
+        loaded = gir::value{builder_.emit_binary(op.info.kind,
+                                                 op.merge_left ? loaded : ov,
+                                                 op.merge_left ? ov : loaded,
+                                                 type,
+                                                 checked,
+                                                 op.info.saturating),
+                            type};
+    }
+
+    auto& done{merges_[m.index]};
+    if (builder_.get_segment()->get_id() == done.seg) { done.materialized.emplace(loaded); }
     return loaded;
 }
 

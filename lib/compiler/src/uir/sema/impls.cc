@@ -124,21 +124,44 @@ auto compilation::impl_params_for(const impl_entry& entry, gs::type& target)
     const auto n{nominal_of(target)};
     if (!n || !n->creator) { return stdx::option<std::vector<ip::index>>{}; }
     const auto call{yielded_inst(m, shape.target)};
-    if (!call || m.tag_of(*call) != tag::call) {
+    if (!call || (m.tag_of(*call) != tag::call && m.tag_of(*call) != tag::field_call)) {
         return unsupported(*entry.owner, src, "an impl target that isn't a ctor call");
     }
 
-    record_reader rec{m, m.data_of(*call).pl.extra};
-    const auto    callee{as_inst(*rec.ref_field())};
-    rec.skip_ref();
+    // The ctor is a declaration of this module, or a member of an imported one as `std.Option`
+    record_reader         rec{m, m.data_of(*call).pl.extra};
+    const auto            callee{as_inst(*rec.ref_field())};
+    stdx::option<decl_id> ctor_decl;
+    const unit*           ctor_unit{entry.owner.get()};
+    if (m.tag_of(*call) == tag::call) {
+        rec.skip_ref();
+        if (callee && m.tag_of(*callee) == tag::decl_val) {
+            ctor_decl.emplace(m.data_of(*callee).un.aux);
+        }
+    } else {
+        const auto name{rec.str_field()};
+        rec.skip_u32().skip_ref();
+        if (callee && m.tag_of(*callee) == tag::decl_val) {
+            analyzer   a{*this, *entry.owner};
+            const auto object{TRY(a.analyze_decl(decl_id{m.data_of(*callee).un.aux}))};
+            // The member may alias the ctor, so the generic it names is the one matched
+            if (const auto module{object.as_opt<module_ref>()}) {
+                const auto member{TRY(module_member(*module, name, *entry.owner, src))};
+                if (const auto g{member.as_opt<generic_ref>()}) {
+                    ctor_decl.emplace(g->fn->decl);
+                    ctor_unit = g->fn->owner.get();
+                }
+            }
+        }
+    }
+
     const auto args{rec.refs_field()};
-    if (!callee || m.tag_of(*callee) != tag::decl_val) {
+    if (!ctor_decl) {
         return unsupported(*entry.owner, src, "an impl target whose ctor isn't a declaration");
     }
 
-    const auto&   creator{*n->creator};
-    const decl_id ctor_decl{m.data_of(*callee).un.aux};
-    if (creator.owner.get() != entry.owner.get() || creator.decl != ctor_decl) {
+    const auto& creator{*n->creator};
+    if (creator.owner.get() != ctor_unit || creator.decl != *ctor_decl) {
         return stdx::option<std::vector<ip::index>>{};
     }
 

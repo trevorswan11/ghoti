@@ -1,5 +1,6 @@
 #include "compiler/gir/instruction.hh"
 
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -14,6 +15,33 @@
 #include "support/string_utils.hh"
 
 namespace ghoti::gir {
+
+// Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
+auto asm_template(std::string_view src) -> std::string {
+    std::string out;
+    out.reserve(src.size());
+    for (usize i{0}; i < src.size(); ++i) {
+        const char c{src[i]};
+        if (c == '$') {
+            out += "$$";
+            continue;
+        }
+        if (c == '%' && i + 1 < src.size()) {
+            const char next{src[i + 1]};
+            if (next == '%') {
+                out += '%';
+                ++i;
+                continue;
+            }
+            if (next >= '0' && next <= '9') {
+                out += '$';
+                continue;
+            }
+        }
+        out += c;
+    }
+    return out;
+}
 
 auto value::constant(ip::pool&                 pool,
                      ip::value_data            payload,

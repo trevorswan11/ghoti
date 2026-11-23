@@ -125,7 +125,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
     const auto                    defaults{TRY(field_defaults(type, src))};
     std::vector<std::string_view> missing;
     for (usize i{0}; i < st.field_names.size(); ++i) {
-        if (!seen.contains(st.field_names[i]) && defaults[i].empty()) {
+        if (!seen.contains(st.field_names[i]) && !defaults[i].present()) {
             missing.emplace_back(st.field_names[i]);
         }
     }
@@ -161,7 +161,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
         }
 
         for (usize i{0}; i < st.fields.size(); ++i) {
-            if (elements[i] || defaults[i].empty()) { continue; }
+            if (elements[i] || !defaults[i].present()) { continue; }
             const auto value{TRY(field_default(type, i, defaults[i], src))};
             elements[i] = TRY(require_comptime(value, src));
         }
@@ -183,7 +183,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
     }
 
     for (usize i{0}; i < st.fields.size(); ++i) {
-        if (seen.contains(st.field_names[i]) || defaults[i].empty()) { continue; }
+        if (seen.contains(st.field_names[i]) || !defaults[i].present()) { continue; }
         auto&      field_type{st.type_at(i)};
         const auto at{
             builder_.emit_get_element_ptr(gir::value{slot, type}, {usize_constant(i)}, field_type)};
@@ -196,14 +196,18 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
 }
 
 auto analyzer::field_defaults(gs::type& type, const source& src)
-    -> result<std::vector<gsl::span<const inst_id>>> {
+    -> result<std::vector<default_source>> {
     const auto n{comp_.nominal_of(type)};
     if (!n) { return comp_.unsupported(u_, src, "an initializer of a type UIR didn't declare"); }
 
-    // A built type's fields have no defaults
+    // A built type's defaults are the values its descriptor gave
     if (n->synthesized) {
-        const auto st{type.get_data().as_opt<gs::types::struct_t>()};
-        return std::vector<gsl::span<const inst_id>>(st ? st->fields.size() : 0);
+        const auto                  st{type.get_data().as_opt<gs::types::struct_t>()};
+        std::vector<default_source> out(st ? st->fields.size() : 0);
+        for (usize i{0}; i < out.size() && i < n->synthetic_defaults.size(); ++i) {
+            out[i].known = n->synthetic_defaults[i];
+        }
+        return out;
     }
 
     const auto&   m{*n->owner->uir};
@@ -212,23 +216,28 @@ auto analyzer::field_defaults(gs::type& type, const source& src)
     const auto captures{rec.count()};
     for (u32 i{0}; i < captures; ++i) { rec.skip_ref().skip_u32().skip_str(); }
 
-    std::vector<gsl::span<const inst_id>> defaults;
-    const auto                            count{rec.count()};
+    std::vector<default_source> defaults;
+    const auto                  count{rec.count()};
     for (u32 i{0}; i < count; ++i) {
         rec.skip_str().skip_u32().skip_body();
-        defaults.emplace_back(rec.body_field());
+        defaults.emplace_back(default_source{.body = rec.body_field()});
         rec.skip_body();
     }
 
     return defaults;
 }
 
-auto analyzer::field_default(gs::type&                type,
-                             usize                    index,
-                             gsl::span<const inst_id> body,
-                             const source&            src) -> result<operand> {
+auto analyzer::field_default(gs::type&             type,
+                             usize                 index,
+                             const default_source& from,
+                             const source&         src) -> result<operand> {
     const auto  n{comp_.nominal_of(type)};
     const auto& st{type.get_data().as<gs::types::struct_t>()};
+    if (from.known) {
+        return coerce_to(*from.known, st.type_at(index), src, {.what = use_site::kind::STORE});
+    }
+
+    const auto body{from.body};
 
     // A default declared in another module is evaluated there, at compile time
     if (n->owner->index != u_.index) {
@@ -369,6 +378,25 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
         return materialize_slice(*agg, type, src);
     }
 
+    // A known vector is built lane by lane
+    if (const auto vec{gs::vector_of(type)}) {
+        TRY(vector_at_runtime(src));
+        const auto agg{value.data.as_opt<ip::aggregate_value>()};
+        if (!agg) { return comp_.unsupported(u_, src, "a known vector of this form"); }
+        const std::vector<stdx::option<ip::index>> lanes{agg->elements};
+        gir::value built{constant(comp_.constants().intern(ip::undefined_value{}, type), type)};
+        for (usize i{0}; i < lanes.size(); ++i) {
+            const auto lane{lanes[i].value_or(
+                comp_.constants().intern(ip::undefined_value{}, vec->underlying))};
+            built = gir::value{
+                builder_.emit_vector_op(gir::instruction_kind::INSERT_LANE,
+                                        {built, usize_constant(i), TRY(as_runtime(lane, src))},
+                                        type),
+                type};
+        }
+        return built;
+    }
+
     if (const auto agg{value.data.as_opt<ip::aggregate_value>()}) {
         const auto slot{builder_.emit_alloca(type)};
         for (usize i{0}; i < agg->elements.size(); ++i) {
@@ -438,15 +466,18 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
 
 auto analyzer::materialize_slice(const ip::aggregate_value& agg, gs::type& type, const source& src)
     -> result<gir::value> {
-    // A compile-time slice is backed by a stack array of its elements
+    // Known bytes are read from one string constant
     const auto& slice{type.get_data().as<gs::types::slice>()};
     auto&       elem{slice.underlying};
-    auto&       backing{comp_.ctx().get_array(elem.is_constant() ? gs::types::mut::CONSTANT
-                                                                 : gs::types::mut::MUTABLE,
-                                              slice.null_terminated,
-                                              agg.elements.size(),
-                                              elem)};
-    const auto  slot{builder_.emit_alloca(backing)};
+    if (const auto text{known_bytes(agg, elem)}) { return string_as_slice(*text, type); }
+
+    // Other compile-time slices are backed by a stack array of their elements
+    auto&      backing{comp_.ctx().get_array(elem.is_constant() ? gs::types::mut::CONSTANT
+                                                                : gs::types::mut::MUTABLE,
+                                             slice.null_terminated,
+                                             agg.elements.size(),
+                                             elem)};
+    const auto slot{builder_.emit_alloca(backing)};
     for (usize i{0}; i < agg.elements.size(); ++i) {
         const auto at{
             builder_.emit_get_element_ptr(gir::value{slot, backing}, {usize_constant(i)}, elem)};

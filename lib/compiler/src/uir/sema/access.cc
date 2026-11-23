@@ -25,6 +25,11 @@ namespace ghoti::uir::sema {
 
 namespace {
 
+[[nodiscard]] auto is_tagged_union(const gs::type& type) -> bool {
+    const auto ut{type.get_data().as_opt<gs::types::union_t>()};
+    return ut && !ut->is_untagged;
+}
+
 // The index of the field `name` among `names`, none when there is no such field
 [[nodiscard]] auto index_of(gsl::span<const std::string_view> names, std::string_view name)
     -> stdx::option<usize> {
@@ -100,9 +105,9 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
                      .owned_copy = s->owned_copy};
     }
 
-    if (const auto g{op.as_opt<global_ref>()}) { return global_place(*g->symbol, *g->type, true); }
+    if (const auto g{op.as_opt<global_ref>()}) { return global_place(g->symbol, *g->type, true); }
     if (const auto g{op.as_opt<global_const>()}) {
-        return global_place(*g->symbol, *g->type, false);
+        return global_place(g->symbol, *g->type, false);
     }
 
     if (op.is<comptime_place>() || op.is<function_ref>() || op.is<anon_init>() ||
@@ -131,6 +136,7 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
             *inst,
             slot_value{.address    = slot.address,
                        .type       = &type,
+                       .known      = comptime_value(op),
                        .origin     = unchanged ? stdx::option<gir::value>{value} : stdx::none,
                        .owned_copy = slot.owned_copy});
     }
@@ -170,7 +176,8 @@ auto element_view(gs::context& ctx, gs::type& elem, bool constant) -> gs::type& 
     return *ctx.pool.with_const(elem, constant);
 }
 
-auto analyzer::through_pointer(const place& base, const source& src) -> result<place> {
+auto analyzer::through_pointer(const place& base, const source& src, bool checked)
+    -> result<place> {
     auto& type{*base.pointee};
     if (const auto r{type.get_data().as_opt<gs::types::reference>()}) {
         const auto loaded{load(base)};
@@ -180,7 +187,7 @@ auto analyzer::through_pointer(const place& base, const source& src) -> result<p
 
     if (const auto p{type.get_data().as_opt<gs::types::pointer>()}) {
         const auto loaded{load(base)};
-        TRY(check_not_null(loaded, src));
+        if (checked) { TRY(check_not_null(loaded, src)); }
         return place{
             .address = loaded, .pointee = &p->underlying, .is_mutable = writable_through(type)};
     }
@@ -291,11 +298,15 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
 }
 
 auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
-    auto        rec{record(inst)};
-    const auto& src{src_of(inst)};
-    const auto  object_ref{*rec.ref_field()};
-    const auto  name{rec.str_field()};
-    const auto  object{TRY(resolve(object_ref, src))};
+    auto       rec{record(inst)};
+    const auto object_ref{*rec.ref_field()};
+    const auto name{rec.str_field()};
+    return field_value(object_ref, name, src_of(inst));
+}
+
+auto analyzer::field_value(ref object_ref, std::string_view name, const source& src, bool checked)
+    -> result<operand> {
+    const auto object{TRY(resolve(object_ref, src))};
     if (const auto m{object.as_opt<module_ref>()}) {
         return declaration_use(TRY(module_member(*m, name, src)), false, src);
     }
@@ -334,7 +345,7 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     TRY(require_runtime(src));
 
     const auto object_place{TRY(address_of(object_ref, src))};
-    const auto base{TRY(through_pointer(object_place, src))};
+    const auto base{TRY(through_pointer(object_place, src, checked))};
     auto&      type{*base.pointee};
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         if (name == "len") {
@@ -350,6 +361,15 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     }
 
     const auto field{TRY(field_place(base, name, src))};
+    // A tagged union is read where it is used, so its tag is checked in place
+    if (is_tagged_union(*field.pointee)) {
+        const auto settled{settle(field)};
+        return slot_value{
+            .address = settled.address, .type = settled.pointee, .is_mutable = settled.is_mutable};
+    }
+
+    // An unchecked read, like `@field`'s, doesn't check a union's active field
+    if (!checked) { return operand{load(settle(field))}; }
     return operand{TRY(read(field, src))};
 }
 
@@ -372,11 +392,11 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         }
 
         if (const auto g{member.as_opt<global_ref>()}) {
-            return global_place(*g->symbol, *g->type, true);
+            return global_place(g->symbol, *g->type, true);
         }
 
         if (const auto g{member.as_opt<global_const>()}) {
-            return global_place(*g->symbol, *g->type, false);
+            return global_place(g->symbol, *g->type, false);
         }
 
         return member;
@@ -401,11 +421,22 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return comp_.needs_runtime(u_, src);
     }
 
+    if (const auto memory{object.as_opt<comptime_place>()}; memory && !gir_fn_) {
+        return comptime_field_place(*memory, name, src);
+    }
+
     if (is_comptime() || object.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a field of comptime memory");
     }
 
     const auto base{TRY(address_of(object_ref, src))};
+
+    // An array's length is its type's, so it names no storage
+    if (const auto arr{base.pointee->get_data().as_opt<gs::types::array>()};
+        arr && name == "len" && !assigned) {
+        return comp_.constants().intern(u64{arr->len}, builtin(gs::type_kind::USIZE));
+    }
+
     const auto field{TRY(field_place(base, name, src))};
 
     // Assigning a tagged union's field makes it the active one before the value is computed
@@ -533,6 +564,9 @@ auto analyzer::analyze_elem_val(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object{TRY(resolve(d.bin.lhs, src))};
     if (const auto pack{object.as_opt<pack_ref>()}) { return pack_elem(*pack, d.bin.rhs, src); }
+    if (!object.is<module_ref>() && vector_read(type_of(object))) {
+        return vector_lane(object, d.bin.rhs, src);
+    }
 
     // A runtime body reads a string's bytes where the string is stored
     const auto index{comptime_value(object)};
@@ -568,6 +602,16 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
         const auto known{global ? stdx::option<ip::index>{global->value} : comptime_value(object)};
         const auto at{known ? comptime_value(TRY(resolve_value(index_ref, src))) : stdx::none};
         if (known && at) { return comptime_elem(*known, *at, src); }
+    }
+
+    // A runtime body folding a condition can't read a runtime local
+    if (is_comptime() && gir_fn_ && (object.is<place>() || object.is<slot_value>())) {
+        return comp_.needs_runtime(u_, src);
+    }
+
+    // A compile-time call reaches into its own memory, which a function's body reads whole
+    if (const auto memory{object.as_opt<comptime_place>()}; memory && !gir_fn_) {
+        return comptime_elem_place(*memory, index_ref, src);
     }
 
     if (is_comptime() || object.is<comptime_place>()) {
@@ -606,7 +650,21 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
         auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
                                       : ctx.get_reference(mut, pointee)};
         return comp_.constants().intern(
-            ip::address_value{.symbol = std::string{*global->symbol}, .pointee = {}}, address_type);
+            ip::address_value{.symbol = std::string{global->symbol}, .pointee = {}}, address_type);
+    }
+
+    // `^.{ ... }` is an array backing the slice it is used as
+    if (const auto init{target.as_opt<anon_init>()}; init && is_pointer) {
+        return slice_literal{init->inst};
+    }
+
+    // A known value's address at compile time holds the value, which nothing may write through
+    if (const auto known{comptime_value(target)}; known && is_comptime() && !is_mut) {
+        auto& pointee{type_of(target)};
+        auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
+                                      : ctx.get_reference(mut, pointee)};
+        return comp_.constants().intern(ip::address_value{.symbol = {}, .pointee = {*known}},
+                                        address_type);
     }
 
     if (is_comptime()) { return comp_.unsupported(u_, src, "an address at compile time"); }
@@ -657,8 +715,12 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
     const auto  ptr{TRY(resolve_value(d.un.operand, src))};
     if (is_comptime()) { return comp_.unsupported(u_, src, "a dereference at compile time"); }
     auto& type{type_of(ptr)};
-    if (type.get_kind() == gs::type_kind::SLICE || gs::is_fat_callable(type)) {
-        return comp_.unsupported(u_, src, "dereferencing a slice or callable");
+    if (type.get_kind() == gs::type_kind::SLICE) {
+        return deref_slice(d.un.operand, ptr, (d.un.aux & flags::DEREF_PLACE) != 0, src);
+    }
+
+    if (gs::is_fat_callable(type)) {
+        return comp_.unsupported(u_, src, "dereferencing a callable");
     }
 
     const auto target{TRY(pointer_place(ptr, src))};
@@ -672,6 +734,51 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
     return operand{load(target)};
 }
 
+auto analyzer::deref_slice(ref operand_ref, const operand& slice, bool as_place, const source& src)
+    -> result<operand> {
+    // `*s[a..b]` is the array the range's known length spans
+    const auto inst{as_inst(operand_ref)};
+    if (!inst || mod().tag_of(*inst) != tag::slice) {
+        return comp_.unsupported(u_, src, "dereferencing a slice of unknown length");
+    }
+
+    auto rec{record(*inst)};
+    rec.skip_ref();
+    const auto lo_ref{rec.ref_field()};
+    const auto hi_ref{rec.ref_field()};
+    const bool inclusive{(rec.u32_field() & flags::INCLUSIVE) != 0};
+    const auto known_bound{[&](stdx::option<ref> r) -> stdx::option<i128> {
+        if (!r) { return i128{0}; }
+        const auto bound{resolve(*r, src)};
+        const auto index{bound ? comptime_value(*bound) : stdx::option<ip::index>{}};
+        const auto exact{index ? int_of(comp_.constants().value_at(*index)) : stdx::none};
+        return exact ? exact->to_i128() : stdx::none;
+    }};
+    const auto lo{known_bound(lo_ref)};
+    const auto hi{hi_ref ? known_bound(hi_ref) : stdx::none};
+    if (!lo || !hi || *hi + (inclusive ? 1 : 0) < *lo) {
+        return comp_.unsupported(u_, src, "dereferencing a slice of unknown length");
+    }
+
+    auto&       ctx{comp_.ctx()};
+    auto&       slice_type{type_of(slice)};
+    const auto& s{slice_type.get_data().as<gs::types::slice>()};
+    const auto  mut{slice_type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
+    const auto  len{static_cast<u64>(*hi + (inclusive ? 1 : 0) - *lo)};
+    auto&       array{ctx.get_array(mut, false, len, s.underlying)};
+    auto&       array_ptr{ctx.get_pointer(mut, array)};
+
+    // The slice is spilled and its pointer read as the array's address
+    const auto slot{spill(TRY(as_runtime(slice, src)), slice_type, false).address};
+    const auto ptr_at{
+        builder_.emit_get_element_ptr(slot, {usize_constant(SLICE_PTR_FIELD)}, array_ptr)};
+    const gir::value address{builder_.emit_load(gir::value{ptr_at, array_ptr}, array_ptr),
+                             array_ptr};
+    const place target{.address = address, .pointee = &array, .is_mutable = !array.is_constant()};
+    if (as_place) { return target; }
+    return slot_value{.address = address, .type = &array, .is_mutable = target.is_mutable};
+}
+
 auto analyzer::operand_address(const operand& op, const source& src) -> result<place> {
     TRY(require_runtime(src));
     if (const auto s{op.as_opt<slot_value>()}) {
@@ -679,9 +786,9 @@ auto analyzer::operand_address(const operand& op, const source& src) -> result<p
     }
 
     if (const auto p{op.as_opt<place>()}) { return settle(*p); }
-    if (const auto g{op.as_opt<global_ref>()}) { return global_place(*g->symbol, *g->type, true); }
+    if (const auto g{op.as_opt<global_ref>()}) { return global_place(g->symbol, *g->type, true); }
     if (const auto g{op.as_opt<global_const>()}) {
-        return global_place(*g->symbol, *g->type, false);
+        return global_place(g->symbol, *g->type, false);
     }
 
     // A named value keeps the slot it is spilled to
@@ -743,6 +850,28 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
         auto& field_type{type.get_data().as<gs::types::union_t>().type_at(index)};
         if (un->payload.empty()) { return pool.intern(ip::void_value{}, field_type); }
         return un->payload.front();
+    }
+
+    // A known slice's address holds its elements, so equal slices share one
+    if (const auto slice{type.get_data().as_opt<gs::types::slice>()}; slice && name == "ptr") {
+        auto& ptr_type{comp_.ctx().get_pointer(gs::types::mut::CONSTANT, slice->underlying)};
+        std::vector<ip::index> pointee;
+        if (const auto text{value.data.as_opt<std::string>()}) {
+            const std::string bytes{*text};
+            for (const char c : bytes) {
+                pointee.emplace_back(pool.intern(u64{static_cast<u8>(c)}, slice->underlying));
+            }
+        } else if (const auto agg{value.data.as_opt<ip::aggregate_value>()}) {
+            for (const auto element : agg->elements) {
+                if (!element) {
+                    return comp_.unsupported(u_, src, "the address of undefined elements");
+                }
+                pointee.emplace_back(*element);
+            }
+        }
+
+        return pool.intern(ip::address_value{.symbol = {}, .pointee = std::move(pointee)},
+                           ptr_type);
     }
 
     return comp_.unsupported(u_, src, fmt::format("a field of a comptime `{}`", type.to_string()));

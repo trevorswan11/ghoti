@@ -87,6 +87,9 @@ class cfg_evaluator {
     auto gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     // Evaluates every module-scope `@cfgValue` constant once, reporting their errors
     auto resolve_all_cfg_values() -> void;
+    // Guard arms are only chosen, so an arm needing analysis (`@sizeOf`, `cpu.has`) is left to
+    // whoever lowers the chosen expression
+    auto select_arms_only() noexcept -> void { select_only_ = true; }
 
     // The value of a `@cfgValue(...)` node, or none after reporting why it has none
     auto resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value>;
@@ -147,6 +150,7 @@ class cfg_evaluator {
             fmt::format(spec, std::forward<Args>(args)...), code, module_.ast.location_of(at));
     }
 
+    [[nodiscard]] auto chosen_term(ast::expr_handle value) -> stdx::option<cfg_value>;
     [[nodiscard]] auto is_cpu_has(const ast::call_expr& call) const -> bool;
     [[nodiscard]] auto cpu_has(ast::node_id at, const ast::call_expr& call)
         -> stdx::option<cfg_value>;
@@ -181,6 +185,7 @@ class cfg_evaluator {
     const cfg_context&   cx_;
     diagnostics&         diags_;
     bool                 ok_{true};
+    bool                 select_only_{false};
     // Resolved on the first `cpu.has(...)`
     stdx::option<codegen::target_cpu> target_cpu_;
     stdx::option<mod::module_t&>      recorded_on_;

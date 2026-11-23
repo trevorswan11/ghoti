@@ -255,6 +255,13 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
 
     auto& type{through_ref ? *gs::pointee_of(matched_type) : matched_type};
 
+    // A type or an untyped number is only matched at compile time, by each pattern's value
+    const bool by_value{type.get_kind() == gs::type_kind::TYPE ||
+                        gs::is_comptime_numeric(type.get_kind())};
+    if (by_value && (comptime_match || is_comptime())) {
+        return match_by_value(arms, catch_all, scrutinee, type, src);
+    }
+
     if (!gs::is_value_type(type.get_kind()) || type.get_kind() == gs::type_kind::TYPE ||
         gs::is_comptime_numeric(type.get_kind())) {
         return comp_.unsupported(u_, src, "a match on a type or untyped value");
@@ -340,6 +347,65 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
     }
 
     return stdx::option<operand>{*folded};
+}
+
+auto analyzer::match_by_value(const std::vector<match_arm>& arms,
+                              stdx::option<u32>             catch_all,
+                              const operand&                scrutinee,
+                              gs::type&                     type,
+                              const source&                 src) -> result<operand> {
+    const auto value{TRY(require_comptime(scrutinee, src))};
+    auto&      pool{comp_.constants()};
+    const auto same{[&](ip::index pattern) {
+        if (pattern == value) { return true; }
+        if (pool.is_type(pattern) && pool.is_type(value)) {
+            return &pool.type_at(pattern) == &pool.type_at(value);
+        }
+
+        const auto lhs{int_of(pool.value_at(pattern))};
+        const auto rhs{int_of(pool.value_at(value))};
+        return lhs && rhs && *lhs == *rhs;
+    }};
+
+    // The catch-all arm is tried last, whatever its place
+    std::vector<usize> order;
+    for (usize a{0}; a < arms.size(); ++a) {
+        if (catch_all != a) { order.emplace_back(a); }
+    }
+
+    if (catch_all) { order.emplace_back(*catch_all); }
+    for (const auto a : order) {
+        const auto& arm{arms[a]};
+        if (!arm.guard.empty()) { return comp_.unsupported(u_, src, "a match guard"); }
+        bool hit{false};
+        for (const auto p : arm.patterns) {
+            const auto pat{*as_inst(p)};
+            if (mod().tag_of(pat) == tag::pat_wildcard) {
+                hit = true;
+                break;
+            }
+
+            if (mod().tag_of(pat) != tag::pat_value) {
+                return comp_.unsupported(
+                    u_, src_of(pat), "this pattern of a type or untyped value");
+            }
+
+            auto rec{record(pat)};
+            if (same(TRY(pattern_value(rec.body_field(), type, src_of(pat))))) {
+                hit = true;
+                break;
+            }
+        }
+
+        if (!hit) { continue; }
+        if (arm.capture) { values_.insert_or_assign(*as_inst(*arm.capture), operand{value}); }
+        const auto out{TRY(analyze_body(arm.body))};
+        if (jump_ || (!is_comptime() && terminated())) { return void_value(); }
+        return out.yielded.value_or(void_value());
+    }
+
+    return comp_.report(
+        u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "No match arm matched the value");
 }
 
 auto analyzer::run_match(const std::vector<match_arm>&          arms,
@@ -428,6 +494,11 @@ auto analyzer::scrutinee_address(ref            operand_ref,
         if (names_storage) { return in_place(TRY(address_of(operand_ref, src))); }
         if (inst && mod().tag_of(*inst) == tag::load) {
             return in_place(TRY(address_of(mod().data_of(*inst).un.operand, src)));
+        }
+
+        // A field of named storage is matched where it lives
+        if (scrutinee.is<place>() || scrutinee.is<slot_value>()) {
+            return in_place(TRY(operand_address(scrutinee, src)));
         }
     }
 

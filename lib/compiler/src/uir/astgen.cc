@@ -96,6 +96,7 @@ auto astgen::run() -> lowered {
     PROFILE_FUNCTION();
     collect_mutation_sites();
     push_scope(scope_kind::MODULE);
+    cfg_.select_arms_only();
     cfg_.gather_cfg_values(ast_.get_roots());
     cfg_.resolve_all_cfg_values();
     lower_roots();

@@ -313,7 +313,12 @@ auto analyzer::analyze_mem_view(inst_id inst) -> result<operand> {
     const bool  is_dest{mod().data_of(inst).un.aux != 0};
     const auto  given{TRY(resolve_value(arg_ref, src))};
     if (is_comptime()) { return comp_.unsupported(u_, src, "a memory builtin at compile time"); }
+    mem_views_.insert_or_assign(inst, TRY(buffer_view(arg_ref, given, is_dest, src)));
+    return void_value();
+}
 
+auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, const source& src)
+    -> result<mem_view> {
     auto&      ctx{comp_.ctx()};
     auto&      usize_type{builtin(gs::type_kind::USIZE)};
     auto&      byte_ptr{ctx.get_pointer(gs::types::mut::MUTABLE, ctx.get_int(8, false))};
@@ -325,16 +330,13 @@ auto analyzer::analyze_mem_view(inst_id inst) -> result<operand> {
         const auto first{
             builder_.emit_get_element_ptr(base.address, {usize_constant(0)}, byte_ptr)};
         const auto count{usize_constant(arr->len)};
-        mem_views_.insert_or_assign(
-            inst,
-            mem_view{
-                .data  = gir::value{first, byte_ptr},
-                .count = count,
-                .bytes = is_dest ? stdx::option<gir::value>{byte_count(
-                                       count, gir::size_of(arr->underlying, layout))}
-                                 : stdx::none,
-            });
-        return void_value();
+        return mem_view{
+            .data  = gir::value{first, byte_ptr},
+            .count = count,
+            .bytes = is_dest ? stdx::option<gir::value>{byte_count(
+                                   count, gir::size_of(arr->underlying, layout))}
+                             : stdx::none,
+        };
     }
 
     const auto slice{type.get_data().as_opt<gs::types::slice>()};
@@ -348,14 +350,11 @@ auto analyzer::analyze_mem_view(inst_id inst) -> result<operand> {
     const gir::value data{builder_.emit_load(gir::value{ptr_at, byte_ptr}, byte_ptr), byte_ptr};
     const gir::value count{builder_.emit_load(gir::value{len_at, usize_type}, usize_type),
                            usize_type};
-    mem_views_.insert_or_assign(
-        inst,
-        mem_view{.data  = data,
-                 .count = count,
-                 .bytes = is_dest ? stdx::option<gir::value>{byte_count(
-                                        count, gir::size_of(slice->underlying, layout))}
-                                  : stdx::none});
-    return void_value();
+    return mem_view{.data  = data,
+                    .count = count,
+                    .bytes = is_dest ? stdx::option<gir::value>{byte_count(
+                                           count, gir::size_of(slice->underlying, layout))}
+                                     : stdx::none};
 }
 
 auto analyzer::builtin_mem(syntax::builtin_t which, gsl::span<const ref> args, const source& src)

@@ -63,8 +63,14 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::BIT_SIZE_OF:              return builtin_bit_size(args, src);
     case builtin_t::TYPE_NAME:                return builtin_type_name(args, src);
     case builtin_t::TAG_NAME:                 return builtin_tag_name(args, src);
+    case builtin_t::FIELD:                    return builtin_field(args, src);
     case builtin_t::TYPE_INFO:                return builtin_type_info(args, src);
     case builtin_t::ALIGN_OF:                 return builtin_layout(args, src, false);
+    case builtin_t::LLVM_INTRINSIC:           return builtin_llvm_intrinsic(args, src);
+    case builtin_t::RETURN_ADDRESS:           return builtin_return_address(src);
+    case builtin_t::ENTRY_MAIN:               return builtin_entry_main(src);
+    case builtin_t::EXPECT:                   return builtin_expect(args, src, false);
+    case builtin_t::REQUIRE:                  return builtin_expect(args, src, true);
     case builtin_t::ASSERT:                   return builtin_assert(args, src, false);
     case builtin_t::VERIFY:                   return builtin_assert(args, src, true);
     case builtin_t::TRAP:                     return builtin_trap(src);
@@ -123,7 +129,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::INT_FROM_PTR:
     case builtin_t::CONST_CAST:
     case builtin_t::VOLATILE_CAST:
-    case builtin_t::SLICE_FROM_PTR:           return builtin_cast(inst, which, args);
+    case builtin_t::SLICE_FROM_PTR:
+    case builtin_t::SPLAT:                    return builtin_cast(inst, which, args);
+    case builtin_t::REDUCE:                   return builtin_reduce(args, src);
+    case builtin_t::SELECT:                   return builtin_select(args, src);
     default:                                  break;
     }
 
@@ -141,10 +150,15 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
         const auto body{rec.body_field()};
         const auto value{TRY(unevaluated(body, src))};
 
-        // A type operand's type is the type itself
+        // A type operand's type is the type itself, and a generic named in its own body is the
+        // instance being analyzed
         const auto known{comptime_value(value)};
-        auto& type{known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
-                                                              : type_of(value)};
+        const auto generic{value.as_opt<generic_ref>()};
+        const bool own_instance{generic && fn_ && fn_->owner.get() == generic->fn->owner.get() &&
+                                fn_->func == generic->fn->func};
+        auto& type{own_instance                                 ? *fn_->type
+                   : known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
+                                                                : type_of(value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
 
         if (!fn_ && !declaring_ && gs::is_comptime_numeric(type.get_kind())) {
@@ -171,6 +185,8 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
 auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> result<operand> {
     // A runtime body's operand is analyzed into a function no one emits
     if (!gir_fn_) {
+        const auto outer{std::exchange(only_types_, true)};
+        const auto restore{gsl::finally([&] { only_types_ = outer; })};
         const auto out{TRY(analyze_body(body))};
         if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
         return *out.yielded;
@@ -291,7 +307,7 @@ auto analyzer::builtin_tag_name(gsl::span<const ref> args, const source& src) ->
     }
 
     const auto index{comptime_value(value)};
-    if (!index) { return comp_.unsupported(u_, src, "a runtime `@tagName`"); }
+    if (!index) { return runtime_tag_name(value, type, name_type, src); }
     const auto& data{comp_.constants().value_at(*index).data};
     if (const auto un{data.as_opt<ip::union_value>()}) {
         return comp_.constants().intern(std::string{un->active_field}, name_type);
@@ -300,6 +316,70 @@ auto analyzer::builtin_tag_name(gsl::span<const ref> args, const source& src) ->
     const auto variant{variant_name(*index)};
     if (!variant) { return comp_.unsupported(u_, src, "a `@tagName` of this value"); }
     return comp_.constants().intern(std::string{*variant}, name_type);
+}
+
+auto analyzer::runtime_tag_name(const operand& value,
+                                gs::type&      type,
+                                gs::type&      name_type,
+                                const source&  src) -> result<operand> {
+    TRY(require_runtime(src));
+    TRY(comp_.require_fields(u_, src, type));
+    auto&      bool_type{builtin(gs::type_kind::BOOL)};
+    const auto merge{new_segment()};
+    const auto slot{builder_.emit_alloca(name_type)};
+
+    // Each name is tested in turn, storing the one that matches
+    const auto name_case{[&](gir::value matches, std::string_view name) {
+        const auto body{new_segment()};
+        const auto next{new_segment()};
+        builder_.emit_cond_goto(matches, body, next);
+        switch_to(body);
+        builder_.emit_store(gir::value{slot, name_type}, string_slice(name, name_type));
+        emit_goto(merge);
+        switch_to(next);
+    }};
+    const auto equal{[&](const gir::value& lhs, ip::index rhs, gs::type& as) {
+        return gir::value{
+            builder_.emit_binary(gir::instruction_kind::EQ, lhs, constant(rhs, as), bool_type),
+            bool_type};
+    }};
+
+    auto& pool{comp_.constants()};
+    if (const auto en{type.get_data().as_opt<gs::types::enum_t>()}) {
+        auto&            underlying{en->underlying};
+        const gir::value runtime{TRY(as_runtime(value, src))};
+        const gir::value raw{
+            builder_.emit_cast(gir::instruction_kind::BIT_CAST, runtime, underlying), underlying};
+        const auto& values{comp_.nominal_of(type)->enum_values};
+        for (usize i{0}; i < en->variant_names.size(); ++i) {
+            name_case(equal(raw, pool.intern(values[i], underlying), underlying),
+                      en->variant_names[i]);
+        }
+
+        // A non-exhaustive enum may hold a value no variant names
+        if (en->non_exhaustive) {
+            builder_.emit_store(gir::value{slot, name_type}, string_slice("_", name_type));
+            emit_goto(merge);
+        } else {
+            builder_.emit_unreachable();
+        }
+    } else {
+        const auto& ut{type.get_data().as<gs::types::union_t>()};
+        const auto  base{TRY(operand_address(value, src)).address};
+        auto&       i32_type{comp_.ctx().get_int(32, true)};
+        const auto  tag_at{
+            builder_.emit_get_element_ptr(base, {usize_constant(UNION_TAG_FIELD)}, i32_type)};
+        const gir::value tag{builder_.emit_load(gir::value{tag_at, i32_type}, i32_type), i32_type};
+        for (usize i{0}; i < ut.field_names.size(); ++i) {
+            name_case(equal(tag, pool.intern(static_cast<i64>(i), i32_type), i32_type),
+                      ut.field_names[i]);
+        }
+
+        builder_.emit_unreachable();
+    }
+
+    switch_to(merge);
+    return gir::value{builder_.emit_load(gir::value{slot, name_type}, name_type), name_type};
 }
 
 auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
@@ -327,9 +407,20 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
 
 auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> result<operand> {
     if (args.size() != 2) { return comp_.unsupported(u_, src, "an `@as` of this arity"); }
-    auto&      target{*TRY(resolve_type(args[0], src))};
-    const auto value{TRY(resolve_value(args[1], src))};
-    auto&      from{type_of(value)};
+    auto& target{*TRY(resolve_type(args[0], src))};
+    auto  value{TRY(resolve_value(args[1], src))};
+
+    // A vector takes its lanes from a list, an array or another vector
+    if (gs::is_vector(target)) {
+        return coerce_to(value, target, src, {.what = use_site::kind::STORE});
+    }
+
+    // An inferred cast or literal takes `@as`'s type first, then is cast like a typed value
+    if (is_untyped_literal(value)) {
+        value = TRY(coerce_to(value, target, src, {.what = use_site::kind::STORE}));
+    }
+
+    auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
     if (!gs::is_numeric(from.get_kind()) || !gs::is_numeric(target.get_kind())) {
         return comp_.unsupported(u_, src, "an `@as` between non-numeric types");
@@ -438,6 +529,125 @@ auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool
         std::string{string_literal(mod(), args, 1).value_or(DEFAULT_ASSERT_FAILURE)});
 }
 
+auto analyzer::builtin_llvm_intrinsic(gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    if (args.size() < 2) { return comp_.unsupported(u_, src, "an `@llvmIntrinsic` of this arity"); }
+    TRY(require_runtime(src));
+    const auto name{string_literal(mod(), args, 0)};
+    if (!name) {
+        return comp_.unsupported(u_, src, "an `@llvmIntrinsic` name that isn't a literal");
+    }
+
+    // The call carries the intrinsic's name, with the result type written second
+    auto&                   result_type{*TRY(resolve_type(args[1], src))};
+    std::vector<gir::value> values;
+    for (const auto arg : args.subspan(2)) {
+        const auto given{TRY(resolve_value(arg, src))};
+        values.emplace_back(TRY(as_runtime(given, src)));
+    }
+
+    const auto result{
+        builder_.emit_builtin_call(std::string{*name}, std::move(values), result_type)};
+    if (!result) { return void_value(); }
+    return gir::value{*result, result_type};
+}
+
+auto analyzer::builtin_field(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 2) { return comp_.unsupported(u_, src, "a `@field` of this arity"); }
+
+    // The name is a compile-time string, read like `object.name`
+    auto name_value{TRY(resolve_value(args[1], src))};
+    if (!comptime_value(name_value) && !is_comptime()) {
+        // A runtime name, such as a call's result, may still fold
+        auto folded{[&] {
+            const auto scope{comptime_scope()};
+            return reevaluate(args[1], src);
+        }()};
+        if (folded) { name_value = std::move(*folded); }
+    }
+
+    const auto known{comptime_value(name_value)};
+    const auto name{known ? comp_.constants().value_at(*known).data.as_opt<std::string>()
+                          : stdx::none};
+    if (!name) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "'@field' needs a field name known at compile time");
+    }
+
+    // `@field` reads a field through a pointer without checking it for null
+    const auto field_name{comp_.lasting_name(*name)};
+    return field_value(args[0], field_name, src, false);
+}
+
+auto analyzer::builtin_entry_main(const source& src) -> result<operand> {
+    if (!u_.source->is_start) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            "'@entryMain()' is only valid in the program's entry code (`std/start.gh`)");
+    }
+
+    // A program analyzed without its entry code has no `main` to call, so its value is unknown
+    auto& ctx{comp_.ctx()};
+    auto& fn_type{ctx.get_function(
+        {}, builtin(gs::type_kind::VOID_), false, ast::calling_convention::C, false)};
+    return comp_.constants().intern(ip::undefined_value{}, fn_type);
+}
+
+auto analyzer::builtin_return_address(const source& src) -> result<operand> {
+    TRY(require_runtime(src));
+    auto&      usize_type{builtin(gs::type_kind::USIZE)};
+    const auto result{builder_.emit_builtin_call("@returnAddress", {}, usize_type)};
+    return gir::value{*result, usize_type};
+}
+
+auto analyzer::builtin_name_location(const source& src) -> source_location {
+    // A check is located at the builtin's name, not its call
+    const auto callee{src.as_opt<ast::node_id>().and_then([&](ast::node_id id) {
+        return u_.source->ast.get_as_opt<ast::call_expr>(id).transform(
+            [](const ast::call_expr& call) { return source{ast::node_id{call.function}}; });
+    })};
+    return comp_.location_of(u_, callee.value_or(src)).one_based();
+}
+
+auto analyzer::builtin_expect(gsl::span<const ref> args, const source& src, bool require)
+    -> result<operand> {
+    if (args.empty() || args.size() > 2) {
+        return comp_.unsupported(u_, src, "an `@expect` of this arity");
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto cond{TRY(resolve_value(args.front(), src))};
+    const auto checked{TRY(condition(cond, src))};
+    auto&      pool{comp_.constants()};
+    auto&      u32_type{ctx.get_int(32, false)};
+    auto&      text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
+    gir::value message{constant(pool.intern(std::string{}, text_type), text_type)};
+    if (args.size() > 1) {
+        const auto given{TRY(resolve_value(args[1], src))};
+        message = TRY(as_runtime(given, src));
+    }
+
+    // The failure branch calls a weak handler a test runner may replace
+    DISCARD(TRY(comp_.prelude_function(require ? "require_handler" : "expect_handler", u_, src)));
+    const auto              at{builtin_name_location(src)};
+    std::vector<gir::value> call_args;
+    call_args.emplace_back(checked);
+    call_args.emplace_back(constant(pool.intern(u_.source->path.string(), text_type), text_type));
+    call_args.emplace_back(constant(pool.intern(u64{at.line}, u32_type), u32_type));
+    call_args.emplace_back(constant(pool.intern(u64{at.column}, u32_type), u32_type));
+    call_args.emplace_back(message);
+
+    auto&      result_type{builtin(require ? gs::type_kind::VOID_ : gs::type_kind::BOOL)};
+    const auto result{builder_.emit_builtin_call(
+        require ? "@require" : "@expect", std::move(call_args), result_type)};
+    if (require || !result) { return void_value(); }
+    return gir::value{*result, result_type};
+}
+
 auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
     -> result<operand> {
     auto&      ctx{comp_.ctx()};
@@ -459,15 +669,10 @@ auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool
     DISCARD(TRY(comp_.prelude_function(verify ? "panic_handler" : "assert_handler", u_, src)));
     const auto checked{TRY(condition(cond, src))};
 
-    auto& pool{comp_.constants()};
-    auto& u32_type{ctx.get_int(32, false)};
-    auto& text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
-    // The old emitter locates the check at the builtin's name
-    const auto callee{src.as_opt<ast::node_id>().and_then([&](ast::node_id id) {
-        return u_.source->ast.get_as_opt<ast::call_expr>(id).transform(
-            [](const ast::call_expr& call) { return source{ast::node_id{call.function}}; });
-    })};
-    const auto at{comp_.location_of(u_, callee.value_or(src)).one_based()};
+    auto&      pool{comp_.constants()};
+    auto&      u32_type{ctx.get_int(32, false)};
+    auto&      text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
+    const auto at{builtin_name_location(src)};
     const auto message{
         text.value_or(verify ? std::string_view{"verification failed"} : "assertion failed")};
     std::vector<gir::value> call_args;
@@ -488,8 +693,14 @@ auto analyzer::descriptor(gsl::span<const ref> args,
     if (args.size() != 1) { return comp_.unsupported(u_, src, "a type builtin's arity"); }
     auto&      info{*TRY(comp_.prelude_type(info_name, u_, src))};
     const auto arg{TRY(resolve_value(args.front(), src))};
-    const auto typed{TRY(coerce_to(arg, info, src, {.what = use_site::kind::STORE}))};
-    const auto known{comptime_value(typed)};
+
+    // An untyped `.{ ... }` descriptor is built at compile time, even in a runtime body
+    const auto typed{[&] {
+        const auto scope{comptime_scope()};
+        return coerce_to(arg, info, src, {.what = use_site::kind::STORE});
+    }()};
+    if (!typed && typed.error() != stop::RUNTIME) { return stdx::err{typed.error()}; }
+    const auto known{typed ? comptime_value(*typed) : stdx::option<ip::index>{}};
     if (!known) {
         return comp_.report(
             u_,

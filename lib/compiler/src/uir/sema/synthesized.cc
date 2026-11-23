@@ -80,6 +80,7 @@ auto compilation::synthesize_struct(nominal&                         n,
         alignments[i]  = fields[i].alignment;
         names[i]       = lasting_name(fields[i].name);
         publics[i]     = fields[i].is_public;
+        n.synthetic_defaults.emplace_back(fields[i].default_value);
     }
 
     n.type->resolve<gs::types::struct_t>(field_types,
@@ -404,10 +405,16 @@ auto analyzer::descriptor_fields(ip::index        desc,
             continue;
         }
 
-        // A default is a pointer to the value, which a compile-time address can't hold yet
+        // A default is a pointer to the value, known at compile time
         const auto default_index{TRY(known_field(*element, "default_value", src))};
-        if (!default_index || !pool.value_at(*default_index).data.is<ip::nullptr_value>()) {
-            return comp_.unsupported(u_, src, "a field default in a `@Struct` descriptor");
+        if (default_index) {
+            const auto& default_data{pool.value_at(*default_index).data};
+            if (const auto pointed{default_data.as_opt<ip::address_value>()};
+                pointed && pointed->pointee.size() == 1) {
+                field.default_value = pointed->pointee.front();
+            } else if (!default_data.is<ip::nullptr_value>()) {
+                return comp_.unsupported(u_, src, "a field default that isn't a known value");
+            }
         }
 
         const auto align_index{TRY(known_field(*element, "alignment", src))};

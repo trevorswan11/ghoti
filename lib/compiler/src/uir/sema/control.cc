@@ -108,10 +108,6 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     }
 
     if (all_void) { return void_value(); }
-    if (!all_untyped_literals &&
-        std::ranges::any_of(values, [&](const operand& v) { return is_untyped_literal(v); })) {
-        return comp_.unsupported(u_, src, "a merge of untyped literals and typed values");
-    }
 
     // Every path carrying the same constant makes the merge that constant
     if (const auto first{comptime_value(arrivals.front().value)};
@@ -128,7 +124,18 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
         return merge_ref{static_cast<u32>(merges_.size() - 1)};
     }
 
+    // Untyped literals take the type the typed arms agree on
+    std::erase_if(values, [&](const operand& v) { return is_untyped_literal(v); });
     auto& peer{*TRY(peer_type(values, src))};
+
+    // An array arm meets a slice where it is stored, which its value no longer names
+    if (peer.get_kind() == gs::type_kind::SLICE &&
+        std::ranges::any_of(values, [&](const operand& v) {
+            return type_of(v).get_kind() == gs::type_kind::ARRAY;
+        })) {
+        return comp_.unsupported(u_, src, "arrays meeting as a slice");
+    }
+
     auto& slot_type{gs::is_comptime_numeric(peer.get_kind()) ? comp_.ctx().default_concrete(peer)
                                                              : peer};
     const auto slot{builder_.emit_alloca_in_entry(slot_type)};
@@ -376,15 +383,22 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
 
     // An inferred return type is the first returned value's
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
-        if (is_untyped_literal(value)) {
-            return comp_.unsupported(u_, src, "an untyped literal as an inferred return");
+        // An untyped number only takes its type from the returns after it
+        if (is_untyped_literal(value) ||
+            (!is_comptime() && gs::is_comptime_numeric(type_of(value).get_kind()))) {
+            return comp_.unsupported(u_, src, "an untyped value as an inferred return");
         }
 
         fn_->return_type = &inferred_type(value);
     }
 
     auto&      ret{*fn_->return_type};
-    const auto returned{TRY(coerce_to(value, ret, src, {.what = use_site::kind::RETURN}))};
+    const auto returned{TRY(coerce_to(value,
+                                      ret,
+                                      src,
+                                      {.what               = use_site::kind::RETURN,
+                                       .from               = mod().data_of(inst).un.operand,
+                                       .computes_in_target = true}))};
     if (is_comptime()) {
         DISCARD(TRY(require_comptime(returned, src)));
         jump_.emplace(jump::kind::RETURN, stdx::none, returned);
@@ -418,6 +432,8 @@ auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {
 }
 
 auto analyzer::folded_condition(ref cond, const source& src) -> result<stdx::option<bool>> {
+    // Only immutable bindings fold, never a call
+    if (reaches_call(cond)) { return stdx::option<bool>{}; }
     const auto index{TRY(speculated_value(cond, src))};
     if (!index) { return stdx::option<bool>{}; }
     return comp_.constants().value_at(*index).data.as_opt<bool>().transform(
@@ -579,11 +595,13 @@ auto analyzer::analyze_unreachable(inst_id inst) -> result<operand> {
             u_, src, gs::error::UNREACHABLE_CODE_REACHED, "reached unreachable code");
     }
 
+    // With safety checks, reaching it panics
     if (comp_.ctx().runtime_safety) {
-        return comp_.unsupported(u_, src, "a runtime `unreachable` with safety checks");
+        TRY(emit_panic("reached unreachable code", src));
+    } else {
+        builder_.emit_unreachable();
     }
 
-    builder_.emit_unreachable();
     return comp_.constants().intern(ip::undefined_value{}, builtin(gs::type_kind::NORETURN));
 }
 

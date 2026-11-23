@@ -47,6 +47,8 @@ enum class uir_diff_status : u8 {
     ASTGEN_FAILED,
     // The old pipeline rejected the program, so there is nothing to compare against
     LEGACY_REJECTED,
+    // The same effects in the same order, with loads and pure values computed elsewhere
+    EVAL_ORDER,
 };
 
 [[nodiscard]] auto uir_diff_status_name(uir_diff_status status) noexcept -> std::string_view;

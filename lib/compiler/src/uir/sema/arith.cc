@@ -58,6 +58,27 @@ constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
     }
 }
 
+// An operator that computes in its operands' type, which an expected type can widen
+[[nodiscard]] constexpr auto is_widenable_operator(tag t) noexcept -> bool {
+    switch (t) {
+    case tag::add:
+    case tag::sub:
+    case tag::mul:
+    case tag::div:
+    case tag::mod:
+    case tag::add_wrap:
+    case tag::sub_wrap:
+    case tag::mul_wrap:
+    case tag::add_sat:
+    case tag::sub_sat:
+    case tag::mul_sat:
+    case tag::bit_and:
+    case tag::bit_or:
+    case tag::bit_xor:  return true;
+    default:            return false;
+    }
+}
+
 [[nodiscard]] auto compare_op_of(instruction_kind kind) noexcept -> semantics::int_compare_op {
     switch (kind) {
     case instruction_kind::EQ: return semantics::int_compare_op::EQ;
@@ -167,6 +188,16 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
 
     const auto info{binary_info_of(t)};
     if (info.cls == op_class::EQUALITY) {
+        // Types are interned, so two are equal when they are the same type
+        const auto lhs_known{comptime_value(lhs)};
+        const auto rhs_known{comptime_value(rhs)};
+        auto&      pool{comp_.constants()};
+        if (lhs_known && rhs_known && pool.is_type(*lhs_known) && pool.is_type(*rhs_known)) {
+            const bool same{&pool.type_at(*lhs_known) == &pool.type_at(*rhs_known)};
+            return operand{
+                pool.intern(t == tag::cmp_eq ? same : !same, builtin(gs::type_kind::BOOL))};
+        }
+
         if (const auto compared{TRY(compare_tag(info, lhs, rhs, src))}) { return *compared; }
         if (const auto compared{TRY(compare_pointers(info, lhs, rhs, src))}) { return *compared; }
     }
@@ -203,6 +234,11 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     auto& rhs_type{type_of(rhs)};
     if (lhs_type.is_poison() || rhs_type.is_poison()) { return stdx::err{stop::POISON}; }
 
+    // A vector side applies the operator lane by lane
+    if (vector_read(lhs_type) || vector_read(rhs_type)) {
+        return vector_binary(info, lhs, rhs, src);
+    }
+
     // Operators on strings, arrays and other aggregates arrive with their own phases
     const auto plain{[](const gs::type& type) {
         return gs::is_numeric(type.get_kind()) || type.get_kind() == gs::type_kind::BOOL ||
@@ -221,6 +257,8 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }
 
     if (info.cls == op_class::SHIFT) { return analyze_shift(inst, info, lhs, rhs); }
+
+    if (const auto merged{TRY(fold_into_merge(info, lhs, rhs, src))}) { return *merged; }
 
     const std::array operands{lhs, rhs};
     auto&            peer{*TRY(peer_type(operands, src))};
@@ -254,6 +292,81 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         result_type};
 }
 
+auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
+    -> result<stdx::option<gir::value>> {
+    // An operator with an untyped side, used where a wider integer is wanted, computes in that
+    // type with its typed side widened first, though that side's own operators keep their type
+    const auto inst{as_inst(r)};
+    if (!inst || !is_widenable_operator(mod().tag_of(*inst)) || is_comptime()) {
+        return stdx::option<gir::value>{};
+    }
+
+    const auto& d{mod().data_of(*inst)};
+    const auto  lhs{TRY(resolve(d.bin.lhs, src))};
+    const auto  rhs{TRY(resolve(d.bin.rhs, src))};
+    const auto  untyped{[&](const operand& op) {
+        return comptime_value(op) && gs::is_comptime_numeric(type_of(op).get_kind());
+    }};
+    if (untyped(lhs) == untyped(rhs)) { return stdx::option<gir::value>{}; }
+
+    const auto widened{[&](const operand& op) -> result<gir::value> {
+        if (untyped(op)) {
+            return as_runtime(TRY(coerce_to(op, target, src, {.what = use_site::kind::STORE})),
+                              src);
+        }
+
+        const auto value{TRY(as_runtime(op, src))};
+        if (!value.type || !gs::is_integer(value.type->get_kind()) ||
+            !gs::is_implicit_widenable(*value.type, target)) {
+            return comp_.unsupported(u_, src, "widening this operand");
+        }
+
+        return gir::value{builder_.emit_cast(gir::instruction_kind::WIDEN_CAST, value, target),
+                          target};
+    }};
+    auto&      typed_type{untyped(lhs) ? type_of(rhs) : type_of(lhs)};
+    if (!gs::is_integer(typed_type.get_kind()) || gs::is_same_unqualified(typed_type, target) ||
+        !gs::is_implicit_widenable(typed_type, target)) {
+        return stdx::option<gir::value>{};
+    }
+
+    const auto lv{TRY(widened(lhs))};
+    const auto rv{TRY(widened(rhs))};
+    const auto info{binary_info_of(mod().tag_of(*inst))};
+    const auto op{semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
+    const bool checked{op && checks_overflow(*op, target)};
+    return stdx::option<gir::value>{gir::value{
+        builder_.emit_binary(info.kind, lv, rv, target, checked, info.saturating), target}};
+}
+
+auto analyzer::fold_into_merge(const binary_info& info,
+                               const operand&     lhs,
+                               const operand&     rhs,
+                               const source&      src) -> result<stdx::option<operand>> {
+    // An untyped merge meeting a known untyped value stays untyped, the operator running once
+    // the merge takes its type
+    if (info.cls == op_class::EQUALITY || info.cls == op_class::ORDERING ||
+        info.cls == op_class::SHIFT) {
+        return stdx::none;
+    }
+
+    const bool  merge_left{lhs.is<merge_ref>()};
+    const auto  m{merge_left ? lhs.as_opt<merge_ref>() : rhs.as_opt<merge_ref>()};
+    const auto& other{merge_left ? rhs : lhs};
+    if (!m || other.is<merge_ref>() || !comptime_value(other) ||
+        !gs::is_comptime_numeric(type_of(other).get_kind())) {
+        return stdx::none;
+    }
+
+    auto pending{merges_[m->index]};
+    if (is_untyped_literal(pending.arrivals.front().value)) { return stdx::none; }
+    TRY(require_runtime(src));
+    pending.materialized.reset();
+    pending.ops.emplace_back<merge_op>({.info = info, .other = other, .merge_left = merge_left});
+    merges_.emplace_back(std::move(pending));
+    return stdx::option<operand>{merge_ref{static_cast<u32>(merges_.size() - 1)}};
+}
+
 auto analyzer::compare_tag(const binary_info& info,
                            const operand&     lhs,
                            const operand&     rhs,
@@ -267,6 +380,8 @@ auto analyzer::compare_tag(const binary_info& info,
     const auto  referent{gs::pointee_of(tagged_type)};
     auto& union_type{referent && tagged_type.get_kind() == gs::type_kind::REFERENCE ? *referent
                                                                                     : tagged_type};
+    if (union_type.get_kind() != gs::type_kind::UNION) { return stdx::none; }
+    TRY(comp_.require_fields(u_, src, union_type));
     const auto ut{union_type.get_data().as_opt<gs::types::union_t>()};
     if (!ut || ut->is_untagged) { return stdx::none; }
     const auto name{mod().string(mod().data_of(literal.inst).str)};
@@ -490,8 +605,8 @@ auto analyzer::analyze_shift(inst_id            inst,
         return fold_shift(info, lhs, rhs, src);
     }
 
-    if (!gs::is_integer(shifted.get_kind()) || comptime_value(lhs)) {
-        return comp_.unsupported(u_, src, "a shift of a constant or untyped value");
+    if (!gs::is_integer(shifted.get_kind())) {
+        return comp_.unsupported(u_, src, "a shift of an untyped value");
     }
 
     TRY(require_runtime(src));
@@ -522,6 +637,9 @@ auto analyzer::analyze_shift(inst_id            inst,
                             (value_bits >= 127 || *small <= (i128{1} << value_bits) - 1)};
         const big_int clamped{in_range ? *small : i128{domain.bits}};
         amount = constant(intern_int(comp_.constants(), clamped, shifted), shifted);
+    } else if (const auto widened{
+                   TRY(widened_arithmetic(mod().data_of(inst).bin.rhs, shifted, src))}) {
+        amount = *widened;
     } else {
         amount = TRY(as_runtime(rhs, src));
     }
