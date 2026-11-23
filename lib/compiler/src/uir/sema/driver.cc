@@ -276,6 +276,7 @@ auto compilation::analyze_body(instance& fn) -> result<void> {
         for (usize i{0}; i < fn.params.size(); ++i) { span[i] = fn.params[i]; }
         fn.type =
             &ctx_.get_function(span, *fn.return_type, false, ast::calling_convention::C, false);
+        if (fn.env) { fn.type = &with_environment(*fn.type, *fn.env->type); }
         gir_fn.set_type(*fn.type);
     }
 

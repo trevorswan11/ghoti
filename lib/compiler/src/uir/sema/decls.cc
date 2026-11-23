@@ -382,12 +382,18 @@ auto compilation::declare_function(const unit&           u,
     const auto attrs{rec.body_field()};
     const auto bound_count{rec.count()};
 
+    // A bodyless literal written as a value is the function type it spells
+    const bool type_expr{(fn_flags & flags::BODYLESS) != 0 && (fn_flags & flags::TYPE_EXPR) != 0};
+    if (type_expr && bound_count == 0 && !is_generic(u, func)) {
+        return function_type_of(u, func, member);
+    }
+
     if ((fn_flags & flags::BODYLESS) != 0) {
         return unsupported(u, src, "a function without a body");
     }
 
     // `@[testing]` only lets the body use the test builtins
-    if ((fn_flags & ~(flags::EXPLICIT_CONV | flags::TESTING)) != 0) {
+    if ((fn_flags & ~(flags::EXPLICIT_CONV | flags::TESTING | flags::MOVE)) != 0) {
         return unsupported(u, src, "a variadic, extern, erased or `impl` function");
     }
 
@@ -479,6 +485,36 @@ auto compilation::declare_function(const unit&           u,
     }))};
     request_body(fn);
     return function_ref{&fn};
+}
+
+auto compilation::function_type_of(const unit& u, inst_id func, const member_context& member)
+    -> result<operand> {
+    const auto&   m{*u.uir};
+    const auto&   src{m.src_of(func)};
+    record_reader rec{m, m.data_of(func).pl.extra};
+    const auto    params{rec.body_field()};
+    const auto    ret{rec.body_field()};
+    rec.skip_body();
+    const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
+    const auto fn_flags{rec.u32_field()};
+    analyzer   sig{*this, u};
+    sig.enter(member);
+
+    std::vector<gsl::not_null<gs::type*>> param_types;
+    for (const auto param : params) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str();
+        const auto type_body{p.body_field()};
+        param_types.emplace_back(TRY(sig.eval_type(type_body, m.src_of(param))));
+    }
+
+    auto& return_type{*TRY(sig.eval_type(ret, src))};
+    auto  span{ctx_.pool.get_many_unsafe(param_types.size())};
+    for (usize i{0}; i < param_types.size(); ++i) { span[i] = param_types[i]; }
+    const bool thin{(fn_flags & flags::EXTERN_FN) != 0};
+    return operand{
+        ctx_.get_function(span, return_type, (fn_flags & flags::VARIADIC) != 0, conv, !thin)
+            .get_ip_index()};
 }
 
 auto compilation::declare_extern(const unit& u, decl_id decl, gs::type& type) -> result<operand> {

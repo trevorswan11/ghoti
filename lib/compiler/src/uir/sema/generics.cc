@@ -82,6 +82,19 @@ namespace {
     return as_well_known(at) == well_known::auto_type;
 }
 
+// Whether a parameter's type is an `impl Fn(...)` bound, which binds the callable passed
+[[nodiscard]] auto is_impl_fn(const module_t& m, gsl::span<const inst_id> body) -> bool {
+    if (body.empty() || m.tag_of(body.back()) != tag::yield) { return false; }
+    const auto inst{as_inst(m.data_of(body.back()).un.operand)};
+    if (!inst || m.tag_of(*inst) != tag::fn_type) { return false; }
+    record_reader rec{m, m.data_of(*inst).pl.extra};
+    rec.skip_refs();
+    const auto names{rec.count()};
+    for (u32 i{0}; i < names; ++i) { rec.skip_str(); }
+    rec.skip_ref().skip_u32();
+    return (rec.u32_field() & flags::IMPL_FN) != 0;
+}
+
 [[nodiscard]] auto mut_prefix(const gs::type& underlying) -> std::string_view {
     return underlying.is_constant() ? "" : "mut_";
 }
@@ -122,7 +135,8 @@ auto compilation::is_generic(const unit& u, inst_id func) const -> bool {
         p.skip_body();
         const auto param_flags{p.u32_field()};
         return (param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK)) != 0 ||
-               is_generic_type(written_type(m, type_body)) || is_auto_pattern(m, type_body);
+               is_generic_type(written_type(m, type_body)) || is_auto_pattern(m, type_body) ||
+               is_impl_fn(m, type_body);
     });
 }
 
@@ -178,6 +192,11 @@ auto compilation::mangle_type(const gs::type& t) -> std::string {
         return fmt::format("{}{}", kind_name, nominal_number(t));
     }
     case gs::type_kind::FUNCTION: {
+        // A capturing generic's value is spelled by which generic it is
+        if (const auto g{closure_generic(t)}; g && t.is_generic_value()) {
+            return fmt::format("gfn{}", g->value_id);
+        }
+
         const auto& fn{data.as<gs::types::function>()};
         return fmt::format(
             "{}_{}__{}",
@@ -243,6 +262,7 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
                             fmt::join(binding.mangled_params, "_"),
                             fmt::join(binding.comptime_suffixes, ""))};
     if (g.enclosing) { symbol += fmt::format("_in_{}", mangle_type(*g.enclosing)); }
+    symbol += g.suffix;
 
     // Bindings that mangle alike share one instance, such as `&T` and `&mut T` for a `&mut? auto`
     if (const auto same{instances_by_symbol_.find(symbol)}; same != instances_by_symbol_.end()) {
@@ -270,6 +290,16 @@ auto compilation::instance_for(generic_fn& g, generic_binding binding)
         .self_type     = g.self_type,
         .self_modifier = binding.self_modifier,
     }))};
+
+    fn.comptime_env = g.comptime_env;
+    fn.env_frame    = g.env_frame;
+
+    // A local generic's instances take the environment its binding holds first
+    if (g.env) {
+        fn.env.emplace(*g.env);
+        fn.type = &with_environment(fn_type, *g.env->type);
+    }
+
     instances_by_key_.emplace(std::move(binding.key), &fn);
     instances_by_symbol_.emplace(fn.symbol, &fn);
 
@@ -292,6 +322,11 @@ auto analyzer::fitted_int_type(ip::index value) -> gs::type& {
 }
 
 auto analyzer::inferred_type(const operand& arg) -> gs::type& {
+    // A generic function is a value of its own type
+    if (const auto g{arg.as_opt<generic_ref>()}) {
+        if (const auto value_type{comp_.generic_value_type(*g->fn)}) { return **value_type; }
+    }
+
     auto& type{type_of(arg)};
     if (type.get_kind() == gs::type_kind::COMPTIME_INT) {
         if (const auto value{comptime_value(arg)}) { return fitted_int_type(*value); }
@@ -378,7 +413,8 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         }
 
         const auto&             arg{args[i].value};
-        const bool              is_auto{written_type(m, type_body) == well_known::auto_type};
+        const bool              is_auto{written_type(m, type_body) == well_known::auto_type ||
+                                        is_impl_fn(m, type_body)};
         stdx::option<gs::type&> declared;
         if (!is_auto) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
 
@@ -407,9 +443,11 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             // An array argument keeps its array type in the symbol
             const bool array_arg{!comp_.constants().is_type(index) &&
                                  type_of(arg).get_kind() == gs::type_kind::ARRAY};
-            binding.mangled_params.emplace_back(comp_.mangle_type(array_arg ? type_of(arg) : type));
-            binding.comptime_suffixes.emplace_back(fmt::format(
-                "_cx{}", gir::const_value::from_interned(comp_.constants(), index).mangle()));
+            // A compile-time function keeps its own thin type, and is spelled by what it is
+            const auto function{comp_.const_function(index)};
+            auto& spelled{array_arg ? type_of(arg) : function ? type_of(operand{index}) : type};
+            binding.mangled_params.emplace_back(comp_.mangle_type(spelled));
+            binding.comptime_suffixes.emplace_back(fmt::format("_cx{}", comp_.mangle_value(index)));
             continue;
         }
 
@@ -427,9 +465,27 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         binding.key.args.emplace_back(interned_type(type));
         binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
         binding.slots.emplace_back(&type);
+        // A function item or closure passed as an erased `fn` keeps its own type in the symbol
         const bool spelled_as_type{is_untyped_literal(arg) && sized_by_param(m, type_body, params)};
+        const auto item{arg.as_opt<function_ref>()};
+        const bool erased_param{type.get_kind() == gs::type_kind::FUNCTION};
+        const auto closure{erased_param ? comp_.closure_body(type_of(arg)) : stdx::none};
+        const auto arg_kind{type_of(arg).get_kind()};
+        const bool array_for_slice{type.get_kind() == gs::type_kind::SLICE &&
+                                   arg_kind == gs::type_kind::ARRAY};
+        const auto pointee{gs::pointee_of(type_of(arg))};
+        const bool function_ref_arg{erased_param && arg_kind == gs::type_kind::REFERENCE &&
+                                    pointee && pointee->get_kind() == gs::type_kind::FUNCTION};
+        std::string spelled{comp_.mangle_type(item && erased_param ? *item->fn->type
+                                              : array_for_slice || function_ref_arg ? type_of(arg)
+                                                                                    : type)};
+        if (closure) {
+            const auto& env{type_of(arg).get_data().as<gs::types::closure_t>()};
+            spelled = fmt::format("{}_{}", closure->symbol, comp_.mangle_type(env.signature));
+        }
+
         binding.mangled_params.emplace_back(spelled_as_type ? std::string{"type"}
-                                                            : comp_.mangle_type(type));
+                                                            : std::move(spelled));
     }
 
     if (written_type(m, ret) == well_known::auto_type) {
@@ -460,7 +516,14 @@ auto analyzer::comptime_argument(const call_arg&         arg,
         }
 
         if (declared) { value = TRY(coerce_to(value, *declared, src, use)); }
-        return operand{TRY(require_comptime(value, src))};
+        const auto known{TRY(require_comptime(value, src))};
+
+        // A `comptime` parameter takes a function as a copy of it, like the old emitter
+        if (const auto fn{comp_.plain_function(known)}) {
+            return operand{TRY(comp_.comptime_function(*fn, {}))};
+        }
+
+        return operand{known};
     }()};
     if (is_comptime()) {
         if (!known) { return stdx::err{known.error()}; }
@@ -471,10 +534,11 @@ auto analyzer::comptime_argument(const call_arg&         arg,
     return *comptime_value(checked);
 }
 
-auto analyzer::call_generic(generic_fn&           g,
-                            std::vector<call_arg> args,
-                            const source&         src,
-                            const source&         callee_src) -> result<operand> {
+auto analyzer::call_generic(generic_fn&              g,
+                            std::vector<call_arg>    args,
+                            const source&            src,
+                            const source&            callee_src,
+                            stdx::option<gir::value> env) -> result<operand> {
     PROFILE_FUNCTION();
     const auto&   m{*g.owner->uir};
     record_reader rec{m, m.data_of(g.func).pl.extra};
@@ -519,6 +583,8 @@ auto analyzer::call_generic(generic_fn&           g,
         values.emplace_back(std::move(args[i].value));
     }
 
+    if (target.env && !env) { return comp_.unsupported(u_, src, "a local generic called by name"); }
+    call_env_ = env;
     return call_following_poly(target, std::move(values), src, false);
 }
 

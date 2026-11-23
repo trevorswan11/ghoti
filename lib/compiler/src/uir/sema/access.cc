@@ -311,6 +311,11 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
         return declaration_use(TRY(module_member(*m, name, src)), false, src);
     }
 
+    // A closure's `.thunk` is its body, which takes the environment as its first argument
+    if (const auto body{comp_.closure_body(type_of(object))}; body && name == "thunk") {
+        return function_ref{&*body};
+    }
+
     if (const auto pack{object.as_opt<pack_ref>()}) {
         if (name != "len") { return comp_.unsupported(u_, src, "a field of a pack"); }
         return operand{comp_.constants().intern(u64{packs_[pack->index].size()},
@@ -637,6 +642,20 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
                    : is_mut                  ? gs::types::mut::MUTABLE
                                              : gs::types::mut::CONSTANT};
 
+    // An errdefer's `|&e|` or `|^e|` is the residual's own slot, kept in a slot of its own
+    if (const auto residual{as_inst(operand_ref)};
+        residual && !is_comptime() &&
+        (mod().tag_of(*residual) == tag::failure_residual ||
+         mod().tag_of(*residual) == tag::residual)) {
+        if (const auto slot{target.as_opt<slot_value>()}) {
+            auto&            alias_type{is_pointer ? ctx.get_pointer(mut, *slot->type)
+                                                   : ctx.get_reference(mut, *slot->type)};
+            const gir::value alias{slot->address.data, alias_type};
+            const auto       kept{spill(alias, alias_type, false)};
+            return slot_value{.address = kept.address, .type = &alias_type};
+        }
+    }
+
     // `^T` of a type is the pointer type
     if (const auto index{comptime_value(target)}; index && comp_.constants().is_type(*index)) {
         auto& pointee{comp_.constants().type_at(*index)};
@@ -656,6 +675,16 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     // `^.{ ... }` is an array backing the slice it is used as
     if (const auto init{target.as_opt<anon_init>()}; init && is_pointer) {
         return slice_literal{init->inst};
+    }
+
+    // `&f` of a function item borrows a copy of its code address
+    if (const auto fn{target.as_opt<function_ref>()}; fn && !is_mut && !is_comptime()) {
+        auto&      thin{*fn->fn->type};
+        const auto code{TRY(as_runtime(target, src))};
+        const auto slot{spill(code, thin, false)};
+        auto&      ref_type{is_pointer ? ctx.get_pointer(mut, thin) : ctx.get_reference(mut, thin)};
+        const gir::value address{builder_.emit_address_of(slot.address, ref_type), ref_type};
+        return operand{address};
     }
 
     // A known value's address at compile time holds the value, which nothing may write through

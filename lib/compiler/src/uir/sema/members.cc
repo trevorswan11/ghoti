@@ -90,6 +90,8 @@ auto analyzer::member_context_here() -> member_context {
 
 auto analyzer::analyze_capture(inst_id inst) -> result<operand> {
     const auto index{mod().data_of(inst).un.aux};
+    if (index < env_values_.size() && env_values_[index]) { return *env_values_[index]; }
+    if (fn_ && fn_->self_capture == index) { return function_ref{&*fn_}; }
     if (index >= captures_.size()) {
         return comp_.unsupported(u_, src_of(inst), "a capture of a runtime value");
     }
@@ -100,6 +102,7 @@ auto analyzer::analyze_capture(inst_id inst) -> result<operand> {
 auto analyzer::analyze_closure(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     if (!declaring_ || !is_comptime()) {
+        if (fn_ && !declaring_) { return local_closure(inst); }
         return comp_.unsupported(u_, src, "a closure used as a value");
     }
 

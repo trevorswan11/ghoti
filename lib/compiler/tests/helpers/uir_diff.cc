@@ -354,9 +354,19 @@ struct split_dump {
         return (symbol == "panic_handler" || member) &&
                shared.find(fmt::format("@{}(", symbol)) == std::string::npos;
     }};
+
+    // An internal function nothing calls or takes the address of, such as one only a
+    // compile-time call used, which the old emitter never emits
+    const auto unreferenced{[&](std::string_view name, std::string_view body) {
+        const auto symbol{name.substr(3)};
+        const auto header{body.substr(0, body.find('\n'))};
+        return header.find("[internal]") != std::string_view::npos &&
+               uir_text.find(fmt::format("@{}", symbol)) == std::string_view::npos &&
+               uir_text.find(fmt::format("\"{}\"", symbol)) == std::string_view::npos;
+    }};
     const bool extras_folded{std::ranges::all_of(uir.functions, [&](const auto& entry) {
         return legacy.functions.contains(entry.first) || uncalled(entry.first) ||
-               only_folded_calls(entry.first, uir_text);
+               unreferenced(entry.first, entry.second) || only_folded_calls(entry.first, uir_text);
     })};
     if (!extras_folded) { return rejected("UIR has a function the old dump lacks", ""); }
     const bool extra{std::ranges::any_of(

@@ -195,9 +195,9 @@ auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
     const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
     const auto bits{rec.u32_field()};
     const bool is_extern{(bits & flags::EXTERN_FN) != 0};
-    if ((bits & (flags::DYN_FN | flags::IMPL_FN)) != 0) {
-        return comp_.unsupported(u_, src, "a `dyn fn` or `impl fn` type");
-    }
+    // `dyn Fn(...)` is an erased `fn(...)`, and an `impl Fn(...)` bound only says what a call
+    // passes
+    if ((bits & flags::IMPL_FN) != 0) { return comp_.unsupported(u_, src, "an `impl fn` type"); }
 
     if (!is_extern && (bits & flags::EXPLICIT_CONV) != 0) {
         return comp_.report(u_,
@@ -291,6 +291,12 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
 
 auto analyzer::analyze_func(inst_id inst) -> result<operand> {
     if (!declaring_ || !is_comptime()) {
+        // A literal in a runtime body is a function of its own, or the body of a closure after it
+        if (fn_ && !declaring_) {
+            if (wrapping_closure(inst)) { return void_value(); }
+            return local_function(inst, {});
+        }
+
         return comp_.unsupported(u_, src_of(inst), "a function literal used as a value");
     }
 

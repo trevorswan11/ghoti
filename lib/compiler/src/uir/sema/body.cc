@@ -106,6 +106,15 @@ auto analyzer::analyze_function() -> result<void> {
     const auto body{rec.body_field()};
     rec.skip_u32().skip_u32();
     const auto attrs{rec.body_field()};
+
+    // A closure's body takes its environment before its own parameters
+    stdx::option<gir::value> env_self;
+    if (fn_->env) {
+        auto&       self_type{*fn_->type->get_data().as<gs::types::function>().params[0]};
+        const auto& added{gir_fn_->add_param(std::string{fn_->env->self_name}, self_type)};
+        env_self.emplace(added.id, self_type);
+    }
+
     for (usize i{0}, slot{0}; const auto param : params) {
         const auto binding{fn_->bindings.empty() ? stdx::option<param_binding>{}
                                                  : stdx::option<param_binding>{fn_->bindings[i]}};
@@ -139,13 +148,19 @@ auto analyzer::analyze_function() -> result<void> {
         // A slice parameter is passed in a slot of its own, and a written one is spilled to one
         if (type.get_kind() == gs::type_kind::SLICE) {
             values_.insert_or_assign(param, slot_value{.address = value, .type = &type});
-        } else if ((param_flags & flags::PARAM_WRITTEN) != 0) {
+        } else if ((param_flags & flags::PARAM_WRITTEN) != 0 || type.is_generic_value()) {
+            // A capturing generic is called through its environment's address
             const auto spilled{spill(value, type, true)};
             values_.insert_or_assign(
                 param, slot_value{.address = spilled.address, .type = &type, .is_mutable = true});
         } else {
             values_.insert_or_assign(param, value);
         }
+    }
+
+    if (env_self) {
+        env_self_ = env_self;
+        bind_environment(*fn_->env, *env_self);
     }
 
     // Attribute arguments may read the comptime parameters bound above
@@ -281,6 +296,11 @@ auto analyzer::tested_call(inst_id inst) -> result<operand> {
 auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     const auto t{mod().tag_of(inst)};
     set_location(src_of(inst));
+    // A `return` with errdefers pending asks whether its value fails
+    if (t == tag::ret_failure) { return analyze_ret_failure(inst); }
+    if (t == tag::failure_is_set) { return analyze_failure_is_set(inst); }
+    if (t == tag::failure_residual) { return analyze_failure_residual(inst); }
+
     switch (t) {
     case tag::int_value:       return analyze_int_value(inst);
     case tag::int_lit:         return analyze_int_lit(inst);

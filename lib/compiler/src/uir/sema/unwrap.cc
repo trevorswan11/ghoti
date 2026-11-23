@@ -443,6 +443,47 @@ auto analyzer::analyze_residual(inst_id inst) -> result<operand> {
     return kept;
 }
 
+auto analyzer::analyze_ret_failure(inst_id inst) -> result<operand> {
+    const auto& src{src_of(inst)};
+    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    const auto operand_ref{mod().data_of(inst).un.operand};
+    const auto value{TRY(resolve_value(operand_ref, src))};
+
+    // A return type that isn't `Unwrappable` never fails
+    const auto shape{TRY(unwrap_shape_of(*fn_->return_type, src))};
+    if (!shape) {
+        failures_.insert_or_assign(inst, stdx::none);
+        return void_value();
+    }
+
+    if (is_comptime()) { return comp_.unsupported(u_, src, "an errdefer at compile time"); }
+    const auto flow{TRY(emit_flow(operand_ref, value, *shape, src))};
+    failures_.insert_or_assign(inst, returned_failure{.flow = flow, .shape = *shape});
+    return void_value();
+}
+
+auto analyzer::analyze_failure_is_set(inst_id inst) -> result<operand> {
+    const auto& src{src_of(inst)};
+    const auto  of{as_inst(mod().data_of(inst).un.operand)};
+    const auto  found{of ? failures_.find(*of) : failures_.end()};
+    if (found == failures_.end()) { return comp_.unsupported(u_, src, "a failure of no return"); }
+    if (!found->second) { return comp_.constants().intern(false, builtin(gs::type_kind::BOOL)); }
+    return operand{found->second->flow.is_break};
+}
+
+auto analyzer::analyze_failure_residual(inst_id inst) -> result<operand> {
+    const auto& src{src_of(inst)};
+    const auto  of{as_inst(mod().data_of(inst).un.operand)};
+    const auto  found{of ? failures_.find(*of) : failures_.end()};
+    if (found == failures_.end() || !found->second) {
+        return comp_.unsupported(u_, src, "a residual of no failure");
+    }
+
+    const auto& failure{*found->second};
+    if (failure.shape.residual->get_kind() == gs::type_kind::VOID_) { return void_value(); }
+    return residual_capture(failure.flow, failure.shape);
+}
+
 auto analyzer::analyze_ret_residual(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     if (propagations_.empty() || !propagations_.back().rewrapped) {

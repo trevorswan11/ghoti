@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -25,14 +26,67 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto  modifier{rec.ref_field()};
     const auto  args{rec.refs_field()};
     const auto  pack_mask{rec.words_field()};
-    if (modifier) { return comp_.unsupported(u_, src, "a call modifier"); }
-    const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
-    const auto callee{TRY(resolve_value(callee_ref, src))};
-    const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
+    return with_modifier(modifier, src, [&] -> result<operand> {
+        const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
+        const auto callee{TRY(resolve_value(callee_ref, src))};
+        const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
 
-    // `.name(args)` calls the member of whatever type the call is used as
-    if (callee.is<enum_literal>() && !expands) { return implicit_call{inst}; }
-    return call_expanding(callee, args, pack_mask, src, callee_src.value_or(src));
+        // `.name(args)` calls the member of whatever type the call is used as
+        if (callee.is<enum_literal>() && !expands) { return implicit_call{inst}; }
+        return call_expanding(callee, args, pack_mask, src, callee_src.value_or(src));
+    });
+}
+
+auto analyzer::with_modifier(stdx::option<ref>                       modifier,
+                             const source&                           src,
+                             const std::function<result<operand>()>& call) -> result<operand> {
+    if (!modifier) { return call(); }
+
+    // The modifier is a `builtin.CallModifier` known at compile time
+    const auto at{as_inst(*modifier).transform([&](inst_id i) { return src_of(i); }).value_or(src)};
+    const auto value{[&] {
+        const auto scope{comptime_scope()};
+        return resolve_value(*modifier, at);
+    }()};
+    std::string_view name;
+    if (value) {
+        if (const auto literal{value->as_opt<enum_literal>()}) {
+            name = mod().string(mod().data_of(literal->inst).str);
+        } else if (const auto index{comptime_value(*value)}) {
+            if (const auto e{comp_.constants().value_at(*index).data.as_opt<ip::enum_value>()}) {
+                name = e->name;
+            }
+        }
+    }
+
+    const auto how{ast::call_modifier_from_name(name)};
+    if (!how) {
+        return comp_.report(u_,
+                            at,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "'@call' modifier must be known at compile time");
+    }
+
+    if (*how == ast::call_modifier::AUTO) { return call(); }
+    if (*how == ast::call_modifier::COMPILE_TIME) {
+        auto folded{[&] {
+            const auto scope{comptime_scope()};
+            return call();
+        }()};
+        if (!folded && folded.error() == stop::RUNTIME) {
+            return comp_.report_runtime_need(
+                u_,
+                stdx::none,
+                gs::error::COMPTIME_EVALUATION_FAILED,
+                "'@call(.compile_time, ...)': this call can't be evaluated at compile time");
+        }
+
+        return folded;
+    }
+
+    auto result{TRY(call())};
+    if (!is_comptime()) { builder_.mark_last_call(*how); }
+    return result;
 }
 
 auto analyzer::call_expanding(const operand&       callee,
@@ -78,17 +132,46 @@ auto analyzer::call_operand(const operand&       callee,
         return call_generic(*generic->fn, std::move(values), src, callee_src);
     }
 
+    if (const auto body{comp_.closure_body(type_of(callee))}) {
+        return call_closure(callee, *body, args, src);
+    }
+
+    // A compile-time function value calls its own copy directly
+    if (const auto index{comptime_value(callee)}) {
+        if (const auto target{comp_.const_function(*index)}) {
+            return call_function(*target, args, src, callee_src, false);
+        }
+    }
+
+    // A capturing local generic is called through the environment its binding holds
+    if (const auto g{comp_.closure_generic(type_of(callee))}) {
+        std::vector<call_arg> values;
+        for (const auto arg : args) {
+            values.emplace_back(call_arg{.value = TRY(resolve_value(arg, src)), .written = arg});
+        }
+
+        // A generic that captures nothing is its instances, called directly
+        if (!g->env) { return call_generic(*g, std::move(values), src, callee_src); }
+        TRY(require_runtime(src));
+        const auto env{TRY(closure_address(callee, src))};
+        return call_generic(*g, std::move(values), src, callee_src, env);
+    }
+
     const auto fn{callee.as_opt<function_ref>()};
     if (!fn) {
-        // A function value, such as `@entryMain()` with no entry point, is called through
-        const auto fn_type{type_of(callee).get_data().as_opt<gs::types::function>()};
-        if (!fn_type || fn_type->erased || is_comptime()) {
+        // A function value or `^fn(...)` is called through
+        auto&      callee_type{type_of(callee)};
+        const auto pointee{callee_type.get_data().as_opt<gs::types::pointer>()};
+        const auto fn_type{
+            (pointee ? pointee->underlying : callee_type).get_data().as_opt<gs::types::function>()};
+        if (!fn_type || is_comptime()) {
             return comp_.unsupported(u_, src, "a call through a value");
         }
 
         return call_value(TRY(as_runtime(callee, src)), *fn_type, args, src);
     }
 
+    if (fn->fn->env) { return call_thunk(*fn->fn, args, src); }
     return call_function(*fn->fn, args, src, callee_src, false);
 }
 
@@ -101,8 +184,18 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     const auto modifier{rec.ref_field()};
     const auto args{rec.refs_field()};
     const auto pack_mask{rec.words_field()};
-    if (modifier) { return comp_.unsupported(u_, src, "a call modifier"); }
-    const auto object{TRY(resolve(object_ref, src))};
+    return with_modifier(modifier, src, [&] {
+        return field_call_unmodified(inst, object_ref, name, args, pack_mask);
+    });
+}
+
+auto analyzer::field_call_unmodified(inst_id              inst,
+                                     ref                  object_ref,
+                                     std::string_view     name,
+                                     gsl::span<const ref> args,
+                                     gsl::span<const u32> pack_mask) -> result<operand> {
+    const auto& src{src_of(inst)};
+    const auto  object{TRY(resolve(object_ref, src))};
 
     // A module's function is called like one declared here
     if (const auto m{object.as_opt<module_ref>()}) {
@@ -124,8 +217,10 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
         if (!owner) { return comp_.unsupported(u_, src, "a call through a field"); }
 
         // `s.f()` of a field holding a function calls through the function value
-        if (const auto st{owner->get_data().as_opt<gs::types::struct_t>()};
-            st && std::ranges::contains(st->field_names, name)) {
+        const auto st{owner->get_data().as_opt<gs::types::struct_t>()};
+        const auto un{owner->get_data().as_opt<gs::types::union_t>()};
+        if ((st && std::ranges::contains(st->field_names, name)) ||
+            (un && std::ranges::contains(un->field_names, name))) {
             return call_through_field(object_ref, name, args, src);
         }
 
@@ -161,7 +256,7 @@ auto analyzer::call_through_field(ref                  object_ref,
     const auto field{TRY(field_place(base, name, src))};
     auto&      field_type{*field.pointee};
     const auto fn{field_type.get_data().as_opt<gs::types::function>()};
-    if (!fn || fn->erased) { return comp_.unsupported(u_, src, "a call through a field"); }
+    if (!fn) { return comp_.unsupported(u_, src, "a call through a field"); }
     return call_value(TRY(read(field, src)), *fn, args, src);
 }
 
@@ -226,6 +321,8 @@ auto analyzer::call_with(instance&            target,
                          std::vector<operand> args,
                          const source&        src,
                          bool                 through_member) -> result<operand> {
+    const auto env{std::exchange(call_env_, stdx::none)};
+    if (target.env && is_comptime()) { return comp_.needs_runtime(u_, src); }
     TRY(comp_.infer_return(target, u_, src));
     if (target.linkage == gir::linkage::EXTERN && is_comptime()) {
         return comp_.needs_runtime(u_, src);
@@ -293,11 +390,22 @@ auto analyzer::call_with(instance&            target,
     }
 
     TRY(require_runtime(src));
+    if (!target.comptime_env.empty()) {
+        return comp_.unsupported(u_, src, "a compile-time closure called at runtime");
+    }
+
     comp_.request_body(target);
 
     auto& ret{*target.return_type};
     if (ret.get_kind() == gs::type_kind::NORETURN) {
         return comp_.unsupported(u_, src, "a call to a `noreturn` function");
+    }
+
+    // A local generic's instance takes the environment first
+    if (target.env && env) {
+        auto first{*env};
+        first.type.emplace(*target.type->get_data().as<gs::types::function>().params[0]);
+        values.insert(values.begin(), first);
     }
 
     // Call a type's member function through its name as a constant

@@ -92,14 +92,16 @@ auto compilation::note_store(const comptime_place& p) -> void {
     }
 }
 
-auto compilation::speculate() const -> speculation {
-    return speculation{
-        .diagnostics  = diagnostics_.size(),
-        .memo         = memo_.size(),
-        .stopped      = stopped_at_.has_value(),
-        .runtime_site = runtime_site_.has_value(),
-    };
+compilation::speculation::speculation(compilation& comp) noexcept
+    : diagnostics{comp.diagnostics_.size()}, memo{comp.memo_.size()},
+      stopped{comp.stopped_at_.has_value()}, runtime_site{comp.runtime_site_.has_value()},
+      owner{comp} {
+    ++comp.speculating_;
 }
+
+compilation::speculation::~speculation() { --owner.speculating_; }
+
+auto compilation::speculate() -> speculation { return speculation{*this}; }
 
 auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
     DISCARD(diagnostics_.split_off(s.diagnostics));
@@ -181,7 +183,10 @@ auto compilation::add_call_notes(gs::diagnostic& d) const -> void {
 
 analyzer::analyzer(compilation& comp, const unit& u, instance& fn) noexcept
     : comp_{comp}, u_{u}, fn_{fn}, captures_{fn.captures}, scope_{fn.scope},
-      self_type_{fn.self_type}, frame_{comp.next_frame()}, alloc_base_{comp.alloc_count()} {}
+      self_type_{fn.self_type}, frame_{comp.next_frame()}, alloc_base_{comp.alloc_count()} {
+    env_values_ = fn.comptime_env;
+    env_frame_  = fn.env_frame;
+}
 
 auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
     PROFILE_FUNCTION();
@@ -302,8 +307,22 @@ namespace {
     case tag::elem_val: return std::vector{d.bin.lhs, d.bin.rhs};
     case tag::load:     return std::vector{d.un.operand};
 
+    // A closure is built again from what it captures
+    case tag::closure:  {
+        record_reader rec{m, d.pl.extra};
+        rec.skip_ref();
+        const auto       count{rec.count()};
+        std::vector<ref> refs;
+        for (u32 i{0}; i < count; ++i) {
+            refs.emplace_back(*rec.ref_field());
+            rec.skip_u32().skip_str();
+        }
+
+        return refs;
+    }
+
     // A cast computes nothing but its value
-    case tag::builtin:  {
+    case tag::builtin: {
         record_reader rec{m, d.pl.extra};
         switch (static_cast<syntax::builtin_t>(rec.u32_field())) {
         case syntax::builtin_t::INT_CAST:
