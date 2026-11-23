@@ -138,6 +138,12 @@ auto compilation::declare_generic(const unit&           u,
     const bool unprefixed{in_instance || (member.symbol.empty() && member.symbol_prefix.empty())};
     auto       name{unprefixed ? std::string{u.uir->string(d.name)}
                                : TRY(member_symbol(u, decl, func, member))};
+
+    // An `impl` block's generic member is named after the type it implements
+    const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl && member.self_type};
+    const auto enclosing{in_instance ? stdx::option<gs::type&>{*member.scope->type}
+                         : in_impl   ? stdx::option<gs::type&>{*member.self_type}
+                                     : stdx::none};
     auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
@@ -147,7 +153,7 @@ auto compilation::declare_generic(const unit&           u,
         .captures  = member.captures,
         .self_type = member.self_type,
         .scope     = member.scope,
-        .enclosing = in_instance ? stdx::option<gs::type&>{*member.scope->type} : stdx::none,
+        .enclosing = enclosing,
     }))};
     return generic_ref{&fn};
 }
@@ -168,7 +174,8 @@ auto compilation::mangle_type(const gs::type& t) -> std::string {
                 "{}${}_{}", kind_name, n->symbol_prefix, std::to_underlying(n->inst));
         }
 
-        return fmt::format("{}{}", kind_name, std::to_underlying(n->inst));
+        // Instruction ids repeat across modules, so a nominal is numbered by its declaration
+        return fmt::format("{}{}", kind_name, nominal_number(t));
     }
     case gs::type_kind::FUNCTION: {
         const auto& fn{data.as<gs::types::function>()};
@@ -186,6 +193,10 @@ auto compilation::mangle_type(const gs::type& t) -> std::string {
                            arr.null_terminated ? "z" : "",
                            mut_prefix(arr.underlying),
                            mangle_type(arr.underlying));
+    }
+    case gs::type_kind::VECTOR: {
+        const auto& vec{data.as<gs::types::vector>()};
+        return fmt::format("vector{}_{}", vec.len, mangle_type(vec.underlying));
     }
     case gs::type_kind::SLICE: {
         const auto& sl{data.as<gs::types::slice>()};
@@ -393,11 +404,10 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 continue;
             }
 
-            // A string argument keeps its literal's array type in the symbol
-            const bool text{!comp_.constants().is_type(index) &&
-                            comp_.constants().value_at(index).data.is<std::string>() &&
-                            type_of(arg).get_kind() == gs::type_kind::ARRAY};
-            binding.mangled_params.emplace_back(comp_.mangle_type(text ? type_of(arg) : type));
+            // An array argument keeps its array type in the symbol
+            const bool array_arg{!comp_.constants().is_type(index) &&
+                                 type_of(arg).get_kind() == gs::type_kind::ARRAY};
+            binding.mangled_params.emplace_back(comp_.mangle_type(array_arg ? type_of(arg) : type));
             binding.comptime_suffixes.emplace_back(fmt::format(
                 "_cx{}", gir::const_value::from_interned(comp_.constants(), index).mangle()));
             continue;
@@ -412,6 +422,8 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             return comp_.unsupported(*g.owner, param_src, "a parameter of a comptime-only type");
         }
 
+        // A later type may ask a runtime parameter's type, as `@TypeOf(x)`, but never its value
+        sig.bind(param, operand{gir::value{gir::local_id{}, type}});
         binding.key.args.emplace_back(interned_type(type));
         binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
         binding.slots.emplace_back(&type);

@@ -24,6 +24,38 @@ namespace ghoti::tests::helpers {
 
 namespace {
 
+// Whether a dump line starts a record of its own, not a later line of a multi-line string
+[[nodiscard]] auto starts_record(std::string_view line) -> bool {
+    if (line.empty()) { return true; }
+    for (const auto prefix : {"fn ", "const ", "type ", "var ", "test \"", "  seg "}) {
+        if (line.starts_with(prefix)) { return true; }
+    }
+
+    return line.starts_with("    ") && line.size() > 4 && line[4] != ' ';
+}
+
+// The dump with each multi-line string literal on the line of the instruction holding it
+[[nodiscard]] auto joined_string_lines(std::string_view dump) -> std::string {
+    std::string out;
+    bool        first{true};
+    for (usize at{0}; at < dump.size();) {
+        const auto end{std::min(dump.find('\n', at), dump.size())};
+        const auto line{dump.substr(at, end - at)};
+        at = end + 1;
+        if (!first && !starts_record(line)) {
+            out += "\\n";
+        } else if (!first) {
+            out += '\n';
+        }
+
+        out += line;
+        first = false;
+    }
+
+    if (dump.ends_with('\n')) { out += '\n'; }
+    return out;
+}
+
 // A store's value and destination, split at the last comma since a string value may hold one
 [[nodiscard]] auto store_args(std::string_view body) -> std::vector<std::string_view> {
     const auto operands{stdx::string::substr(body, 6)};
@@ -94,6 +126,24 @@ struct module_dump {
 
     while (end < text.size() && is_digit(text[end])) { ++end; }
     return end - at;
+}
+
+// The next `.slice_lit.N` or `.ref_lit.N` at or after `from`, as its start and length
+[[nodiscard]] auto literal_global_at(std::string_view text, usize from)
+    -> stdx::option<std::pair<usize, usize>> {
+    stdx::option<std::pair<usize, usize>> best;
+    for (const std::string_view prefix : {".slice_lit.", ".ref_lit."}) {
+        for (auto at{text.find(prefix, from)}; at != std::string_view::npos;
+             at = text.find(prefix, at + 1)) {
+            usize end{at + prefix.size()};
+            while (end < text.size() && is_digit(text[end])) { ++end; }
+            if (end == at + prefix.size()) { continue; }
+            if (!best || at < best->first) { best.emplace(at, end - at); }
+            break;
+        }
+    }
+
+    return best;
 }
 
 // A dump with every nominal type in a monomorph's symbol spelled `struct#`, every
@@ -1281,7 +1331,7 @@ auto canonicalize(function_dump& fn) -> void {
 } // namespace
 
 auto normalize_gir(std::string_view dump) -> std::string {
-    auto mod{parse(erase_nominal_discriminators(dump))};
+    auto mod{parse(erase_nominal_discriminators(joined_string_lines(dump)))};
     for (auto& fn : mod.functions) {
         for (auto& seg : fn.segments) {
             for (auto& inst : seg.instructions) { inst = without_address_mutability(inst); }
@@ -1313,10 +1363,43 @@ auto normalize_gir(std::string_view dump) -> std::string {
     }
 
     std::ranges::sort(rendered);
+    std::string functions;
+    for (const auto& [key, text] : rendered) { functions += text; }
+
+    // Hidden literal globals are numbered in the order Sema reaches them, so both sides are
+    // renamed by where the sorted functions first use them
+    ankerl::unordered_dense::map<std::string, std::string> renamed;
+    const auto rename{[&](const std::string& text, bool assign) {
+        std::string out;
+        usize       at{0};
+        while (at < text.size()) {
+            const auto found{literal_global_at(text, at)};
+            if (!found) {
+                out += text.substr(at);
+                break;
+            }
+
+            const auto [start, len]{*found};
+            out += text.substr(at, start - at);
+            const auto name{text.substr(start, len)};
+            if (assign && !renamed.contains(name)) {
+                renamed.emplace(name, fmt::format(".lit#{}", renamed.size()));
+            }
+
+            const auto it{renamed.find(name)};
+            out += it == renamed.end() ? name : it->second;
+            at = start + len;
+        }
+
+        return out;
+    }};
+    functions = rename(functions, true);
+    for (auto& item : mod.items) { item = rename(item, false); }
+    std::ranges::sort(mod.items);
+
     std::string out;
     for (const auto& item : mod.items) { out += fmt::format("{}\n", item); }
-    for (const auto& [key, text] : rendered) { out += text; }
-    return out;
+    return out + functions;
 }
 
 } // namespace ghoti::tests::helpers

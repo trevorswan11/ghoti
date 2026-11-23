@@ -48,7 +48,7 @@ auto compilation::member_symbol(const unit&           u,
                                 inst_id               func,
                                 const member_context& member) -> result<std::string> {
     if (!member.symbol.empty()) { return std::string{member.symbol}; }
-    if (member.symbol_prefix.empty()) { return symbol_for(u, decl, u.uir->src_of(func)); }
+    if (member.symbol_prefix.empty()) { return symbol_for(u, decl, u.uir->src_of(func), true); }
     return fmt::format("{}.{}", member.symbol_prefix, u.uir->string(u.uir->decl_at(decl).name));
 }
 
@@ -137,7 +137,7 @@ auto analyzer::global_symbol(decl_id decl, const source& src) -> result<std::str
         return fmt::format("{}.{}", symbol_prefix_, mod().string(mod().decl_at(decl).name));
     }
 
-    return comp_.symbol_for(u_, decl, src);
+    return comp_.symbol_for(u_, decl, src, false);
 }
 
 auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const source& src)
@@ -178,8 +178,9 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
                             .mut   = type_of(object).get_key().get_mut()};
     }
 
+    // A receiver reached through a pointer is passed without checking it for null
     const auto object_place{TRY(address_of(object_ref, src))};
-    const auto base{TRY(through_pointer(object_place, src))};
+    const auto base{TRY(through_pointer(object_place, src, false))};
 
     // An object reached through a pointer or reference already has the address the method takes
     if (base.address.data != object_place.address.data) {

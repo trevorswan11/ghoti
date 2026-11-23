@@ -2,12 +2,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/interfaces/catch_interfaces_capture.hpp>
@@ -33,7 +38,10 @@
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "compiler/uir/uir.hh"
+#include "fmt/base.h"
+#include "helpers/gir_effects.hh"
 #include "helpers/gir_normalize.hh"
+#include "stdx/hash.hh"
 #include "support/diagnostic.hh"
 #include "support/env.hh"
 
@@ -123,10 +131,86 @@ namespace {
     return calls_folded_function(uir_text, legacy_text);
 }
 
+[[nodiscard]] auto without_unused_on_demand(std::string_view legacy_text, std::string_view uir_text)
+    -> std::string;
+
+// The old dump pruned until nothing it keeps is called only from what it dropped
+[[nodiscard]] auto without_all_unused(std::string_view legacy_text, std::string_view uir_text)
+    -> std::string {
+    std::string kept{legacy_text};
+    for (auto next{without_unused_on_demand(kept, uir_text)}; next != kept;
+         next = without_unused_on_demand(kept, uir_text)) {
+        kept = std::move(next);
+    }
+    return kept;
+}
+
+// Every `fn <prefix><digits>.<member>(` header of a dump, as its qualifier and member
+[[nodiscard]] auto numbered_members(std::string_view text, std::string_view prefix)
+    -> std::vector<std::pair<std::string, std::string>> {
+    std::vector<std::pair<std::string, std::string>> out;
+    const auto                                       header{fmt::format("fn {}", prefix)};
+    for (usize at{text.find(header)}; at != std::string_view::npos;
+         at = text.find(header, at + 1)) {
+        if (at != 0 && text[at - 1] != '\n') { continue; }
+        auto end{at + header.size()};
+        while (end < text.size() && text[end] >= '0' && text[end] <= '9') { ++end; }
+        const auto open{text.find('(', end)};
+        if (end == at + header.size() || end >= text.size() || text[end] != '.' ||
+            open == std::string_view::npos) {
+            continue;
+        }
+        out.emplace_back(stdx::string::substr(text, at + 3, end - at - 3),
+                         stdx::string::substr(text, end + 1, open - end - 1));
+    }
+    return out;
+}
+
+// The old emitter names a no-argument ctor instance `tcN` after a symbol table slot, so the one
+// UIR qualifier whose members the old dump lacks takes that name
+[[nodiscard]] auto with_legacy_ctor_names(std::string_view legacy_text, std::string uir_text)
+    -> std::string {
+    for (const auto& [legacy_name, member] : numbered_members(legacy_text, "tc")) {
+        if (uir_text.find(fmt::format("fn {}.{}(", legacy_name, member)) != std::string::npos) {
+            continue;
+        }
+
+        // UIR's qualifiers of a member of this name that the old dump doesn't have
+        const auto               suffix{fmt::format(".{}(", member)};
+        std::vector<std::string> candidates;
+        for (usize at{uir_text.find(suffix)}; at != std::string::npos;
+             at = uir_text.find(suffix, at + 1)) {
+            const auto line{uir_text.rfind('\n', at)};
+            const auto start{line == std::string::npos ? 0 : line + 1};
+            if (uir_text.compare(start, 3, "fn ") != 0) { continue; }
+            auto qualifier{uir_text.substr(start + 3, at - start - 3)};
+            if (qualifier.find_first_of(". ") != std::string::npos ||
+                legacy_text.find(fmt::format("fn {}{}", qualifier, suffix)) !=
+                    std::string_view::npos) {
+                continue;
+            }
+            candidates.emplace_back(std::move(qualifier));
+        }
+        if (candidates.size() != 1) { continue; }
+
+        for (const auto& [from, to] : {std::pair{fmt::format("fn {}.", candidates.front()),
+                                                 fmt::format("fn {}.", legacy_name)},
+                                       std::pair{fmt::format("@{}.", candidates.front()),
+                                                 fmt::format("@{}.", legacy_name)}}) {
+            for (auto at{uir_text.find(from)}; at != std::string::npos;
+                 at = uir_text.find(from, at + to.size())) {
+                uir_text.replace(at, from.size(), to);
+            }
+        }
+    }
+    return uir_text;
+}
+
 // The old dump without the impl methods and type-ctor members UIR analyzes on demand and never used
 [[nodiscard]] auto without_unused_on_demand(std::string_view legacy_text, std::string_view uir_text)
     -> std::string {
-    std::string kept;
+    std::string                                    kept;
+    std::map<std::string_view, usize, std::less<>> kept_copies;
     for (usize at{0}; at < legacy_text.size();) {
         const auto next{legacy_text.find("\nfn ", at + 1)};
         const auto end{next == std::string_view::npos ? legacy_text.size() : next + 1};
@@ -138,12 +222,146 @@ namespace {
         const auto mangled{name.find("__")};
         const bool on_demand{function.starts_with("fn pimpl#") ||
                              mangled != std::string_view::npos};
-        const bool unused{on_demand && uir_text.find(name) == std::string_view::npos};
-        if (!unused) { kept += function; }
+        // A function nothing calls or takes the address of is one the old emitter emits eagerly
+        const bool absent{uir_text.find(name) == std::string_view::npos};
+        const bool referenced{name.size() > 3 &&
+                              legacy_text.find(fmt::format("@{}", name.substr(3))) !=
+                                  std::string_view::npos};
+        const bool unused{absent && (on_demand || !referenced)};
+        // Instances whose names normalize alike count as unused when UIR has fewer of them
+        const auto header{fmt::format("\n{}(", name)};
+        const auto count{[&](std::string_view text) {
+            usize n{0};
+            for (auto found{text.find(header)}; found != std::string_view::npos;
+                 found = text.find(header, found + 1)) {
+                ++n;
+            }
+            return n;
+        }};
+        // and no more copies of one body are kept than UIR has
+        const auto copies{[&] {
+            usize n{0};
+            for (auto found{uir_text.find(function)}; found != std::string_view::npos;
+                 found = uir_text.find(function, found + 1)) {
+                ++n;
+            }
+            return n;
+        }};
+        const bool duplicate{on_demand && count(uir_text) < count(legacy_text) &&
+                             kept_copies[function] >= copies()};
+        if (!unused && !duplicate) {
+            kept += function;
+            ++kept_copies[function];
+        }
         at = end;
     }
 
     return kept;
+}
+
+// A normalized dump split into its non-function lines and its functions by header name
+struct split_dump {
+    std::string                                     items;
+    std::map<std::string, std::string, std::less<>> functions;
+};
+
+[[nodiscard]] auto split_functions(std::string_view text) -> split_dump {
+    split_dump out;
+    usize      at{0};
+    while (at < text.size()) {
+        const bool starts{text.substr(at).starts_with("fn ") ||
+                          text.substr(at).starts_with("test \"")};
+        if (!starts) {
+            const auto line_end{text.find('\n', at)};
+            const auto end{line_end == std::string_view::npos ? text.size() : line_end + 1};
+            out.items += text.substr(at, end - at);
+            at = end;
+            continue;
+        }
+
+        const auto next_fn{text.find("\nfn ", at + 1)};
+        const auto next_test{text.find("\ntest \"", at + 1)};
+        const auto next{std::min(next_fn, next_test)};
+        const auto end{next == std::string_view::npos ? text.size() : next + 1};
+        const auto function{text.substr(at, end - at)};
+        const auto name{function.substr(0, function.find_first_of("(\n"))};
+        out.functions[std::string{name}] += function;
+        at = end;
+    }
+
+    return out;
+}
+
+// Whether UIR calls the function `fn name` somewhere, and only ever with constant arguments
+[[nodiscard]] auto only_folded_calls(std::string_view name, std::string_view uir_text) -> bool {
+    if (!name.starts_with("fn ")) { return false; }
+    const auto call{fmt::format("call @{}(", name.substr(3))};
+    bool       called{false};
+    for (auto at{uir_text.find(call)}; at != std::string_view::npos;
+         at = uir_text.find(call, at + 1)) {
+        const auto open{at + call.size()};
+        const auto close{uir_text.find(')', open)};
+        if (close == std::string_view::npos) { return false; }
+        const auto args{stdx::string::substr(uir_text, open, close - open)};
+        if (args.find('%') != std::string_view::npos ||
+            args.find("param.") != std::string_view::npos) {
+            return false;
+        }
+        called = true;
+    }
+
+    return called;
+}
+
+// Whether every difference is a call UIR makes where the old emitter folded it, one function at
+// a time, so a fold in one function can't excuse a difference in another
+[[nodiscard]] auto only_fold_placement(std::string_view uir_text,
+                                       std::string_view legacy_text,
+                                       bool folded_let) -> stdx::option<uir_diff_status> {
+    // `GHOTI_UIR_DIFF_WHY` names what kept a program from counting as fold placement
+    const auto rejected{[](std::string_view why, std::string_view name) {
+        if (get_env("GHOTI_UIR_DIFF_WHY")) { fmt::print(stderr, "uir-diff: {} {}\n", why, name); }
+        return stdx::option<uir_diff_status>{};
+    }};
+    const auto uir{split_functions(uir_text)};
+    const auto legacy{split_functions(without_all_unused(legacy_text, uir_text))};
+    if (uir.items != legacy.items) { return rejected("types or globals differ", ""); }
+    bool folded{false};
+    for (const auto& [name, body] : legacy.functions) {
+        const auto found{uir.functions.find(name)};
+        if (found == uir.functions.end()) { return rejected("UIR lacks", name); }
+        if (found->second == body || same_effects(found->second, body)) { continue; }
+        folded = true;
+        if (folded_let) { continue; }
+        // UIR may fold what the old emitter calls with constant arguments, and the reverse
+        if (!has_folded_call(found->second, body) &&
+            !calls_folded_function(found->second, legacy_text) &&
+            !has_folded_call(body, found->second)) {
+            return rejected("differs", name);
+        }
+    }
+
+    // A function only UIR has is one the old emitter folded every call to, or one nothing calls:
+    // the panic handler only a check normalizing dropped as dead called, or a member analyzed
+    // while a call was tried at compile time
+    std::string shared{uir.items};
+    for (const auto& [name, body] : uir.functions) {
+        if (legacy.functions.contains(name)) { shared += body; }
+    }
+    const auto uncalled{[&](std::string_view name) {
+        const auto symbol{name.substr(3)};
+        const bool member{symbol.find('.') != std::string_view::npos};
+        return (symbol == "panic_handler" || member) &&
+               shared.find(fmt::format("@{}(", symbol)) == std::string::npos;
+    }};
+    const bool extras_folded{std::ranges::all_of(uir.functions, [&](const auto& entry) {
+        return legacy.functions.contains(entry.first) || uncalled(entry.first) ||
+               only_folded_calls(entry.first, uir_text);
+    })};
+    if (!extras_folded) { return rejected("UIR has a function the old dump lacks", ""); }
+    const bool extra{std::ranges::any_of(
+        uir.functions, [&](const auto& entry) { return !legacy.functions.contains(entry.first); })};
+    return folded || extra ? uir_diff_status::FOLD_PLACEMENT : uir_diff_status::EVAL_ORDER;
 }
 
 [[nodiscard]] auto dump_with_flags(const gir::module_t& gir_mod) -> std::string {
@@ -165,8 +383,11 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A `dyn` of an interface with a defaulted associated type"},
 };
 
-// Tests where the old emitter builds a local `const` aggregate at runtime to read from it
+// Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
+// loop element, at runtime to read from it
 constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
+    std::string_view{
+        "a match-captured payload's field is readable inside a nested `unroll for` body"},
     std::string_view{"a return type may instantiate a ctor that rejects an unbound `comptime T`"},
     std::string_view{"`++` concatenates two comptime integer arrays"},
     std::string_view{"`++` concatenates two function-local comptime array identifiers"},
@@ -248,6 +469,7 @@ auto uir_diff_status_name(uir_diff_status status) noexcept -> std::string_view {
     case uir_diff_status::GIR_DIFF:         return "gir-diff";
     case uir_diff_status::ASTGEN_FAILED:    return "astgen-failed";
     case uir_diff_status::LEGACY_REJECTED:  return "legacy-rejected";
+    case uir_diff_status::EVAL_ORDER:       return "eval-order";
     }
     return "unknown";
 }
@@ -301,16 +523,36 @@ auto diff_pipelines(mod::source_loader&          loader,
 
     // Normalizing is the costly part, so it waits until both pipelines produced GIR
     const auto legacy_text{normalize_gir(*legacy)};
-    const auto uir_text{normalize_gir(dump_with_flags(*out.gir))};
+    const auto uir_text{[&] {
+        auto text{normalize_gir(dump_with_flags(*out.gir))};
+        auto renamed{with_legacy_ctor_names(legacy_text, text)};
+        // Renaming may reorder functions, which normalizing sorts again
+        return renamed == text ? text : normalize_gir(renamed);
+    }()};
     if (uir_text == legacy_text) { return {.status = uir_diff_status::MATCH}; }
-    if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
-        return {.status = uir_diff_status::FOLD_PLACEMENT};
+
+    // `GHOTI_UIR_DIFF_DUMP=<dir>` keeps both normalized dumps of every program that differs
+    if (const auto dir{get_env("GHOTI_UIR_DIFF_DUMP")}) {
+        const auto stem{fmt::format("{}", stdx::hash<std::string>{}(root.generic_string()))};
+        const auto base{std::filesystem::path{*dir} / root.filename()};
+        std::ofstream{base.string() + "." + stem + ".old"} << legacy_text;
+        std::ofstream{base.string() + "." + stem + ".uir"} << uir_text;
     }
-    if (without_unused_on_demand(legacy_text, uir_text) == uir_text) {
+
+    // The `let` rule only reads one module, since across an import it would excuse any diff
+    if (const auto placed{only_fold_placement(
+            uir_text, legacy_text, lowered.size() == 1 && has_folded_let(lowered))}) {
+        return {.status = *placed};
+    }
+    if (without_all_unused(legacy_text, uir_text) == uir_text) {
         return {.status = uir_diff_status::ON_USE_IMPL};
     }
     if (shows_legacy_bug()) { return {.status = uir_diff_status::LEGACY_BUG}; }
     if (folds_local_aggregate()) { return {.status = uir_diff_status::FOLD_PLACEMENT}; }
+
+    if (has_folded_let(lowered) || has_folded_call(uir_text, legacy_text)) {
+        return {.status = uir_diff_status::FOLD_PLACEMENT};
+    }
     return {.status = uir_diff_status::GIR_DIFF,
             .detail = fmt::format("--- old\n{}--- uir\n{}", legacy_text, uir_text)};
 }

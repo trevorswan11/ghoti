@@ -64,6 +64,90 @@ auto analyzer::usize_bound(ref r, const source& src) -> result<gir::value> {
     return as_runtime(coerced, src);
 }
 
+auto analyzer::comptime_slice(ref               object_ref,
+                              stdx::option<ref> lo_ref,
+                              stdx::option<ref> hi_ref,
+                              bool              inclusive,
+                              const source&     src) -> result<operand> {
+    auto& pool{comp_.constants()};
+    auto& ctx{comp_.ctx()};
+
+    // A function's `const` slice is one the old pipeline builds at runtime
+    if (gir_fn_ && const_inits_ > 0) {
+        return comp_.unsupported(u_, src, "a slice in a function's `const` initializer");
+    }
+
+    // A runtime body's storage, folded again here, stays at runtime
+    const auto object_inst{as_inst(object_ref)};
+    const auto analyzed{object_inst ? values_.find(*object_inst) : values_.end()};
+    if (gir_fn_ && analyzed != values_.end() &&
+        (analyzed->second.is<place>() || analyzed->second.is<global_ref>() ||
+         analyzed->second.is<slot_value>())) {
+        return comp_.needs_runtime(u_, src);
+    }
+
+    const auto object{TRY(resolve_value(object_ref, src))};
+    auto       known{comptime_referent(object)};
+    if (!known) { known = comptime_value(object); }
+    if (!known) {
+        if (gir_fn_) { return comp_.needs_runtime(u_, src); }
+        return comp_.unsupported(u_, src, "slicing a value unknown at compile time");
+    }
+
+    // Reading the object's parts before interning, which may move what the pool holds
+    auto&       type{pool.value_at(*known).type.value_or(builtin(gs::type_kind::VOID_))};
+    const auto& data{pool.value_at(*known).data};
+    stdx::option<std::string>            text;
+    std::vector<stdx::option<ip::index>> elements;
+    if (const auto s{data.as_opt<std::string>()}) {
+        text = *s;
+    } else if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+        elements = agg->elements;
+    } else {
+        return comp_.unsupported(u_, src, "slicing this value at compile time");
+    }
+
+    const auto elem{[&] -> stdx::option<gs::type&> {
+        if (const auto arr{type.get_data().as_opt<gs::types::array>()}) { return arr->underlying; }
+        if (const auto s{type.get_data().as_opt<gs::types::slice>()}) { return s->underlying; }
+        return stdx::none;
+    }()};
+    if (!elem) { return comp_.unsupported(u_, src, "slicing this type at compile time"); }
+
+    // A copy of mutable elements would miss writes through the slice
+    if (!type.is_constant()) {
+        return comp_.unsupported(u_, src, "a compile-time slice of mutable elements");
+    }
+
+    const auto length{text ? text->size() : elements.size()};
+    const auto bound{[&](stdx::option<ref> r, usize fallback) -> result<usize> {
+        if (!r) { return fallback; }
+        const auto value{TRY(resolve_value(*r, src))};
+        const auto typed{TRY(
+            coerce_to(value, builtin(gs::type_kind::USIZE), src, {.what = use_site::kind::STORE}))};
+        const auto number{int_of(pool.value_at(TRY(require_comptime(typed, src))))};
+        const auto small{number ? number->to_u128() : stdx::none};
+        return small ? static_cast<usize>(*small) : usize{0};
+    }};
+    const auto lo{TRY(bound(lo_ref, 0))};
+    auto       hi{TRY(bound(hi_ref, length))};
+    if (hi_ref && inclusive) { ++hi; }
+    if (lo > hi || hi > length) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            fmt::format("slice range {}..{} is out of bounds for length {}", lo, hi, length));
+    }
+
+    auto& slice_type{ctx.get_slice(gs::types::mut::CONSTANT, false, *elem)};
+    if (text) { return operand{pool.intern(text->substr(lo, hi - lo), slice_type)}; }
+    return operand{pool.intern(ip::aggregate_value{std::vector<stdx::option<ip::index>>{
+                                   elements.begin() + static_cast<std::ptrdiff_t>(lo),
+                                   elements.begin() + static_cast<std::ptrdiff_t>(hi)}},
+                               slice_type)};
+}
+
 auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -71,7 +155,7 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     const auto  lo_ref{rec.ref_field()};
     const auto  hi_ref{rec.ref_field()};
     const bool  inclusive{(rec.u32_field() & flags::INCLUSIVE) != 0};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "slicing at compile time"); }
+    if (is_comptime()) { return comptime_slice(object_ref, lo_ref, hi_ref, inclusive, src); }
 
     auto&      ctx{comp_.ctx()};
     auto&      usize_type{builtin(gs::type_kind::USIZE)};
@@ -260,7 +344,17 @@ auto analyzer::run_for(inst_id                                   inst,
 
         // A global aggregate is its value here
         const auto global{given.as_opt<global_const>()};
-        const auto known{global ? stdx::option<ip::index>{global->value} : comptime_value(given)};
+        auto       known{global ? stdx::option<ip::index>{global->value} : comptime_value(given)};
+
+        // A container a runtime body built, such as a `[_]type{ ... }` literal, may still fold
+        if (!is_comptime() && !known) {
+            const auto folded{[&] {
+                const auto scope{comptime_scope()};
+                return reevaluate(iterable_ref, src);
+            }()};
+            if (folded) { known = comptime_value(*folded); }
+        }
+
         if (!is_comptime() && !known) {
             return comp_.unsupported(u_, src, "an `unroll for` over a runtime container");
         }

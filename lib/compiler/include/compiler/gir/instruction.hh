@@ -273,6 +273,9 @@ struct value {
 
 enum class segment_id : usize {};
 
+// Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
+[[nodiscard]] auto asm_template(std::string_view src) -> std::string;
+
 struct inline_asm {
     std::string        tmpl;
     std::string        constraints;

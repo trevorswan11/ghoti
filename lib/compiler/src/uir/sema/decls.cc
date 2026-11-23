@@ -157,14 +157,7 @@ auto compilation::analyze_members(const unit& u, gs::type& owner) -> void {
     }
 }
 
-auto compilation::own_symbol(const unit& u, decl_id decl, std::string symbol)
-    -> const std::string& {
-    auto& owned{decls_[u.index][std::to_underlying(decl)].global_symbol};
-    owned.emplace(stdx::make_box<std::string>(std::move(symbol)));
-    return **owned;
-}
-
-auto compilation::symbol_for(const unit& u, decl_id decl, const source& src)
+auto compilation::symbol_for(const unit& u, decl_id decl, const source& src, bool function)
     -> result<std::string> {
     const auto& d{u.uir->decl_at(decl)};
     std::string name{u.uir->string(d.name)};
@@ -176,7 +169,7 @@ auto compilation::symbol_for(const unit& u, decl_id decl, const source& src)
     const bool entry{u.source.get() == prog_.root.get() && !d.owner && name == ctx_.user_main_name};
     naming_.emplace_back(u.index, decl);
     const auto named{gsl::finally([this] { naming_.pop_back(); })};
-    auto       symbol{!fixed && !entry && TRY(collides(name, u, src))
+    auto       symbol{!fixed && !entry && TRY(collides(name, u, src, function))
                           ? fmt::format("m{}.{}", scope_number(u, d.owner), name)
                           : name};
 
@@ -194,7 +187,7 @@ auto compilation::scoped_symbol(const unit&           scope,
                                 const unit&           user,
                                 const source&         use) -> result<std::string> {
     const std::string plain{name};
-    if (!TRY(collides(plain, user, use))) { return plain; }
+    if (!TRY(collides(plain, user, use, true))) { return plain; }
     return fmt::format("m{}.{}", scope_number(scope, owner), name);
 }
 
@@ -206,8 +199,10 @@ auto compilation::scope_number(const unit& u, stdx::option<inst_id> owner) -> u3
     return scope_numbers_.try_emplace(key, next).first->second;
 }
 
-auto compilation::collides(const std::string& name, const unit& user, const source& use)
-    -> result<bool> {
+auto compilation::collides(const std::string& name,
+                           const unit&        user,
+                           const source&      use,
+                           bool               function) -> result<bool> {
     auto&      names{*TRY(declared_names(user, use))};
     const auto found{names.candidates.find(name)};
     if (found == names.candidates.end() || names.weak.contains(name)) { return false; }
@@ -223,15 +218,32 @@ auto compilation::collides(const std::string& name, const unit& user, const sour
     for (const auto& c : found->second) {
         if (c.certain || is_named(c)) { continue; }
         const auto& u{units_[c.unit]};
-        auto&       state{decls_[c.unit][std::to_underlying(c.decl)]};
+        // A `const` still resolving is on the way to what is being named
+        auto& state{decls_[c.unit][std::to_underlying(c.decl)]};
         if (state.status == decl_status::IN_PROGRESS) {
-            ++count;
+            count += function ? 0 : 1;
             continue;
         }
 
-        DISCARD(analyze_decl(u, c.decl, *u.uir->decl_at(c.decl).node));
+        // A candidate that can't be resolved yet is resolved again at its next use
+        const auto before{speculate()};
+        const auto probed{analyze_decl(u, c.decl, *u.uir->decl_at(c.decl).node)};
         if (stopped_at_) { return stdx::err{stop::UNSUPPORTED}; }
-        count += decls_[c.unit][std::to_underlying(c.decl)].has_storage ? 1 : 0;
+        auto& probed_state{decls_[c.unit][std::to_underlying(c.decl)]};
+        if (!probed) {
+            abandon(before);
+            probed_state.status = decl_status::UNRESOLVED;
+            probed_state.value.reset();
+            count += function ? 0 : 1;
+            continue;
+        }
+
+        // A value is a global wherever it is used, while a function, type or module isn't one
+        const auto known{probed->as_opt<ip::index>()};
+        const bool names_value{!probed->is<function_ref>() && !probed->is<generic_ref>() &&
+                               !probed->is<module_ref>() &&
+                               !(known && constants().is_type(*known))};
+        count += probed_state.has_storage || names_value ? 1 : 0;
     }
 
     return count > 1;
@@ -470,15 +482,14 @@ auto compilation::declare_function(const unit&           u,
 }
 
 auto compilation::declare_extern(const unit& u, decl_id decl, gs::type& type) -> result<operand> {
-    const auto& m{*u.uir};
-    const auto& d{m.decl_at(decl)};
-    const auto& sig{type.get_data().as<gs::types::function>()};
-    if (sig.is_variadic) { return unsupported(u, source{*d.node}, "a variadic extern function"); }
-
+    const auto&       m{*u.uir};
+    const auto&       d{m.decl_at(decl)};
+    const auto&       sig{type.get_data().as<gs::types::function>()};
     const std::string name{m.string(d.name)};
     const auto        target{d.extern_target.len != 0 ? std::string{m.string(d.extern_target)}
                                                       : std::string{"c"}};
-    auto& gir_fn{gir_.add_function(name, type, false, false, false, gir::linkage::EXTERN, target)};
+    auto&             gir_fn{
+        gir_.add_function(name, type, false, false, sig.is_variadic, gir::linkage::EXTERN, target)};
     gir_fn.set_link_name(d.link_name.len != 0 ? std::string{m.string(d.link_name)} : name);
     gir_fn.set_calling_conv(sig.conv);
     gir_fn.set_weak(d.has(decl_flags::WEAK));
@@ -517,22 +528,26 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         return comp_.import_target(u_, *d.import, mod().string(d.name), src);
     }
 
-    // An `extern` function is declared with its type only for the linker to find
+    // An `extern` function or global is declared with its type only for the linker to find
     if (d.has(decl_flags::EXTERN) && !d.value_body && d.type_body) {
-        const auto unhandled{d.flags & ~(HANDLED_FLAGS | decl_flags::EXTERN)};
+        const auto unhandled{d.flags &
+                             ~(HANDLED_FLAGS | decl_flags::EXTERN | decl_flags::THREADLOCAL)};
         auto&      type{*TRY(eval_type(mod().body(*d.type_body), src))};
-        if (unhandled != decl_flags::NONE || type.get_kind() != gs::type_kind::FUNCTION ||
-            (d.attrs_body && !mod().body(*d.attrs_body).empty())) {
-            return comp_.unsupported(u_, src, "an extern declaration other than a plain function");
+        if (unhandled != decl_flags::NONE || (d.attrs_body && !mod().body(*d.attrs_body).empty())) {
+            return comp_.unsupported(u_, src, "an extern declaration with attributes");
         }
 
-        return comp_.declare_extern(u_, decl, type);
+        if (type.get_kind() == gs::type_kind::FUNCTION) {
+            return comp_.declare_extern(u_, decl, type);
+        }
+        return declare_extern_global(decl, type);
     }
 
-    const bool comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
-    if ((d.flags & ~HANDLED_FLAGS) != decl_flags::NONE || comptime_mut ||
-        d.extern_target.len != 0 || d.link_name.len != 0) {
-        return comp_.unsupported(u_, src, "an extern, export, weak or comptime declaration");
+    const bool     comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
+    constexpr auto STORAGE_FLAGS{HANDLED_FLAGS | decl_flags::EXPORT | decl_flags::THREADLOCAL};
+    if ((d.flags & ~STORAGE_FLAGS) != decl_flags::NONE || comptime_mut ||
+        d.extern_target.len != 0) {
+        return comp_.unsupported(u_, src, "an extern or comptime declaration");
     }
 
     if (!d.value_body) { return comp_.unsupported(u_, src, "a declaration without a value"); }
@@ -642,8 +657,9 @@ auto analyzer::analyze_global(decl_id                        decl,
         return value;
     }
 
-    // An untyped `undefined` has nothing to store
-    if (!declared && type_of(value).get_kind() == gs::type_kind::UNDEFINED) { return value; }
+    // An `undefined` that isn't given a storable type has nothing to store
+    const bool undefined_type{!declared || declared->get_kind() == gs::type_kind::UNDEFINED};
+    if (undefined_type && type_of(value).get_kind() == gs::type_kind::UNDEFINED) { return value; }
     const auto stored{
         declared ? TRY(coerce_to(value, *declared, src, {.what = use_site::kind::STORE})) : value};
     const auto  index{*comptime_value(stored)};
@@ -660,11 +676,16 @@ auto analyzer::analyze_global(decl_id                        decl,
         return stored;
     }
 
-    // A ctor instance's scalar constant is folded wherever it is read
-    if (scope_ && scope_->in_call && !is_mutable && !is_aggregate) { return stored; }
+    // A ctor instance's constant is folded wherever it is read, an aggregate built at each read
+    if (scope_ && scope_->in_call && !is_mutable) { return stored; }
     const bool is_undefined{data.is<ip::undefined_value>()};
     const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
     const auto address{data.as_opt<ip::address_value>()};
+    if (address && !address->pointee.empty()) {
+        return comp_.unsupported(
+            u_, src, "a global holding the address of a value with no storage");
+    }
+
     const auto init_index{address && address->pointee.empty()
                               ? pool.intern(std::string{address->symbol}, type)
                               : index};
@@ -677,15 +698,42 @@ auto analyzer::analyze_global(decl_id                        decl,
                                             : stdx::option<gir::value>{constant(init_index, type)},
                                         compilation::linkage_of(d))};
     if (is_aggregate) { global.const_init.emplace(index); }
-    global.is_weak    = d.has(decl_flags::WEAK);
-    global.visibility = attrs.visibility;
-    global.alignment  = attrs.alignment;
+    if (d.link_name.len != 0) { global.link_name = std::string{mod().string(d.link_name)}; }
+    global.is_thread_local = d.has(decl_flags::THREADLOCAL);
+    global.is_weak         = d.has(decl_flags::WEAK);
+    global.visibility      = attrs.visibility;
+    global.alignment       = attrs.alignment;
     comp_.note_storage(u_, decl);
     // A string array is read where the global stores it
     if (!is_mutable && !is_aggregate && !text_array) { return stored; }
-    const auto& symbol{comp_.own_symbol(u_, decl, global.name)};
-    if (!is_mutable) { return global_const{.symbol = &symbol, .type = &type, .value = index}; }
-    return global_ref{&symbol, &type};
+    const auto symbol{comp_.lasting_name(global.name)};
+    if (!is_mutable) { return global_const{.symbol = symbol, .type = &type, .value = index}; }
+    return global_ref{symbol, &type};
+}
+
+auto analyzer::declare_extern_global(decl_id decl, gs::type& type) -> result<operand> {
+    const auto&       d{mod().decl_at(decl)};
+    const std::string name{mod().string(d.name)};
+    const auto        target{d.extern_target.len != 0 ? std::string{mod().string(d.extern_target)}
+                                                      : std::string{"c"}};
+
+    // Modules declaring the same extern global share one declaration
+    for (const auto existing : comp_.gir().get_globals()) {
+        if (existing->name == name && existing->linkage == gir::linkage::EXTERN) {
+            comp_.note_storage(u_, decl);
+            return global_ref{comp_.lasting_name(existing->name), &type};
+        }
+    }
+
+    auto& global{comp_.gir().add_global(
+        name, type, !d.has(decl_flags::MUT), stdx::none, gir::linkage::EXTERN, target)};
+    global.link_name       = d.link_name.len != 0 ? std::string{mod().string(d.link_name)} : name;
+    global.is_thread_local = d.has(decl_flags::THREADLOCAL);
+    global.is_weak         = d.has(decl_flags::WEAK);
+    comp_.note_storage(u_, decl);
+
+    // Its value is the linker's, so every read loads it
+    return global_ref{comp_.lasting_name(global.name), &type};
 }
 
 } // namespace ghoti::uir::sema

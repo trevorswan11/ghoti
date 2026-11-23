@@ -283,7 +283,8 @@ auto analyzer::coerce_to_dyn(const operand& op, gs::type& target, const source& 
         operand{gir::value{builder_.emit_load(gir::value{slot, *dyn}, target), target}}};
 }
 
-auto analyzer::call_dyn(const operand&       object,
+auto analyzer::call_dyn(inst_id              call,
+                        const operand&       object,
                         std::string_view     name,
                         gsl::span<const ref> args,
                         const source&        src) -> result<stdx::option<operand>> {
@@ -330,31 +331,18 @@ auto analyzer::call_dyn(const operand&       object,
             fmt::format("Expected {} arguments, found {}", params.size() - 1, args.size()));
     }
 
-    std::vector<gir::value> values;
     TRY(require_runtime(src));
-    auto& ctx{comp_.ctx()};
-    auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
-                                     ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
-    // A field holding the `dyn` is read from where it lives
-    const auto fat{[&] -> result<gir::value> {
-        if (const auto p{object.as_opt<place>()}) { return read(*p, src); }
-        return as_runtime(object, src);
-    }()};
-    if (!fat) { return stdx::err{fat.error()}; }
-    const auto spilled{builder_.emit_alloca(*dyn)};
-    builder_.emit_store(gir::value{spilled, *dyn}, *fat);
-    const auto data_at{builder_.emit_get_element_ptr(
-        gir::value{spilled, *dyn}, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
-    const auto table_at{builder_.emit_get_element_ptr(
-        gir::value{spilled, *dyn}, {usize_constant(DYN_VTABLE_FIELD)}, opaque_ptr)};
-    const auto data{builder_.emit_load(gir::value{data_at, opaque_ptr}, opaque_ptr)};
-    const auto table{builder_.emit_load(gir::value{table_at, opaque_ptr}, opaque_ptr)};
     const auto index{static_cast<u64>(slot - methods.begin())};
-    const auto entry_at{builder_.emit_get_element_ptr(
-        gir::value{table, opaque_ptr}, {usize_constant(index)}, opaque_ptr)};
-    const auto entry{builder_.emit_load(gir::value{entry_at, opaque_ptr}, opaque_ptr)};
+    const auto loaded{[&] -> result<dyn_entry> {
+        if (const auto found{dyn_entries_.find(call)}; found != dyn_entries_.end()) {
+            return found->second;
+        }
 
-    values.emplace_back(data, opaque_ptr);
+        return load_dyn_entry(object, *dyn, index, src);
+    }()};
+    if (!loaded) { return stdx::err{loaded.error()}; }
+    std::vector<gir::value> values;
+    values.emplace_back(loaded->data);
     for (usize i{0}; i < args.size(); ++i) {
         record_reader p{m, m.data_of(params[i + 1]).pl.extra};
         p.skip_str();
@@ -369,10 +357,58 @@ auto analyzer::call_dyn(const operand&       object,
     }
 
     auto&      ret_type{*TRY(sig.eval_type(ret, m.src_of(slot->func)))};
-    const auto result{
-        builder_.emit_indirect_call(gir::value{entry, opaque_ptr}, std::move(values), ret_type)};
+    const auto result{builder_.emit_indirect_call(loaded->entry, std::move(values), ret_type)};
     if (!result) { return stdx::option<operand>{void_value()}; }
     return stdx::option<operand>{operand{gir::value{*result, ret_type}}};
+}
+
+auto analyzer::load_dyn_entry(const operand& object, gs::type& dyn, u64 index, const source& src)
+    -> result<dyn_entry> {
+    auto& ctx{comp_.ctx()};
+    auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
+                                     ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
+    // A field holding the `dyn` is read from where it lives
+    const auto fat{TRY([&] -> result<gir::value> {
+        if (const auto p{object.as_opt<place>()}) { return read(*p, src); }
+        return as_runtime(object, src);
+    }())};
+    const auto spilled{builder_.emit_alloca(dyn)};
+    builder_.emit_store(gir::value{spilled, dyn}, fat);
+    const auto data_at{builder_.emit_get_element_ptr(
+        gir::value{spilled, dyn}, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
+    const auto table_at{builder_.emit_get_element_ptr(
+        gir::value{spilled, dyn}, {usize_constant(DYN_VTABLE_FIELD)}, opaque_ptr)};
+    const auto data{builder_.emit_load(gir::value{data_at, opaque_ptr}, opaque_ptr)};
+    const auto table{builder_.emit_load(gir::value{table_at, opaque_ptr}, opaque_ptr)};
+    const auto entry_at{builder_.emit_get_element_ptr(
+        gir::value{table, opaque_ptr}, {usize_constant(index)}, opaque_ptr)};
+    const auto entry{builder_.emit_load(gir::value{entry_at, opaque_ptr}, opaque_ptr)};
+    return dyn_entry{.data = gir::value{data, opaque_ptr}, .entry = gir::value{entry, opaque_ptr}};
+}
+
+void analyzer::prepare_dyn_call(inst_id call) {
+    auto       rec{record(call)};
+    const auto object_ref{*rec.ref_field()};
+    const auto object_inst{as_inst(object_ref)};
+    if (object_inst && !values_.contains(*object_inst)) { return; }
+    const auto object{resolve(object_ref, src_of(call))};
+    if (!object) { return; }
+    const auto dyn{dyn_behind(type_of(*object))};
+    if (!dyn || is_comptime()) { return; }
+    const auto name{rec.str_field()};
+    rec.skip_u32();
+    if (rec.ref_field()) { return; }
+
+    // Only a call the vtable can make is prepared, so a bad one still reports at the call
+    const auto iface{comp_.nominal_of(dyn->get_data().as<gs::types::dyn_t>().interface)};
+    if (!iface || comp_.method_has_defaults(*iface, name)) { return; }
+    const auto methods{comp_.interface_methods(*iface)};
+    const auto slot{std::ranges::find(methods, name, &interface_method::name)};
+    if (slot == methods.end()) { return; }
+    const auto index{static_cast<u64>(slot - methods.begin())};
+    if (const auto loaded{load_dyn_entry(*object, *dyn, index, src_of(call))}) {
+        dyn_entries_.insert_or_assign(call, *loaded);
+    }
 }
 
 } // namespace ghoti::uir::sema

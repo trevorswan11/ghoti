@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -183,6 +184,41 @@ auto analyzer::analyze_function() -> result<void> {
 }
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
+    // A `dyn` receiver's vtable entry is loaded before the call's arguments
+    if (!is_comptime()) {
+        for (const auto inst : body) {
+            // A call an `if` tests is tried at compile time before it is emitted
+            if (mod().tag_of(inst) == tag::condbr || mod().tag_of(inst) == tag::condbr_comptime) {
+                auto rec{record(inst)};
+                auto cond{as_inst(*rec.ref_field())};
+
+                // `!f()` tests the call it negates
+                if (cond && mod().tag_of(*cond) == tag::bool_not) {
+                    cond = as_inst(mod().data_of(*cond).un.operand);
+                }
+
+                if (cond && std::ranges::contains(body, *cond) &&
+                    (mod().tag_of(*cond) == tag::call || mod().tag_of(*cond) == tag::field_call)) {
+                    tested_calls_.insert(*cond);
+                    if (mod().tag_of(inst) == tag::condbr_comptime) {
+                        comptime_tests_.insert(*cond);
+                    }
+                }
+                continue;
+            }
+
+            if (mod().tag_of(inst) != tag::field_call) { continue; }
+            auto rec{record(inst)};
+            rec.skip_ref().skip_str().skip_u32().skip_ref().skip_refs();
+            DISCARD(rec.words_field());
+            const auto start{rec.u32_field()};
+            const auto first{static_cast<inst_id>(start - 1)};
+            if (start != 0 && std::ranges::contains(body, first)) {
+                dyn_receivers_.insert_or_assign(first, inst);
+            }
+        }
+    }
+
     for (const auto inst : body) {
         if (mod().tag_of(inst) == tag::str) { continue; }
         if (mod().tag_of(inst) == tag::yield) {
@@ -191,9 +227,14 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
         }
 
         if (!is_comptime()) { start_bool_ops(inst); }
-        auto value{analyze_inst(inst)};
+        if (const auto call{dyn_receivers_.find(inst)}; call != dyn_receivers_.end()) {
+            prepare_dyn_call(call->second);
+        }
+
+        auto value{tested_calls_.contains(inst) ? tested_call(inst) : analyze_inst(inst)};
         if (!value) {
-            // A failed instruction poisons only what uses it, so later root causes still report
+            failed_.insert(inst);
+            // A failed instruction poisons only what uses it so later root causes still report
             if (value.error() == stop::UNSUPPORTED || is_comptime()) {
                 return stdx::err{value.error()};
             }
@@ -216,6 +257,25 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
     }
 
     return flow{};
+}
+
+auto analyzer::tested_call(inst_id inst) -> result<operand> {
+    // A call an `if` tests on known arguments folds when it can (or must) run at compile time
+    if (!comptime_tests_.contains(inst) && !operands_known(inst)) { return analyze_inst(inst); }
+    const auto before{comp_.speculate()};
+
+    // Run again like an analyzed instruction so operands are read at comptime too
+    values_.insert_or_assign(inst, operand{gir::value{}});
+    const auto folded{[&] {
+        const auto scope{comptime_scope()};
+        return reevaluate(inst_ref(inst), src_of(inst));
+    }()};
+    values_.erase(inst);
+    const auto known{folded ? comptime_value(*folded) : stdx::none};
+    if (known && !comp_.constants().is_type(*known)) { return operand{*known}; }
+
+    comp_.abandon(before, false);
+    return analyze_inst(inst);
 }
 
 auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
@@ -315,6 +375,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::field_ptr:       return analyze_field_ptr(inst);
     case tag::elem_val:        return analyze_elem_val(inst);
     case tag::elem_ptr:        return analyze_elem_ptr(inst);
+    case tag::asm_expr:        return analyze_asm(inst);
     case tag::ref_of:          return analyze_ref_of(inst, false);
     case tag::address_of:      return analyze_ref_of(inst, true);
     case tag::deref:           return analyze_deref(inst);
@@ -347,12 +408,16 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
 
     if (found == values_.end()) {
         // A failed instruction left no value, and its failure was already reported
-        if (std::to_underlying(inst) < mod().instruction_count() && !is_comptime()) {
+        if (std::to_underlying(inst) < mod().instruction_count() &&
+            (!is_comptime() || failed_.contains(inst))) {
             return stdx::err{stop::POISON};
         }
 
         return comp_.unsupported(u_, src, "a value from another body");
     }
+
+    // A signature's runtime parameter is a placeholder whose type alone `@TypeOf` may ask
+    if (only_types_ && found->second.is<gir::value>()) { return found->second; }
 
     // A comptime read of a runtime value runs what computed it again, at compile time
     if (is_comptime() && (found->second.is<gir::value>() || found->second.is<merge_ref>() ||
@@ -419,7 +484,8 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [](const place& p) -> gs::type& { return *p.pointee; },
         [&](merge_ref m) -> gs::type& { return type_of(merges_[m.index].arrivals.front().value); },
         [](const global_ref& g) -> gs::type& { return *g.type; },
-        [&](comptime_place p) -> gs::type& {
+        [&](const comptime_place& p) -> gs::type& {
+            if (!p.path.empty()) { return *p.path.back().type; }
             return comp_.alloc_at(p).type.value_or(builtin(gs::type_kind::UNDEFINED));
         },
         [](const slot_value& s) -> gs::type& { return *s.type; },
@@ -429,7 +495,8 @@ auto analyzer::type_of(const operand& op) -> gs::type& {
         [&](const module_ref&) -> gs::type& { return builtin(gs::type_kind::VOID_); },
         [&](cast_ref) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
         [&](pack_ref) -> gs::type& { return builtin(gs::type_kind::VOID_); },
-        [&](implicit_call) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
+        [&](implicit_call) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); },
+        [&](slice_literal) -> gs::type& { return builtin(gs::type_kind::UNDEFINED); });
 }
 
 auto analyzer::denoted_type(const operand& op, const source& src)

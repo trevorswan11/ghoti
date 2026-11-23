@@ -168,7 +168,8 @@ constexpr std::array FIELD_CALL{field{REF, "object"},
                                 field{U32, "flags", {}, RANGE_FLAGS},
                                 field{REF, "modifier"},
                                 field{REFS, "args"},
-                                field{WORDS, "pack_mask"}};
+                                field{WORDS, "pack_mask"},
+                                field{U32, "args_start"}};
 constexpr std::array BUILTIN{field{U32, "builtin", {}, {}, describe_builtin}, field{REFS, "args"}};
 constexpr std::array TYPE_OF{field{LIST, "operands", OPERAND_BODY_ITEMS}};
 constexpr std::array ASM{field{STR, "template"},

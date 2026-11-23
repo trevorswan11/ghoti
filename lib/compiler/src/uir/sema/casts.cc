@@ -45,7 +45,8 @@ using syntax::builtin_t;
     case builtin_t::FROM_BACKING_INT:
     case builtin_t::INT_FROM_FLOAT:
     case builtin_t::FLOAT_FROM_INT:
-    case builtin_t::FLOAT_CAST:       return true;
+    case builtin_t::FLOAT_CAST:
+    case builtin_t::SPLAT:            return true;
     default:                          return false;
     }
 }
@@ -188,6 +189,24 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
 
     auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
+
+    if (which != builtin_t::SPLAT && (gs::is_vector(from) || gs::is_vector(target))) {
+        return comp_.unsupported(u_, src, "a cast of a vector");
+    }
+
+    // `@splat` puts its operand in every lane of the vector it is used as
+    if (which == builtin_t::SPLAT) {
+        if (!gs::is_vector(target)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("'@splat' needs a vector result; found '{}'",
+                                            comp_.ctx().type_display_name(target)));
+        }
+
+        return splat(value, target, src);
+    }
+
     const auto operand_src{cast_operand_src(inst, operand_ref)};
     const auto mismatch{[&](std::string message) -> stdx::err<stop> {
         return comp_.report(u_, src, gs::error::TYPE_MISMATCH, std::move(message));
@@ -420,31 +439,118 @@ auto analyzer::check_bit_cast(const gs::type& from, const gs::type& target, cons
     }
 
     // An untyped float has the bit pattern of an `f64`, an untyped integer takes the target's
-    auto&       ctx{comp_.ctx()};
     const auto& source_type{
         from.get_kind() == gs::type_kind::COMPTIME_FLOAT ? builtin(gs::type_kind::F64) : from};
     if (from.get_kind() == gs::type_kind::COMPTIME_INT) { return {}; }
-    if (!has_fixed_bit_layout(source_type) || !has_fixed_bit_layout(target)) {
-        return comp_.unsupported(u_, src, "a `@bitCast` of an aggregate, vector or enum");
+    const auto from_bits{bit_width(source_type)};
+    const auto to_bits{bit_width(target)};
+    if (!from_bits || !to_bits) {
+        return comp_.unsupported(u_, src, "a `@bitCast` of a struct, vector or enum");
     }
 
-    const auto layout{codegen::type_layout::resolve(ctx.target_opts.triple_str)};
-    const auto from_size{gir::size_of(source_type, layout)};
-    const auto to_size{gir::size_of(target, layout)};
-    if (from_size != to_size) {
+    // Widths are compared in bits, since an `f80` and a `u80` may be padded apart
+    if (*from_bits != *to_bits) {
+        const bool bytes{*from_bits % 8 == 0 && *to_bits % 8 == 0};
+        const auto unit{bytes ? "byte(s)" : "bit(s)"};
         return comp_.report(
             u_,
             src,
             gs::error::TYPE_MISMATCH,
-            fmt::format("`@bitCast` requires equally sized types; '{}' is {} byte(s) but '{}' "
-                        "is {} byte(s)",
+            fmt::format("`@bitCast` requires equally sized types; '{}' is {} {} but '{}' is {} {}",
                         display(source_type),
-                        from_size,
+                        bytes ? *from_bits / 8 : *from_bits,
+                        unit,
                         display(target),
-                        to_size));
+                        bytes ? *to_bits / 8 : *to_bits,
+                        unit));
     }
 
     return {};
+}
+
+auto analyzer::bit_width(const gs::type& t) const -> stdx::option<u64> {
+    if (const auto arr{t.get_data().as_opt<gs::types::array>()}) {
+        // Elements lie end to end only when each fills its storage exactly
+        const auto elem{bit_width(arr->underlying)};
+        const auto layout{codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str)};
+        if (!elem || arr->null_terminated || *elem != gir::size_of(arr->underlying, layout) * 8) {
+            return stdx::none;
+        }
+
+        return *elem * arr->len;
+    }
+
+    if (!has_fixed_bit_layout(t)) { return stdx::none; }
+    if (const auto format{gs::float_format_of(t)}) { return format_info(*format).storage_bits; }
+    if (t.get_kind() == gs::type_kind::BOOL) { return u64{8}; }
+    if (t.get_kind() == gs::type_kind::POINTER) { return u64{comp_.ptr_bits()}; }
+    return u64{domain_of(t).bits};
+}
+
+auto analyzer::bits_of(ip::index value, const gs::type& type, const source& src) -> result<u128> {
+    auto&      pool{comp_.constants()};
+    const auto data{pool.value_at(value).data};
+    if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        const auto width{*bit_width(arr->underlying)};
+        const auto agg{data.as_opt<ip::aggregate_value>()};
+        const auto text{data.as_opt<std::string>()};
+        u128       out{0};
+        for (usize i{0}; i < arr->len; ++i) {
+            u128 element{0};
+            if (agg && i < agg->elements.size() && agg->elements[i]) {
+                element = TRY(bits_of(*agg->elements[i], arr->underlying, src));
+            } else if (text && i < text->size()) {
+                element = static_cast<u8>((*text)[i]);
+            } else {
+                return comp_.unsupported(u_, src, "a `@bitCast` of an undefined element");
+            }
+            out |= element << (i * width);
+        }
+        return out;
+    }
+
+    if (const auto b{data.as_opt<bool>()}) { return u128{*b ? 1U : 0U}; }
+    if (const auto number{data.as_opt<f128>()}) {
+        return number->encode(*gs::float_format_of(type));
+    }
+
+    if (const auto exact{int_of(pool.value_at(value))}) {
+        const auto domain{domain_of(type)};
+        const auto low{exact->to_i128() ? static_cast<u128>(*exact->to_i128()) : *exact->to_u128()};
+        return domain.bits >= 128 ? low : low & ((u128{1} << domain.bits) - 1);
+    }
+
+    return comp_.unsupported(u_, src, "a `@bitCast` of this value at compile time");
+}
+
+auto analyzer::value_of_bits(u128 bits, gs::type& type, const source& src) -> result<ip::index> {
+    auto& pool{comp_.constants()};
+    if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        const auto                           width{*bit_width(arr->underlying)};
+        const auto                           mask{width >= 128 ? ~u128{0} : (u128{1} << width) - 1};
+        std::vector<stdx::option<ip::index>> elements;
+        for (usize i{0}; i < arr->len; ++i) {
+            elements.emplace_back(
+                TRY(value_of_bits((bits >> (i * width)) & mask, arr->underlying, src)));
+        }
+        return pool.intern(ip::aggregate_value{std::move(elements)}, type);
+    }
+
+    if (type.get_kind() == gs::type_kind::BOOL) { return pool.intern(bits != 0, type); }
+    if (const auto format{gs::float_format_of(type)}) {
+        return gir::value::constant(pool, f128::decode(bits, *format), type).constant_index();
+    }
+
+    if (gs::is_integer(type.get_kind()) && folds_exactly(type)) {
+        const auto domain{domain_of(type)};
+        const auto kept{gir::semantics::truncate_int(domain, bits)};
+        return intern_int(pool,
+                          domain.is_signed ? big_int{gir::semantics::signed_value(kept, domain)}
+                                           : big_int{gir::semantics::unsigned_value(kept, domain)},
+                          type);
+    }
+
+    return comp_.unsupported(u_, src, "a `@bitCast` to this type at compile time");
 }
 
 auto analyzer::fold_cast(builtin_t       which,
@@ -521,6 +627,18 @@ auto analyzer::fold_cast(builtin_t       which,
         return pool.intern(static_cast<i64>(*small), target);
     }
     case builtin_t::BIT_CAST: {
+        // An array reinterprets its elements' bits end to end, as little-endian memory holds them
+        if (from.get_kind() == gs::type_kind::ARRAY || target.get_kind() == gs::type_kind::ARRAY) {
+            const auto facts{codegen::target_facts::resolve(ctx.target_opts.triple_str)};
+            const auto width{bit_width(target)};
+            if (facts.endian != "little" || !width || *width > 128) {
+                return comp_.unsupported(u_, src, "this `@bitCast` of an array at compile time");
+            }
+
+            const auto bits{TRY(bits_of(index, from, src))};
+            return operand{TRY(value_of_bits(bits, target, src))};
+        }
+
         // An untyped integer takes the target's width, an untyped float an `f64`'s pattern
         const gs::type& source_type{
             from.get_kind() == gs::type_kind::COMPTIME_FLOAT ? builtin(gs::type_kind::F64) : from};
@@ -598,6 +716,15 @@ auto analyzer::fold_cast(builtin_t       which,
 
         return pool.intern(static_cast<u64>(*address), target);
     }
+    case builtin_t::PTR_CAST: {
+        // A known address keeps what it points at under its new type
+        if (const auto address{v.data.as_opt<ip::address_value>()}) {
+            return pool.intern(ip::address_value{*address}, target);
+        }
+
+        if (v.data.is<ip::nullptr_value>()) { return pool.intern(ip::nullptr_value{}, target); }
+        break;
+    }
     default: break;
     }
 
@@ -664,8 +791,22 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
                                             : ""));
         }
 
-        // The old emitter folds a known address only where an immutable `let` takes it
-        if (known) { return comp_.unsupported(u_, src, "an `@intFromPtr` of a known address"); }
+        // A known address has no number at compile time
+        if (known) {
+            // An address made from an integer is that integer, read at runtime in a function
+            if (const auto number{int_of(pool.value_at(*known))}) {
+                if (!is_comptime()) {
+                    return cast_value(instruction_kind::INT_FROM_PTR,
+                                      constant(*known, from),
+                                      builtin(gs::type_kind::USIZE));
+                }
+
+                return operand{intern_int(pool, *number, builtin(gs::type_kind::USIZE))};
+            }
+
+            if (is_comptime()) { return comp_.needs_runtime(u_, src); }
+            return comp_.unsupported(u_, src, "an `@intFromPtr` of a known address");
+        }
 
         TRY(require_runtime(src));
         return cast_value(instruction_kind::INT_FROM_PTR,

@@ -67,33 +67,6 @@ namespace {
 // method `self` stays visible inside it
 constexpr std::string_view CLOSURE_ENV_BINDING{"#env"};
 
-// Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
-[[nodiscard]] auto rewrite_asm_template(std::string_view src) -> std::string {
-    std::string out;
-    out.reserve(src.size());
-    for (usize i{0}; i < src.size(); ++i) {
-        const char c{src[i]};
-        if (c == '$') {
-            out += "$$";
-            continue;
-        }
-        if (c == '%' && i + 1 < src.size()) {
-            const char next{src[i + 1]};
-            if (next == '%') {
-                out += '%';
-                ++i;
-                continue;
-            }
-            if (next >= '0' && next <= '9') {
-                out += '$';
-                continue;
-            }
-        }
-        out += c;
-    }
-    return out;
-}
-
 } // namespace
 
 auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
@@ -4676,7 +4649,7 @@ auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
     info.is_noreturn   = node.has_option(ast::asm_expr::option::NORETURN);
     info.align_stack   = node.has_option(ast::asm_expr::option::ALIGN_STACK);
     info.intel_dialect = node.has_option(ast::asm_expr::option::INTEL);
-    info.tmpl = rewrite_asm_template(active_ast().get_as<ast::string_expr>(node.tmpl).value);
+    info.tmpl          = asm_template(active_ast().get_as<ast::string_expr>(node.tmpl).value);
 
     // Constraint list: outputs, then inputs, then clobbers
     std::vector<std::string> pieces;

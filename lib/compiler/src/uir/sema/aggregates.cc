@@ -146,6 +146,10 @@ auto compilation::lasting_name(std::string_view name) -> std::string_view {
     return {chars.data(), chars.size()};
 }
 
+auto compilation::nominal_number(const gs::type& t) -> usize {
+    return t.get_symbol_table_idx() - NOMINAL_TABLE_BASE;
+}
+
 auto compilation::existing_nominal(const unit& u, inst_id inst) -> stdx::option<nominal&> {
     const nominal_key key{.unit = u.index, .inst = inst, .args = {}};
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {

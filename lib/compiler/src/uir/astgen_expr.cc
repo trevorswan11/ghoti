@@ -407,8 +407,18 @@ auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::assignment_expr& node) -> ref {
-    const auto target{place(node.lhs, use::MUTATE, true)};
     const auto op{id.get_token_type()};
+
+    // `a[i..j] = v` takes the range apart before the source is computed, like `@memmove`
+    if (const auto index{ast_.get_as_opt<ast::index_expr>(node.lhs)};
+        index && index->index.is<ast::range_expr>() &&
+        !syntax::token_type::get_compound_base_op(op)) {
+        const auto view{add_un(tag::mem_view, expr(node.lhs), 1, id)};
+        DISCARD(add_bin(tag::store, view, expr(node.rhs), id));
+        return to_ref(well_known::void_value);
+    }
+
+    const auto target{place(node.lhs, use::MUTATE, true)};
     ref        value{};
     if (const auto base{syntax::token_type::get_compound_base_op(op)}) {
         const auto current{target.is_place ? add_un(tag::load, target.value, 0, id) : target.value};
@@ -447,7 +457,10 @@ auto astgen::call(source src, source_location, const ast::call_expr& node) -> re
     const auto modifier{optional_expr(node.modifier)};
     if (const auto dot{ast_.get_as_opt<ast::dot_expr>(callee)}) {
         const auto object{place(dot->object, use::PLACE)};
+        // The first instruction the arguments lower to, offset by one so zero means none
+        const auto before{out_.instruction_count()};
         auto [args, mask]{call_args(node)};
+        const u32 args_start{out_.instruction_count() > before ? before + 1 : 0};
         return add_pl(tag::field_call,
                       writer()
                           .ref_field(object.value)
@@ -455,7 +468,8 @@ auto astgen::call(source src, source_location, const ast::call_expr& node) -> re
                           .u32_field(object.is_place ? flags::PLACE : 0U)
                           .ref_field(modifier)
                           .refs_field(args)
-                          .words_field(mask),
+                          .words_field(mask)
+                          .u32_field(args_start),
                       src);
     }
     const auto function{expr(node.function)};
@@ -1094,15 +1108,16 @@ auto astgen::lower_node(ast::node_id id, const ast::asm_expr& node) -> ref {
     const auto result_type{optional_type(node.result_type)};
     const auto constraint{
         [this](ast::string_handle s) { return ast_.get_as<ast::string_expr>(s).value; }};
+    // Inputs are computed before the outputs' places
+    std::vector<std::pair<std::string_view, stdx::option<ref>>> inputs;
+    for (const auto& op : node.inputs) {
+        inputs.emplace_back(constraint(op.constraint), optional_expr(op.value));
+    }
     std::vector<std::pair<std::string_view, stdx::option<ref>>> outputs;
     for (const auto& op : node.outputs) {
         outputs.emplace_back(constraint(op.constraint),
                              op.value ? stdx::option<ref>{place(*op.value, use::MUTATE).value}
                                       : stdx::none);
-    }
-    std::vector<std::pair<std::string_view, stdx::option<ref>>> inputs;
-    for (const auto& op : node.inputs) {
-        inputs.emplace_back(constraint(op.constraint), optional_expr(op.value));
     }
     u32 options{0};
     for (const auto opt : node.options) { options |= 1U << static_cast<u32>(opt); }
