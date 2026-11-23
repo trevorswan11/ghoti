@@ -72,6 +72,7 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::ALIGN_OF:                 return builtin_layout(args, src, false);
     case builtin_t::LLVM_INTRINSIC:           return builtin_llvm_intrinsic(args, src);
     case builtin_t::RETURN_ADDRESS:           return builtin_return_address(src);
+    case builtin_t::FN_CTX:                   return builtin_fn_ctx(src);
     case builtin_t::ENTRY_MAIN:               return builtin_entry_main(src);
     case builtin_t::EXPECT:                   return builtin_expect(args, src, false);
     case builtin_t::REQUIRE:                  return builtin_expect(args, src, true);

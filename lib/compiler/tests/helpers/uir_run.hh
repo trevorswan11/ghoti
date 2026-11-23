@@ -69,9 +69,9 @@ class uir_run {
         return text.str();
     }
 
-  private:
     [[nodiscard]] auto pool() const -> ip::pool& { return run_->analyzer->get_ctx().pool.intern(); }
 
+  private:
     [[nodiscard]] auto root_index(std::string_view name) const -> ip::index {
         const auto found{out().root_values.find(std::string{name})};
         if (found == out().root_values.end()) { FAIL(fmt::format("'{}' has no value", name)); }

@@ -70,7 +70,7 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
 auto analyzer::store_comptime(const comptime_place& p, const operand& value, const source& src)
     -> result<void> {
     auto& alloc{comp_.alloc_at(p)};
-    if (alloc.frame != frame_) {
+    if (alloc.frame != frame_ && alloc.frame != env_frame_) {
         return comp_.unsupported(u_, src, "a store to another analysis's comptime allocation");
     }
 
@@ -231,6 +231,14 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
     auto init{TRY(resolve_value(init_ref, src))};
 
+    // A `let` of `&f` names the function, like a `let` of `f`
+    if (const auto init_inst{as_inst(init_ref)};
+        init_inst && mod().tag_of(*init_inst) == tag::ref_of && init.is<gir::value>()) {
+        record_reader ref_rec{record(*init_inst)};
+        const auto    target{TRY(resolve(*ref_rec.ref_field(), src))};
+        if (target.is<function_ref>()) { init = target; }
+    }
+
     // An immutable `let` of a known address's number holds that number
     if (const auto init_inst{as_inst(init_ref)};
         !is_comptime() && init_inst && mod().tag_of(*init_inst) == tag::builtin &&
@@ -248,7 +256,9 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
             comp_.abandon(before, false);
         }
     }
-    if (init.is<function_ref>()) {
+    // An immutable binding of a function names it, so calls through it stay direct
+    if (const auto fn{init.as_opt<function_ref>()}) {
+        if (!type_ref || names_function(*fn, *TRY(resolve_type(*type_ref, src)))) { return init; }
         return comp_.unsupported(u_, src, "a function bound to a `let`");
     }
 
@@ -300,7 +310,8 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     }()};
 
     // An aggregate binding keeps one address for every use, so it gets a slot of its own
-    if ((!gs::is_structural(type.get_kind()) && !place_reference) || value.is<merge_ref>()) {
+    if ((!gs::is_structural(type.get_kind()) && !type.is_generic_value() && !place_reference) ||
+        value.is<merge_ref>()) {
         return value;
     }
 
@@ -314,8 +325,10 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     // An immutable binding of a known value reads as that value at compile time
     const bool undefined_init{
         init_index && comp_.constants().value_at(*init_index).data.is<ip::undefined_value>()};
+    // A closure's environment is a body's `&mut self`, so its binding is always writable
     return slot_value{.address      = gir::value{slot, type},
                       .type         = &type,
+                      .is_mutable   = type.get_kind() == gs::type_kind::CLOSURE,
                       .known        = undefined_init ? stdx::none : comptime_value(value),
                       .global_value = init.is<global_const>()};
 }
@@ -328,6 +341,23 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     const auto  body{rec.body_field()};
     if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
     const auto& init_src{body.empty() ? src : src_of(body.back())};
+
+    // A function literal declares a local function, which a runtime body analyzes like a `let`
+    const auto literal{!body.empty() && mod().tag_of(body.back()) == tag::yield
+                           ? as_inst(mod().data_of(body.back()).un.operand)
+                           : stdx::none};
+    if (literal && !type_ref && gir_fn_ && !is_comptime() &&
+        (mod().tag_of(*literal) == tag::func || mod().tag_of(*literal) == tag::closure)) {
+        const auto out{TRY(analyze_body(body))};
+        if (out.yielded) {
+            const auto value{out.yielded->as_opt<gir::value>()};
+            if (!value || !value->type) { return *out.yielded; }
+            auto&      type{*value->type};
+            const auto slot{builder_.emit_alloca(type)};
+            builder_.emit_store(slot, *value).is_initializer = true;
+            return slot_value{.address = gir::value{slot, type}, .type = &type, .is_mutable = true};
+        }
+    }
 
     auto value{[&] {
         const auto scope{comptime_scope()};
@@ -343,10 +373,19 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
     const auto out{TRY(std::move(value))};
     if (jump_) { return comp_.unsupported(u_, src, "a jump out of a `const` initializer"); }
     if (!out.yielded) { return comp_.unsupported(u_, src, "a `const` body that doesn't yield"); }
-    if (out.yielded->is<function_ref>()) { return comp_.unsupported(u_, src, "a local function"); }
+
+    // A local function is its own name
+    auto yielded{*out.yielded};
+    if (yielded.is<generic_ref>() && !type_ref) { return yielded; }
+    if (const auto fn{yielded.as_opt<function_ref>()}) {
+        if (!type_ref || names_function(*fn, *TRY(resolve_type(*type_ref, src)))) {
+            return yielded;
+        }
+
+        return comp_.unsupported(u_, src, "a local function of another type");
+    }
 
     // An untyped literal takes the declared type before it can be known
-    auto yielded{*out.yielded};
     if (type_ref && is_untyped_literal(yielded)) {
         auto&      type{*TRY(resolve_type(*type_ref, src))};
         const auto scope{comptime_scope()};

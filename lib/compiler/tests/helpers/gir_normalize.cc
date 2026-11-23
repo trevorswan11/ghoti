@@ -146,10 +146,60 @@ struct module_dump {
     return best;
 }
 
+[[nodiscard]] constexpr auto is_hex(char c) noexcept -> bool {
+    return is_digit(c) || (c >= 'a' && c <= 'f');
+}
+
+// The next local function's symbol at or after `from`, `closureN`, `localfn.N` or
+// `anonymous_fnN` with any instance suffix, as its start and length
+[[nodiscard]] auto local_function_at(std::string_view text, usize from)
+    -> stdx::option<std::pair<usize, usize>> {
+    stdx::option<std::pair<usize, usize>> best;
+    for (const std::string_view prefix : {"closure", "localfn.", "anonymous_fn"}) {
+        for (auto at{text.find(prefix, from)}; at != std::string_view::npos;
+             at = text.find(prefix, at + 1)) {
+            // A monomorph's symbol spells a closure argument between underscores
+            if (at > 0 && is_mangle_char(text[at - 1]) && text[at - 1] != '_') { continue; }
+            usize end{at + prefix.size()};
+            while (end < text.size() && is_digit(text[end])) { ++end; }
+            if (end == at + prefix.size()) { continue; }
+            // The instance suffix, which a monomorph's symbol spells with an `x`
+            const bool dotted{end + 1 < text.size() && text[end] == '.' && is_hex(text[end + 1])};
+            const bool mangled{end + 17 <= text.size() && text[end] == 'x' &&
+                               std::ranges::all_of(text.substr(end + 1, 16), is_hex)};
+            if (dotted || mangled) {
+                ++end;
+                while (end < text.size() && is_hex(text[end])) { ++end; }
+            }
+
+            if (end < text.size() && is_mangle_char(text[end]) && text[end] != '_') { continue; }
+            if (!best || at < best->first) { best.emplace(at, end - at); }
+            break;
+        }
+    }
+
+    return best;
+}
+
+// The text with every local function's number erased, which orders functions alike
+[[nodiscard]] auto without_local_numbers(std::string_view text) -> std::string {
+    std::string out;
+    usize       at{0};
+    while (const auto found{local_function_at(text, at)}) {
+        const auto [start, len]{*found};
+        out += text.substr(at, start - at);
+        out += text.substr(start, 7) == "closure" ? "closure#" : "localfn.#";
+        at = start + len;
+    }
+
+    out += text.substr(at);
+    return out;
+}
+
 // A dump with every nominal type in a monomorph's symbol spelled `struct#`, every
 // parameterized impl's method prefix spelled `pimpl#`, and every vtable `__vtable.#`
 [[nodiscard]] auto erase_nominal_discriminators(std::string_view dump) -> std::string {
-    static constexpr std::array       KINDS{"_struct", "_union", "_enum"};
+    static constexpr std::array       KINDS{"_struct", "_union", "_enum", "_gfn"};
     static constexpr std::string_view IMPL_PREFIX{"pimpl"};
     static constexpr std::string_view VTABLE_PREFIX{"__vtable."};
 
@@ -189,6 +239,16 @@ struct module_dump {
                 i = end;
                 continue;
             }
+        }
+
+        // A generic instance's local generics are numbered by each pipeline's own count
+        if (stdx::string::substr(dump, i).starts_with("_i") && i > 0 &&
+            is_mangle_char(dump[i - 1]) && i + 18 <= dump.size() &&
+            std::ranges::all_of(stdx::string::substr(dump, i + 2, 16), is_hex) &&
+            (i + 18 == dump.size() || !is_mangle_char(dump[i + 18]) || dump[i + 18] == '_')) {
+            out += "_i#";
+            i += 18;
+            continue;
         }
 
         // A second same-named generic's instances are numbered by when each was first instantiated
@@ -1349,8 +1409,9 @@ auto normalize_gir(std::string_view dump) -> std::string {
 
     std::ranges::sort(mod.items);
 
-    // Functions whose erased symbols match are ordered by their bodies
-    std::vector<std::pair<std::string_view, std::string>> rendered;
+    // Functions whose erased symbols match are ordered by their bodies, local functions by
+    // their bodies alone
+    std::vector<std::pair<std::string, std::string>> rendered;
     for (const auto& fn : mod.functions) {
         std::string text{fmt::format("{}\n", fn.header)};
         for (const auto& seg : fn.segments) {
@@ -1359,7 +1420,9 @@ auto normalize_gir(std::string_view dump) -> std::string {
         }
 
         text += "\n";
-        rendered.emplace_back(sort_key(fn), std::move(text));
+        rendered.emplace_back(
+            fmt::format("{}\n{}", without_local_numbers(sort_key(fn)), without_local_numbers(text)),
+            std::move(text));
     }
 
     std::ranges::sort(rendered);
@@ -1369,11 +1432,11 @@ auto normalize_gir(std::string_view dump) -> std::string {
     // Hidden literal globals are numbered in the order Sema reaches them, so both sides are
     // renamed by where the sorted functions first use them
     ankerl::unordered_dense::map<std::string, std::string> renamed;
-    const auto rename{[&](const std::string& text, bool assign) {
+    const auto rename{[&](const std::string& text, bool assign, auto find, auto spell) {
         std::string out;
         usize       at{0};
         while (at < text.size()) {
-            const auto found{literal_global_at(text, at)};
+            const auto found{find(text, at)};
             if (!found) {
                 out += text.substr(at);
                 break;
@@ -1382,9 +1445,7 @@ auto normalize_gir(std::string_view dump) -> std::string {
             const auto [start, len]{*found};
             out += text.substr(at, start - at);
             const auto name{text.substr(start, len)};
-            if (assign && !renamed.contains(name)) {
-                renamed.emplace(name, fmt::format(".lit#{}", renamed.size()));
-            }
+            if (assign && !renamed.contains(name)) { renamed.emplace(name, spell(name)); }
 
             const auto it{renamed.find(name)};
             out += it == renamed.end() ? name : it->second;
@@ -1393,8 +1454,32 @@ auto normalize_gir(std::string_view dump) -> std::string {
 
         return out;
     }};
-    functions = rename(functions, true);
-    for (auto& item : mod.items) { item = rename(item, false); }
+    // A monomorph's symbol spells a local function's instance suffix with an `x`, not a `.`
+    const auto canonical{[](const std::string& text) {
+        std::string out{text};
+        usize       at{0};
+        while (const auto found{local_function_at(out, at)}) {
+            const auto [start, len]{*found};
+            const auto digits{
+                out.find_first_not_of("0123456789", out.find_first_of("0123456789", start))};
+            if (digits < start + len && out[digits] == 'x') { out[digits] = '.'; }
+            at = start + len;
+        }
+
+        return out;
+    }};
+    functions = canonical(functions);
+    const auto literal{[&](std::string_view) { return fmt::format(".lit#{}", renamed.size()); }};
+    const auto local{[&](std::string_view name) {
+        return fmt::format(
+            "{}{}", name.starts_with("closure") ? "closure#" : "localfn.#", renamed.size());
+    }};
+    functions = rename(functions, true, literal_global_at, literal);
+    functions = rename(functions, true, local_function_at, local);
+    for (auto& item : mod.items) {
+        item = rename(
+            rename(item, false, literal_global_at, literal), false, local_function_at, local);
+    }
     std::ranges::sort(mod.items);
 
     std::string out;

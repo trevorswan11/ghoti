@@ -72,9 +72,19 @@ auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) ->
     const auto&       errdefer{ast_.get_as<ast::errdefer_stmt>(entry.stmt)};
     const scope_guard scoped{*this, scope_kind::BLOCK};
     if (errdefer.capture && errdefer.capture->is<ast::identifier_expr>()) {
+        // `|&e|` and `|^e|` borrow the residual instead of copying it
+        auto       value{*residual};
+        const auto how{errdefer.modifier};
+        if (how.is_ref() || how.is_ptr()) {
+            const u32 bits{how.is_mutable_ref() || how.is_mutable_ptr() ? flags::MUT : 0U};
+            value = add_pl(how.is_ref() ? tag::ref_of : tag::address_of,
+                           writer().ref_field(value).u32_field(bits),
+                           ast::node_id{**errdefer.capture});
+        }
+
         DISCARD(declare(ast_.get_as<ast::identifier_expr>(**errdefer.capture).name,
                         location_of(**errdefer.capture),
-                        {.kind = binding_kind::VALUE, .value = *residual}));
+                        {.kind = binding_kind::VALUE, .value = value}));
     }
     DISCARD(stmt(errdefer.deferred));
 }

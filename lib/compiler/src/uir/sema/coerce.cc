@@ -504,7 +504,18 @@ auto analyzer::coerce_to(const operand&  op,
                t.get_kind() == gs::type_kind::AUTO ||
                (pointee && pointee->get_kind() == gs::type_kind::FUNCTION);
     }};
+    // A generic function's value holds nothing until it captures
+    if (const auto g{op.as_opt<generic_ref>()};
+        g && comp_.closure_generic(target).transform([&](const generic_fn& f) {
+            return &f == g->fn.get();
+        }) == stdx::option<bool>{true}) {
+        const auto value{comp_.constants().intern(ip::undefined_value{}, target)};
+        if (is_comptime()) { return operand{value}; }
+        return operand{constant(value, target)};
+    }
+
     if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
+        if (const auto erased{TRY(as_erased_callable(op, target, src))}) { return *erased; }
         return comp_.unsupported(u_, src, "a conversion between function types");
     }
 
@@ -622,6 +633,14 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
     if (typed.is<anon_init>() || typed.is<enum_literal>() || typed.is<implicit_call>()) {
         return comp_.unsupported(u_, src, "an untyped literal with no type to take");
+    }
+
+    // A function item's value is its code address, named by its symbol
+    if (const auto fn{typed.as_opt<function_ref>()}; fn && !fn->fn->env) {
+        TRY(require_runtime(src));
+        comp_.request_body(*fn->fn);
+        auto& type{*fn->fn->type};
+        return constant(comp_.constants().intern(fn->fn->symbol, type), type);
     }
 
     return comp_.unsupported(u_, src, "a function or place used as a runtime value");
