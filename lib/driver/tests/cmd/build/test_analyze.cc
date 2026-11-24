@@ -144,14 +144,21 @@ TEST_CASE("analyze --sema=uir runs UIR's Sema") {
         CHECK(errors.view().contains(fmt::format("{}:1:", path_utils::display(src_file.path))));
     }
 
-    SECTION("A test build needs the entry code, which UIR Sema can't analyze yet") {
+    SECTION("A test build analyzes its tests with the entry code that runs them") {
         tempfile src_file{"test_analyze_uir_test.gh"};
-        write_source(src_file, "test \"t\" {}\n");
+        tempfile gir_file{"test_analyze_uir_test.gir"};
+        write_source(src_file, "test \"t\" { @expect(true); }\n");
 
-        std::ostringstream errors;
-        cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, true, errors};
-        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
-        CHECK(errors.view().contains("can't build an executable or tests yet"));
+        cmd::analyze_cmd cmd{{
+                                 .input_path    = src_file,
+                                 .emit_gir_path = gir_file,
+                                 .sema_uir      = true,
+                             },
+                             true};
+        REQUIRE(cmd.execute());
+        const auto gir{slurp(gir_file.path)};
+        CHECK(gir.contains("test \"t\""));
+        CHECK(gir.contains("@testFunctions"));
     }
 }
 

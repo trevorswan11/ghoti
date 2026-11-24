@@ -357,6 +357,7 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::store:           return analyze_store(inst);
     case tag::load:            return analyze_load(inst);
     case tag::discard:         return analyze_discard(inst);
+    case tag::unused:          return analyze_unused(inst);
 
     case tag::block:           return analyze_block(inst);
     case tag::block_comptime:  return analyze_block_comptime(inst);

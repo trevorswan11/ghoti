@@ -37,12 +37,19 @@ constexpr std::string_view STORE_UNDER_RUNTIME{
 
 } // namespace
 
+auto analyzer::local_alignment(gsl::span<const inst_id> attrs) -> result<stdx::option<u64>> {
+    if (attrs.empty()) { return stdx::none; }
+    const auto resolved{TRY(fold_attributes(
+        attrs, {.target = ast::attribute_target::DECL, .returns_void = false, .declared_by = {}}))};
+    return resolved.alignment;
+}
+
 auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     rec.skip_str();
-    const auto type_ref{written_type_of(rec.ref_field())};
-    if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
+    const auto              type_ref{written_type_of(rec.ref_field())};
+    const auto              alignment{TRY(local_alignment(rec.body_field()))};
     stdx::option<gs::type&> type;
     if (type_ref) { type.emplace(*TRY(resolve_type(*type_ref, src))); }
 
@@ -58,12 +65,14 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
     }
 
     if (!type) {
+        if (alignment) { return comp_.unsupported(u_, src, "an aligned `let mut` with no type"); }
+
         // The first store gives an untyped `let mut` its type
         return place{
             .address = {}, .pointee = &builtin(gs::type_kind::UNDEFINED), .is_mutable = true};
     }
 
-    const auto slot{builder_.emit_alloca(*type)};
+    const auto slot{builder_.emit_alloca(*type, {}, false, alignment)};
     return place{.address = gir::value{slot, *type}, .pointee = type.get(), .is_mutable = true};
 }
 
@@ -457,8 +466,8 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     rec.skip_str();
     const auto type_ref{written_type_of(rec.ref_field())};
     const auto init_ref{*rec.ref_field()};
-    if (!rec.body_field().empty()) { return comp_.unsupported(u_, src, "a local's attributes"); }
-    auto init{TRY(resolve_value(init_ref, src))};
+    const auto alignment{TRY(local_alignment(rec.body_field()))};
+    auto       init{TRY(resolve_value(init_ref, src))};
 
     // A `let` of `&f` names the function, like a `let` of `f`
     if (const auto init_inst{as_inst(init_ref)};
@@ -552,14 +561,16 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
                 pointee->get_kind() == gs::type_kind::ENUM);
     }()};
 
-    // An aggregate binding keeps one address for every use, so it gets a slot of its own
-    if ((!gs::is_structural(type.get_kind()) && !type.is_generic_value() && !place_reference) ||
-        value.is<merge_ref>()) {
+    // An aggregate binding keeps one address for every use, so it gets a slot of its own, as
+    // does an aligned one
+    if (!alignment &&
+        ((!gs::is_structural(type.get_kind()) && !type.is_generic_value() && !place_reference) ||
+         value.is<merge_ref>())) {
         return value;
     }
 
     // An `undefined` initializer leaves the fresh slot as it is
-    const auto slot{builder_.emit_alloca(type)};
+    const auto slot{builder_.emit_alloca(type, {}, false, alignment)};
     const auto init_index{comptime_value(init)};
     if (!init_index || !comp_.constants().value_at(*init_index).data.is<ip::undefined_value>()) {
         builder_.emit_store(slot, TRY(as_runtime(value, src))).is_initializer = true;
@@ -569,10 +580,10 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     const bool undefined_init{
         init_index && comp_.constants().value_at(*init_index).data.is<ip::undefined_value>()};
     // A closure's environment is a body's `&mut self`, so its binding is always writable
-    return slot_value{.address      = gir::value{slot, type},
-                      .type         = &type,
-                      .is_mutable   = type.get_kind() == gs::type_kind::CLOSURE,
-                      .known        = undefined_init ? stdx::none : comptime_value(value),
+    return slot_value{.address    = gir::value{slot, type},
+                      .type       = &type,
+                      .is_mutable = type.get_kind() == gs::type_kind::CLOSURE,
+                      .known = undefined_init || alignment ? stdx::none : comptime_value(value),
                       .global_value = init.is<global_const>()};
 }
 
@@ -838,7 +849,8 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
     -> result<operand> {
     const auto global{value.as_opt<global_ref>()};
     if (!global) {
-        if (as_place) {
+        // A module-level `comptime let mut` is a place already
+        if (as_place && !value.is<comptime_place>()) {
             return comp_.unsupported(u_, src, "a place on a non-`let mut` declaration");
         }
 

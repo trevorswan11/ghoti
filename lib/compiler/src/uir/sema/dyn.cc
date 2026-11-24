@@ -68,7 +68,7 @@ auto compilation::interface_methods(const nominal& iface) -> std::vector<interfa
         const auto name{rec.str_field()};
         rec.skip_u32();
         const auto signature{rec.body_field()};
-        rec.skip_body();
+        const auto attrs{rec.body_field()};
         const auto yielded{signature.empty() || m.tag_of(signature.back()) != tag::yield
                                ? stdx::none
                                : as_inst(m.data_of(signature.back()).un.operand)};
@@ -80,11 +80,11 @@ auto compilation::interface_methods(const nominal& iface) -> std::vector<interfa
             const auto    func{as_inst(*closure.ref_field())};
             if (!func) { continue; }
             methods.emplace_back<interface_method>(
-                {.name = name, .func = *func, .closure = *yielded});
+                {.name = name, .func = *func, .closure = *yielded, .attrs = attrs});
             continue;
         }
 
-        methods.emplace_back<interface_method>({.name = name, .func = *yielded});
+        methods.emplace_back<interface_method>({.name = name, .func = *yielded, .attrs = attrs});
     }
 
     return methods;

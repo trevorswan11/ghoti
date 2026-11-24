@@ -75,6 +75,11 @@ class comptime_run {
         return run_->analyzer->get_ctx().type_display_name(*value(name).type);
     }
 
+    // The function the program exports as `main`, or `main` itself
+    [[nodiscard]] auto main_name() const -> std::string_view {
+        return run_->analyzer->get_ctx().user_main_name;
+    }
+
     [[nodiscard]] auto has_value(std::string_view name) const -> bool {
         return out().root_values.contains(std::string{name});
     }
@@ -468,9 +473,10 @@ TEST_CASE("Const eval @setEvalRecursionLimit in function scope", "[uir]") {
 }
 
 TEST_CASE("Const eval folds @export to void and the resolver names the entry point", "[uir]") {
-    check_later_phase(
-        R"(const custom_entry = fn(): void {}; const setup = @export(custom_entry, .{ .name = "main" });)",
-        "@export");
+    const auto run{accepted(
+        R"(const custom_entry = fn(): void {}; const setup = @export(custom_entry, .{ .name = "main" });)")};
+    CHECK(run.main_name() == "custom_entry");
+    CHECK(run.value_type_name("setup") == "void");
 }
 
 TEST_CASE("Const eval folds method call on struct instance", "[uir]") {
@@ -630,21 +636,61 @@ TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order", "
     CHECK(run.int_value("res") == 4'321);
 }
 
+constexpr std::string_view RESULT_WITH_IMPLS{R"(
+    const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+    impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+        const Output = T;
+        const Residual = E;
+        pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+            return match (self) {
+                .ok => |&mut? v| .{ .@"continue" = v },
+                .err => |e| .{ .@"break" = e },
+            };
+        };
+    }
+    impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+        const From = E;
+        pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
+    }
+    const R = Result(i32, i32);
+)"};
+
 TEST_CASE("`errdefer` in `const_eval`", "[uir]") {
-    check_later_phase(R"(
-        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
-        const R = Result(i32, i32);
+    check_later_phase(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
+        const fail = fn(): R { return R{ .err = 42 }; };
         comptime let mut err_log: i32 = 0;
         const test_err = fn(): R {
             errdefer |e| err_log = e;
-            return R{ .err = 42 };
+            let v = fail()?;
+            return R{ .ok = v };
         };
-    )",
-                      "comptime declaration");
+        const _dummy = test_err();
+        const final_log = err_log;
+    )"),
+                      "an unwrap at compile time");
 }
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir]") {
-    check_later_phase("comptime let mut ref_log: i32 = 0;", "comptime declaration");
+    check_later_phase(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
+        const fail = fn(): R { return R{ .err = 77 }; };
+        comptime let mut ref_log: i32 = 0;
+        const test_ref = fn(): R {
+            errdefer |&e| ref_log = e;
+            let v = fail()?;
+            return R{ .ok = v };
+        };
+        comptime let mut ptr_log: i32 = 0;
+        const test_ptr = fn(): R {
+            errdefer |^p| ptr_log = *p;
+            let v = fail()?;
+            return R{ .ok = v };
+        };
+        const _r = test_ref();
+        const _p = test_ptr();
+        const final_ref = ref_log;
+        const final_ptr = ptr_log;
+    )"),
+                      "an unwrap at compile time");
 }
 
 TEST_CASE("A comptime store under a runtime condition is rejected", "[uir]") {

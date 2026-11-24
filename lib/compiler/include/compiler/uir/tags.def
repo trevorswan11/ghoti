@@ -108,6 +108,7 @@ UIR_TAG(ret, UN)
 UIR_TAG(yield, UN)                // the value of the body it ends
 UIR_TAG(match, PL)
 UIR_TAG(discard, UN)
+UIR_TAG(unused, UN)               // a statement's value, which must be void; aux: 1 for a call
 
 // Match patterns, which only appear in a match arm's pattern body
 UIR_TAG(pat_wildcard, NONE)

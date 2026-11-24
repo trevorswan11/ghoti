@@ -555,6 +555,34 @@ auto compilation::declare_extern(const unit& u, decl_id decl, gs::type& type) ->
     return function_ref{&fn};
 }
 
+auto analyzer::comptime_global(const decl& d, const source& src) -> result<operand> {
+    stdx::option<gs::type&> declared;
+    if (d.type_body) { declared.emplace(*TRY(eval_type(mod().body(d.type_body), src))); }
+
+    const auto scope{comptime_scope()};
+    auto       value{TRY(eval_comptime(mod().body(d.value_body)))};
+    if (declared) {
+        value = TRY(coerce_to(value, *declared, src, {.what = use_site::kind::STORE}));
+    }
+    const auto known{comptime_value(value)};
+    if (!known) {
+        return comp_.report_runtime_need(
+            u_, src, gs::error::COMPTIME_EVALUATION_FAILED, std::string{GLOBAL_CONSTANT});
+    }
+
+    // Any compile-time evaluation of the program may write it
+    auto place{comp_.new_alloc({
+        .type                = type_of(value),
+        .value               = *known,
+        .frame               = frame_,
+        .runtime_depth       = 0,
+        .keeps_comptime_type = true,
+        .lasting             = true,
+    })};
+    place.borrowed = true;
+    return place;
+}
+
 auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     PROFILE_FUNCTION();
     const auto& d{mod().decl_at(decl)};
@@ -569,24 +597,42 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         const auto unhandled{d.flags &
                              ~(HANDLED_FLAGS | decl_flags::EXTERN | decl_flags::THREADLOCAL)};
         auto&      type{*TRY(eval_type(mod().body(*d.type_body), src))};
-        if (unhandled != decl_flags::NONE || (d.attrs_body && !mod().body(*d.attrs_body).empty())) {
-            return comp_.unsupported(u_, src, "an extern declaration with attributes");
+        if (unhandled != decl_flags::NONE) {
+            return comp_.unsupported(u_, src, "an extern declaration with these modifiers");
         }
 
-        if (type.get_kind() == gs::type_kind::FUNCTION) {
-            return comp_.declare_extern(u_, decl, type);
+        if (type.get_kind() != gs::type_kind::FUNCTION) {
+            const auto value{TRY(declare_extern_global(decl, type))};
+            const auto attrs{TRY(decl_attributes(d, value))};
+            const auto symbol{value.as<global_ref>().symbol};
+            for (auto g : comp_.gir().get_globals()) {
+                if (g->name != symbol) { continue; }
+                g->visibility = attrs.visibility;
+                g->alignment  = attrs.alignment;
+            }
+            return value;
         }
-        return declare_extern_global(decl, type);
+
+        // Its attributes are the declaration's, for the linker and for `@typeInfo`
+        const auto value{TRY(comp_.declare_extern(u_, decl, type))};
+        auto&      fn{*value.as<function_ref>().fn};
+        fn.attributes = TRY(decl_attributes(d, value));
+        for (auto gir_fn : comp_.gir().get_functions()) {
+            if (gir_fn->get_name() == fn.symbol && gir_fn->get_linkage() == gir::linkage::EXTERN) {
+                gir_fn->set_attributes(*fn.attributes);
+            }
+        }
+        return value;
     }
 
     const bool     comptime_mut{d.has(decl_flags::COMPTIME) && d.has(decl_flags::MUT)};
     constexpr auto STORAGE_FLAGS{HANDLED_FLAGS | decl_flags::EXPORT | decl_flags::THREADLOCAL};
-    if ((d.flags & ~STORAGE_FLAGS) != decl_flags::NONE || comptime_mut ||
-        d.extern_target.len != 0) {
+    if ((d.flags & ~STORAGE_FLAGS) != decl_flags::NONE || d.extern_target.len != 0) {
         return comp_.unsupported(u_, src, "an extern or comptime declaration");
     }
 
     if (!d.value_body) { return comp_.unsupported(u_, src, "a declaration without a value"); }
+    if (comptime_mut) { return comptime_global(d, src); }
 
     stdx::option<gs::type&> declared;
     bool                    infers{false};
@@ -697,9 +743,11 @@ auto analyzer::analyze_global(decl_id                        decl,
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
 
-        // Only a module-level alias is listed, by its name alone since it claims no symbol
+        // Only a module-level alias is listed, by its name alone since it claims no symbol, and
+        // never one of `type` itself
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
-        if (!declared && !declares_type(d) && module_level && !comp_.is_prelude(u_)) {
+        const bool of_type{pool.type_at(*constant_index).get_kind() == gs::type_kind::TYPE};
+        if (!declared && !declares_type(d) && module_level && !of_type && !comp_.is_prelude(u_)) {
             comp_.gir().add_type(std::string{mod().string(d.name)}, pool.type_at(*constant_index));
         }
 

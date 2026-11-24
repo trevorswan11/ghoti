@@ -119,6 +119,7 @@ auto compilation::run() -> outcome {
     PROFILE_FUNCTION();
     analyze_roots();
     if (!stopped_at_) { drain_queue(); }
+    apply_exports();
 
     outcome out{
         .gir         = stdx::none,
@@ -145,6 +146,7 @@ auto compilation::analyze_roots() -> void {
     }
 
     // TODO: Every non-generic declaration of every module is a root until lazy builds land
+    const auto tested{ctx_.testing ? test_units() : std::vector<bool>(units_.size(), false)};
     for (const auto& u : units_) {
         if (prelude_unit_ && u.index == *prelude_unit_) { continue; }
         for (const auto decl : u.uir->root_namespace().decls) {
@@ -163,18 +165,18 @@ auto compilation::analyze_roots() -> void {
             }
             case decl_kind::IMPORT: break;
             case decl_kind::TEST:
-                if (ctx_.testing) { DISCARD(unsupported(u, *d.node, "a `test` block")); }
+                if (ctx_.testing && tested[u.index]) { analyze_test(u, decl); }
                 break;
             case decl_kind::IMPL:     analyze_impl_roots(u, decl); break;
             case decl_kind::COMPTIME: {
-                // A top-level statement is only resolved by the old pipeline, never run
+                // A top-level statement is checked but never run
                 const auto body{u.uir->body(d.value_body)};
+                analyzer   block{*this, u};
                 if (!u.source->ast.get_as_opt<ast::block_stmt>(*d.node)) {
-                    DISCARD(unsupported(u, *d.node, "a top-level statement"));
+                    DISCARD(block.analyze_unemitted(body));
                     break;
                 }
 
-                analyzer block{*this, u};
                 DISCARD(block.eval_comptime(body));
                 break;
             }
@@ -268,6 +270,9 @@ auto compilation::analyze_body(instance& fn) -> result<void> {
     }
 
     gir_fn.set_weak(fn.weak);
+    if (const auto& d{fn.owner->uir->decl_at(fn.decl)}; d.link_name.len != 0) {
+        gir_fn.set_link_name(std::string{fn.owner->uir->string(d.link_name)});
+    }
     if (!fn.source_name.empty()) { gir_fn.set_source_name(fn.source_name); }
     analyzer   a{*this, *fn.owner, fn, gir_fn};
     const auto analyzed{a.analyze_function()};

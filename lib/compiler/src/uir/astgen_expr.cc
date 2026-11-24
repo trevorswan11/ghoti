@@ -649,11 +649,17 @@ auto astgen::value_body(ast::expr_handle h) -> std::vector<inst_id> {
     return body;
 }
 
-auto astgen::arm_value(ast::stmt_handle arm) -> std::vector<inst_id> {
+auto astgen::arm_value(ast::stmt_handle arm, bool discarded) -> std::vector<inst_id> {
     std::vector<inst_id> body;
     const body_guard     guard{*this, body};
     const ast::node_id   id{arm};
     if (const auto expr_stmt{ast_.get_as_opt<ast::expr_stmt>(id)}) {
+        if (discarded) {
+            statement_expr(expr_stmt->expression, id);
+            yields(to_ref(well_known::void_value), id);
+            return body;
+        }
+
         yields(expr(expr_stmt->expression), id);
         return body;
     }
@@ -682,11 +688,12 @@ auto astgen::bind_capture(const ast::capture_t& capture, u32 slot, source src) -
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
+    const bool statement{std::exchange(statement_arms_, false)};
     if (node.is_evaluation_context_branch()) {
-        const auto           comptime_arm{arm_value(node.consequence)};
+        const auto           comptime_arm{arm_value(node.consequence, statement)};
         std::vector<inst_id> runtime_arm;
         if (node.alternate) {
-            runtime_arm = arm_value(*node.alternate);
+            runtime_arm = arm_value(*node.alternate, statement);
         } else {
             const body_guard guard{*this, runtime_arm};
             yields(to_ref(well_known::void_value), id);
@@ -698,12 +705,12 @@ auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
     const auto condition{expr(*node.condition)};
     const auto captured_arm{
         [&](const stdx::option<ast::capture_t>& capture, ast::stmt_handle arm, u32 slot) {
-            if (!capture) { return arm_value(arm); }
+            if (!capture) { return arm_value(arm, statement); }
             std::vector<inst_id> body;
             const body_guard     guard{*this, body};
             const scope_guard    scoped{*this, scope_kind::BLOCK};
             bind_capture(*capture, slot, id);
-            auto inner{arm_value(arm)};
+            auto inner{arm_value(arm, statement)};
             body.insert(body.end(), inner.begin(), inner.end());
             return body;
         }};
@@ -723,8 +730,8 @@ auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
                       id);
     }
     const prunable_guard prunable{*this, node.comptime_condition};
-    const auto           then_arm{arm_value(node.consequence)};
-    const auto           else_arm{node.alternate ? arm_value(*node.alternate) : void_arm()};
+    const auto           then_arm{arm_value(node.consequence, statement)};
+    const auto else_arm{node.alternate ? arm_value(*node.alternate, statement) : void_arm()};
     return add_pl(node.comptime_condition ? tag::condbr_comptime : tag::condbr,
                   writer().ref_field(condition).body_field(then_arm).body_field(else_arm),
                   id);
@@ -818,6 +825,7 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
+    const bool statement{std::exchange(statement_arms_, false)};
     // A capture by reference aliases a field, element or pointee where it lives
     const bool         aliases{std::ranges::any_of(node.arms, [](const auto& arm) {
         return arm.capture && (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr());
@@ -881,7 +889,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
             }
         }
         if (arm.guard) { record.guard = value_body(*arm.guard); }
-        record.body = arm_value(arm.dispatch);
+        record.body = arm_value(arm.dispatch, statement);
         arms.emplace_back(std::move(record));
     }
 

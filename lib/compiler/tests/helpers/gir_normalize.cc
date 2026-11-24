@@ -280,8 +280,28 @@ struct module_dump {
     return out;
 }
 
-// A field or element address with no mutability in its type, which only Sema reads
+// A call through a function's own symbol as a constant is the direct call it amounts to
+[[nodiscard]] auto as_direct_call(std::string inst) -> std::string {
+    const auto at{inst.find("call \"")};
+    if (at == std::string::npos) { return inst; }
+    const auto name_at{at + 6};
+    const auto close{inst.find("\"(", name_at)};
+    if (close == std::string::npos) { return inst; }
+    const auto name{inst.substr(name_at, close - name_at)};
+    if (name.empty() || name.find_first_of(" \"") != std::string::npos) { return inst; }
+    return inst.substr(0, at) + "call @" + name + inst.substr(close + 1);
+}
+
+// A field or element address with no mutability in its type, which only Sema reads. A callable
+// made from a function's code doesn't write through it either
 [[nodiscard]] auto without_address_mutability(std::string_view inst) -> std::string {
+    constexpr std::string_view MUTABLE_CALLABLE{"make_callable ^mut fn"};
+    if (const auto callable{inst.find(MUTABLE_CALLABLE)}; callable != std::string_view::npos) {
+        return fmt::format("{}make_callable ^fn{}",
+                           stdx::string::substr(inst, 0, callable),
+                           stdx::string::substr(inst, callable + MUTABLE_CALLABLE.size()));
+    }
+
     const auto at{inst.find("get_element_ptr ")};
     if (at == std::string_view::npos) { return std::string{inst}; }
     const auto type_start{at + std::string_view{"get_element_ptr "}.size()};
@@ -1394,7 +1414,9 @@ auto normalize_gir(std::string_view dump) -> std::string {
     auto mod{parse(erase_nominal_discriminators(joined_string_lines(dump)))};
     for (auto& fn : mod.functions) {
         for (auto& seg : fn.segments) {
-            for (auto& inst : seg.instructions) { inst = without_address_mutability(inst); }
+            for (auto& inst : seg.instructions) {
+                inst = as_direct_call(without_address_mutability(inst));
+            }
         }
 
         // Merging segments exposes more to fold, so both passes run again on the merged form

@@ -237,6 +237,8 @@ struct comptime_alloc {
     // The runtime branches around its declaration, which a store may not add to
     u32  runtime_depth;
     bool keeps_comptime_type;
+    // A module-level `comptime let mut`, kept when the analysis that made it ends
+    bool lasting{false};
 };
 
 struct memo_key;
@@ -553,6 +555,7 @@ struct interface_method {
     inst_id          func;
     // The closure over the interface's associated items a method that reads them is lowered to
     stdx::option<inst_id> closure{};
+    gsl::span<const inst_id> attrs{};
 };
 
 struct impl_key {
@@ -610,6 +613,17 @@ struct scoped_names {
 };
 
 class analyzer;
+
+// A function `@export` defines under another symbol
+struct function_export {
+    gsl::not_null<instance*> fn;
+    std::string              name;
+    bool                     weak{false};
+    ast::symbol_visibility   visibility{ast::symbol_visibility::DEFAULT};
+    source_location          site;
+    // Exported by the program's entry code, whose C `main` stands in for the program's
+    bool from_start{false};
+};
 
 class compilation {
   public:
@@ -699,6 +713,25 @@ class compilation {
     [[nodiscard]] auto
     declare_function(const unit& u, decl_id decl, inst_id func, const member_context& member = {})
         -> result<operand>;
+    // Entry (entry.cc)
+    // Records an `@export`, reporting a symbol already exported by another function
+    [[nodiscard]] auto add_export(const unit& u, function_export exported, const source& src)
+        -> result<void>;
+    // Gives each exported function its symbol and aliases
+    auto apply_exports() -> void;
+    // The program's root module and its entry code, when it is attached
+    [[nodiscard]] auto root_unit() const -> const unit&;
+    [[nodiscard]] auto start_unit() const -> stdx::option<const unit&>;
+    [[nodiscard]] auto units() const noexcept -> gsl::span<const unit> { return units_; }
+    // A module-level declaration of `u` named `name`, analyzed
+    [[nodiscard]] auto named_decl(const unit& u, std::string_view name, const source& use)
+        -> stdx::option<result<operand>>;
+    // Whether a call to `fn` may drop its result
+    [[nodiscard]] auto is_discardable(instance& fn) -> bool;
+    // Per unit, whether the test build runs its tests
+    [[nodiscard]] auto test_units() const -> std::vector<bool>;
+    // Analyzes a `test` block into a test function
+    auto analyze_test(const unit& u, decl_id decl) -> void;
     // Modules (modules.cc)
     // The module an import of `u` loads, reached through the name `name`
     [[nodiscard]] auto
@@ -824,7 +857,9 @@ class compilation {
         return static_cast<u32>(allocs_.size());
     }
     // Drops the allocations from `base` on, once the analysis that made them ends
-    auto release_allocs(u32 base) -> void { allocs_.resize(base); }
+    auto release_allocs(u32 base) -> void {
+        while (allocs_.size() > base && !allocs_.back().lasting) { allocs_.pop_back(); }
+    }
     // A store makes impure every call in progress that didn't make the allocation
     auto               note_store(const comptime_place& p) -> void;
     [[nodiscard]] auto next_frame() noexcept -> u32 { return next_frame_++; }
@@ -1017,6 +1052,9 @@ class compilation {
     std::vector<std::pair<u32, decl_id>> naming_;
     ankerl::unordered_dense::map<std::string, std::vector<std::pair<u32, inst_id>>>
         generic_versions_;
+    std::vector<function_export> exports_;
+    u32                          tests_{0};
+    u32                          anonymous_tests_{0};
 };
 
 // The result of analyzing a body: the value it yields, or none when control left it
@@ -1064,6 +1102,10 @@ class analyzer {
 
     // A comptime body's yielded value
     [[nodiscard]] auto eval_comptime(gsl::span<const inst_id> body) -> result<operand>;
+    // `body` analyzed into a function no one emits, so nothing in it runs
+    [[nodiscard]] auto analyze_unemitted(gsl::span<const inst_id> body) -> result<flow>;
+    // A `test` block's body, which passes when it reaches its end
+    [[nodiscard]] auto analyze_test(gsl::span<const inst_id> body) -> result<void>;
     // Runs the function's body at compile time on arguments of its parameter types
     [[nodiscard]] auto eval_call(gsl::span<const ip::index> args) -> result<operand>;
     // A type body's denoted type
@@ -1078,6 +1120,11 @@ class analyzer {
     [[nodiscard]] auto bind_comptime_param(inst_id param, ip::index value) -> result<void>;
     // A module-level declaration's value, emitting its GIR global when it has one
     [[nodiscard]] auto analyze_decl(decl_id decl) -> result<operand>;
+    // A module-level `comptime let mut`, a compile-time allocation of its own
+    [[nodiscard]] auto comptime_global(const decl& d, const source& src) -> result<operand>;
+    // The alignment a local's attributes give its slot
+    [[nodiscard]] auto local_alignment(gsl::span<const inst_id> attrs)
+        -> result<stdx::option<u64>>;
     // A global the linker provides, declared with its type alone
     [[nodiscard]] auto declare_extern_global(decl_id decl, gs::type& type) -> result<operand>;
     // Resolves a nominal type's fields, or an enum's values
@@ -1985,6 +2032,23 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto builtin_compile_error(gsl::span<const ref> args, const source& src)
         -> result<operand>;
+    [[nodiscard]] auto builtin_export(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_src(const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_entry_test_runner(const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_test_functions(const source& src) -> result<operand>;
+    // Reports an entry builtin used outside the program's entry code
+    [[nodiscard]] auto require_start(std::string_view name, const source& src) -> result<void>;
+    // A statement's value, which must be void or a `@[discardable]` call's
+    [[nodiscard]] auto analyze_unused(inst_id inst) -> result<operand>;
+    // A failed `@expect` reports and goes on, a failed `@require` stops
+    [[nodiscard]] auto comptime_expect(gsl::span<const ref> args, const source& src, bool require)
+        -> result<operand>;
+    [[nodiscard]] auto builtin_skip(gsl::span<const ref> args, const source& src) -> result<operand>;
+    // The function an `@export` argument names, none for anything else
+    [[nodiscard]] auto export_target(ref arg, const source& src) -> result<stdx::option<instance&>>;
+    // The text a known string constant holds
+    [[nodiscard]] auto known_text(ip::index value) -> stdx::option<std::string>;
     [[nodiscard]] auto builtin_limit(gsl::span<const ref> args, const source& src, bool recursion)
         -> result<operand>;
     [[nodiscard]] auto builtin_layout(gsl::span<const ref> args, const source& src, bool size)
@@ -2202,6 +2266,9 @@ class analyzer {
     stdx::option<gir::value> env_self_;
     // The frame whose compile-time memory a compile-time closure's body may store to
     stdx::option<u32>       env_frame_;
+    // The call instruction being analyzed, and the function each call reached
+    stdx::option<inst_id>                                           calling_;
+    ankerl::unordered_dense::map<inst_id, gsl::not_null<instance*>> callees_;
     stdx::option<nominal&>  scope_;
     stdx::option<gs::type&> self_type_;
     std::string             symbol_prefix_;

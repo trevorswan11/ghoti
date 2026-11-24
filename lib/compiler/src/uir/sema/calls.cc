@@ -26,6 +26,8 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto  modifier{rec.ref_field()};
     const auto  args{rec.refs_field()};
     const auto  pack_mask{rec.words_field()};
+    const auto  outer{std::exchange(calling_, inst)};
+    const auto  restore{gsl::finally([&] { calling_ = outer; })};
     return with_modifier(modifier, src, [&] -> result<operand> {
         const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
         const auto callee{TRY(resolve_value(callee_ref, src))};
@@ -184,6 +186,8 @@ auto analyzer::analyze_field_call(inst_id inst) -> result<operand> {
     const auto modifier{rec.ref_field()};
     const auto args{rec.refs_field()};
     const auto pack_mask{rec.words_field()};
+    const auto outer{std::exchange(calling_, inst)};
+    const auto restore{gsl::finally([&] { calling_ = outer; })};
     return with_modifier(modifier, src, [&] {
         return field_call_unmodified(inst, object_ref, name, args, pack_mask);
     });
@@ -337,6 +341,7 @@ auto analyzer::call_with(instance&            target,
                          const source&        src,
                          bool                 through_member) -> result<operand> {
     const auto env{std::exchange(call_env_, stdx::none)};
+    if (calling_) { callees_.insert_or_assign(*calling_, &target); }
     if (target.env && is_comptime()) { return comp_.needs_runtime(u_, src); }
     TRY(comp_.infer_return(target, u_, src));
     if (target.linkage == gir::linkage::EXTERN && is_comptime()) {
@@ -412,9 +417,6 @@ auto analyzer::call_with(instance&            target,
     comp_.request_body(target);
 
     auto& ret{*target.return_type};
-    if (ret.get_kind() == gs::type_kind::NORETURN) {
-        return comp_.unsupported(u_, src, "a call to a `noreturn` function");
-    }
 
     // A local generic's instance takes the environment first
     if (target.env && env) {
@@ -431,6 +433,10 @@ auto analyzer::call_with(instance&            target,
                   std::move(values),
                   ret)
             : builder_.emit_call(target.symbol, std::move(values), ret)};
+    if (ret.get_kind() == gs::type_kind::NORETURN) {
+        builder_.emit_unreachable();
+        return comp_.constants().intern(ip::undefined_value{}, ret);
+    }
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
 }

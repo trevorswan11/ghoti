@@ -22,7 +22,9 @@ auto test_cmd::execute() -> stdx::result<void, clap::error> {
     auto& analyzer{compilation.get_analyzer()};
 
     // A hand-written `test_runner` override must match the forced entry signature.
-    if (auto val_res{analyzer.validate_test_entry(*module)}; !val_res) {
+    if (auto val_res{opts_.sema_uir ? stdx::result<void, sema::diagnostic>{}
+                                    : analyzer.validate_test_entry(*module)};
+        !val_res) {
         fmt::println(error_stream_, "{}", val_res.error());
         return stdx::err{clap::error::COMPILATION_FAILED};
     }

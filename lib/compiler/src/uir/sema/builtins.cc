@@ -74,6 +74,11 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::RETURN_ADDRESS:           return builtin_return_address(src);
     case builtin_t::FN_CTX:                   return builtin_fn_ctx(src);
     case builtin_t::ENTRY_MAIN:               return builtin_entry_main(src);
+    case builtin_t::ENTRY_TEST_RUNNER:        return builtin_entry_test_runner(src);
+    case builtin_t::TEST_FUNCTIONS:           return builtin_test_functions(src);
+    case builtin_t::EXPORT:                   return builtin_export(args, src);
+    case builtin_t::SRC:                      return builtin_src(src);
+    case builtin_t::SKIP:                     return builtin_skip(args, src);
     case builtin_t::EXPECT:                   return builtin_expect(args, src, false);
     case builtin_t::REQUIRE:                  return builtin_expect(args, src, true);
     case builtin_t::ASSERT:                   return builtin_assert(args, src, false);
@@ -196,21 +201,25 @@ auto analyzer::unevaluated(gsl::span<const inst_id> body, const source& src) -> 
         return *out.yielded;
     }
 
+    const auto out{TRY(analyze_unemitted(body))};
+    if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
+    return *out.yielded;
+}
+
+auto analyzer::analyze_unemitted(gsl::span<const inst_id> body) -> result<flow> {
     gir::function scratch{
         comp_.ctx().arena, comp_.constants(), std::string{}, builtin(gs::type_kind::VOID_)};
     const auto outer_fn{gir_fn_};
     const auto outer_segment{builder_.get_segment()};
     const auto restore{gsl::finally([&] {
         gir_fn_ = outer_fn;
-        builder_.set_insert_point(*outer_fn, *outer_segment);
+        if (outer_fn && outer_segment) { builder_.set_insert_point(*outer_fn, *outer_segment); }
     })};
     const auto depth{std::exchange(comptime_depth_, 0)};
     const auto restore_depth{gsl::finally([&] { comptime_depth_ = depth; })};
     gir_fn_.emplace(scratch);
     builder_.set_insert_point(scratch, scratch.add_segment());
-    const auto out{TRY(analyze_body(body))};
-    if (!out.yielded) { return comp_.unsupported(u_, src, "an operand that doesn't yield"); }
-    return *out.yielded;
+    return analyze_body(body);
 }
 
 auto analyzer::builtin_compile_error(gsl::span<const ref> args, const source& src)
@@ -585,22 +594,6 @@ auto analyzer::builtin_field(gsl::span<const ref> args, const source& src) -> re
     return field_value(args[0], field_name, src, false);
 }
 
-auto analyzer::builtin_entry_main(const source& src) -> result<operand> {
-    if (!u_.source->is_start) {
-        return comp_.report(
-            u_,
-            src,
-            gs::error::TYPE_MISMATCH,
-            "'@entryMain()' is only valid in the program's entry code (`std/start.gh`)");
-    }
-
-    // A program analyzed without its entry code has no `main` to call, so its value is unknown
-    auto& ctx{comp_.ctx()};
-    auto& fn_type{ctx.get_function(
-        {}, builtin(gs::type_kind::VOID_), false, ast::calling_convention::C, false)};
-    return comp_.constants().intern(ip::undefined_value{}, fn_type);
-}
-
 auto analyzer::builtin_return_address(const source& src) -> result<operand> {
     TRY(require_runtime(src));
     auto&      usize_type{builtin(gs::type_kind::USIZE)};
@@ -622,6 +615,8 @@ auto analyzer::builtin_expect(gsl::span<const ref> args, const source& src, bool
     if (args.empty() || args.size() > 2) {
         return comp_.unsupported(u_, src, "an `@expect` of this arity");
     }
+
+    if (is_comptime()) { return comptime_expect(args, src, require); }
 
     auto&      ctx{comp_.ctx()};
     const auto cond{TRY(resolve_value(args.front(), src))};

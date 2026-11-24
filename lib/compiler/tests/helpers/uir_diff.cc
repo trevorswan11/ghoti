@@ -212,7 +212,9 @@ namespace {
     std::string                                    kept;
     std::map<std::string_view, usize, std::less<>> kept_copies;
     for (usize at{0}; at < legacy_text.size();) {
-        const auto next{legacy_text.find("\nfn ", at + 1)};
+        // A test function ends the one before it too
+        const auto next{
+            std::min(legacy_text.find("\nfn ", at + 1), legacy_text.find("\ntest \"", at + 1))};
         const auto end{next == std::string_view::npos ? legacy_text.size() : next + 1};
         const auto function{stdx::string::substr(legacy_text, at, end - at)};
         const auto header_end{function.find('(')};
@@ -227,7 +229,7 @@ namespace {
         const bool referenced{name.size() > 3 &&
                               legacy_text.find(fmt::format("@{}", name.substr(3))) !=
                                   std::string_view::npos};
-        const bool unused{absent && (on_demand || !referenced)};
+        const bool unused{!function.starts_with("test \"") && absent && (on_demand || !referenced)};
         // Instances whose names normalize alike count as unused when UIR has fewer of them
         const auto header{fmt::format("\n{}(", name)};
         const auto count{[&](std::string_view text) {
@@ -401,6 +403,10 @@ constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
     std::string_view{"a return type may instantiate a ctor that rejects an unbound `comptime T`"},
     std::string_view{"`++` concatenates two comptime integer arrays"},
     std::string_view{"`++` concatenates two function-local comptime array identifiers"},
+    // The old emitter runs a call whose string arguments are known at compile time, one instance
+    // per argument type
+    std::string_view{
+        "`eql`-shaped comptime fn: early length mismatch and content mismatch both fold correctly"},
 };
 
 [[nodiscard]] auto folds_local_aggregate() -> bool {
@@ -437,6 +443,7 @@ constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
 auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> void {
     analyzer.set_testing(settings.testing);
     analyzer.set_optimize_mode(settings.build_mode);
+    analyzer.set_entry_point(settings.entry && !settings.testing);
 }
 
 [[nodiscard]] auto make_manager(mod::source_loader& loader, library_list libraries)
@@ -456,7 +463,7 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
     sema::analyzer     analyzer{
         *modules, quiet, false, settings.target_opts, false, settings.runtime_safety};
     configure(analyzer, settings);
-    auto       gir_mod{analyzer.analyze(root)};
+    auto       gir_mod{analyzer.analyze(root, settings.entry && settings.testing)};
     const auto module{modules->try_get_file_module(root)};
     if (!gir_mod || !module || (*module)->is_errored() || (*module)->is_poisoned() ||
         modules->any_errored() || has_errors(analyzer.get_ctx().diags)) {
@@ -501,7 +508,8 @@ auto diff_pipelines(mod::source_loader&          loader,
                                 .modules        = *modules};
     const auto              root_mod{modules->try_get_file_module(root)};
     if (!root_mod) { return {.status = uir_diff_status::LEGACY_REJECTED}; }
-    const auto lowered{uir::lower_reachable(**root_mod, {.cfg = cfg, .modules = *modules})};
+    auto lowered{uir::lower_reachable(**root_mod, {.cfg = cfg, .modules = *modules})};
+    if (settings.entry) { REQUIRE(uir::lower_start({.cfg = cfg, .modules = *modules}, lowered)); }
     for (const auto& item : lowered) {
         if (!item.result.diagnostics.empty()) {
             return {.status = uir_diff_status::ASTGEN_FAILED,
@@ -595,7 +603,7 @@ auto run_uir_sema_files(mod::source_loader&          loader,
                                     codegen::target_facts::resolve(settings.target_opts.triple_str),
                                 .build_mode     = ctx.build_mode,
                                 .runtime_safety = ctx.runtime_safety,
-                                .testing        = false,
+                                .testing        = settings.testing,
                                 .modules        = *run->modules};
     run->lowered = uir::lower_reachable(**root, {.cfg = cfg, .modules = *run->modules});
     for (const auto& item : run->lowered) { REQUIRE(item.result.diagnostics.empty()); }

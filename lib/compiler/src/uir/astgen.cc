@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +31,7 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
+#include "compiler/module/stdlib.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
@@ -682,6 +685,35 @@ auto lower_reachable(mod::module_t& root, const astgen_context& cx) -> std::vect
         out.emplace_back<lowered_module>({next, std::move(lowered)});
     }
     return out;
+}
+
+auto lower_start(const astgen_context& cx, std::vector<lowered_module>& lowered)
+    -> stdx::result<void, std::string> {
+    const auto path{mod::find_start()};
+    if (!path) {
+        return stdx::err{std::string{"cannot find the program entry code `lib/std/start.gh`; set "
+                                     "GHOTI_START to its path"}};
+    }
+
+    std::ifstream file{*path, std::ios::binary};
+    if (!file) {
+        return stdx::err{fmt::format("cannot read the program entry code '{}'", path->string())};
+    }
+
+    const std::string source{std::istreambuf_iterator<char>{file}, {}};
+    auto&             start{cx.modules.get_or_create_start_module(*path, source)};
+    if (start.is_errored()) {
+        return stdx::err{
+            std::string{"the program entry code `lib/std/start.gh` failed to compile"}};
+    }
+
+    for (auto& item : lower_reachable(start, cx)) {
+        const bool known{std::ranges::any_of(
+            lowered, [&](const lowered_module& l) { return l.source == item.source; })};
+        if (!known) { lowered.emplace_back(std::move(item)); }
+    }
+
+    return {};
 }
 
 auto lower(const mod::module_t& mod, const astgen_context& cx)
