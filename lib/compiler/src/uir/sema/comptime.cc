@@ -226,6 +226,15 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
             continue;
         }
 
+        // A pack takes one argument per value it holds
+        if (binding && binding->pack_size) {
+            std::vector<operand> elements;
+            for (usize k{0}; k < *binding->pack_size; ++k) { elements.emplace_back(args[arg++]); }
+            values_.insert_or_assign(param, pack_ref{static_cast<u32>(packs_.size())});
+            packs_.emplace_back(std::move(elements));
+            continue;
+        }
+
         // A parameter the body writes lives in compile-time memory
         record_reader p{record(param)};
         p.skip_str().skip_body().skip_body();

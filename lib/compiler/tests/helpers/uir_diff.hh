@@ -28,6 +28,8 @@ struct pipeline_settings {
     bool                    runtime_safety{true};
     bool                    testing{false};
     sema::optimize_mode     build_mode{sema::optimize_mode::DEBUG};
+    // The program's entry code is attached, for an executable or, with `testing`, its tests
+    bool entry{false};
 };
 
 enum class uir_diff_status : u8 {

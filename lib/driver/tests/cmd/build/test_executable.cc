@@ -57,6 +57,29 @@ TEST_CASE("build_exe command execution") {
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
+    SECTION("UIR Sema builds an executable through the entry code") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_exe_uir.gh"};
+        tempfile            exe_file{"test_exe_uir_out"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                const fib = fn(n: i32): i32 {{ return if (n < 2) n else fib(n - 1) + fib(n - 2); }};
+                pub const main = fn(): i32 {{ return fib(10); }};
+            )");
+        }
+
+        cmd::build_exe cmd{{
+            .input_path  = src_file,
+            .output_path = exe_file,
+            .sema_uir    = true,
+        }};
+        REQUIRE(cmd.execute());
+        CHECK(path_utils::exists(exe_file));
+        CHECK(std::filesystem::file_size(exe_file) > 0);
+    }
+
     SECTION("Valid main returning i32 directly with @as(i32, args.len) compiles and emits "
             "executable file") {
         codegen::llvm_scope scope;

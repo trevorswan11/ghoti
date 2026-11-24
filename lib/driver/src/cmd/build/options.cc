@@ -290,6 +290,14 @@ auto compilation::run_astgen(bool for_test_executable)
     cfg.testing = cfg.testing || for_test_executable;
     auto lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = manager_})};
 
+    if (opts_.sema_uir && (for_test_executable || analyzer_.is_entry_point())) {
+        if (auto attached{uir::lower_start({.cfg = cfg, .modules = manager_}, lowered)};
+            !attached) {
+            return clap::fatal_error(
+                error_stream_, attached.error(), clap::error::COMPILATION_FAILED);
+        }
+    }
+
     if (opts_.emit_uir_path) {
         std::string text;
         for (const auto& item : lowered) {
@@ -326,15 +334,10 @@ auto compilation::run_astgen(bool for_test_executable)
 auto compilation::analyze_uir(gsl::span<const uir::lowered_module> lowered,
                               bool                                 for_test_executable)
     -> stdx::result<analyzed_module, clap::error> {
-    if (for_test_executable || analyzer_.is_entry_point()) {
-        return clap::fatal_error(error_stream_,
-                                 "--sema=uir can't build an executable or tests yet: the program "
-                                 "entry code needs compile-time reflection, which UIR's Sema "
-                                 "doesn't analyze yet",
-                                 clap::error::COMPILATION_FAILED);
-    }
+    auto& ctx{analyzer_.get_ctx()};
+    ctx.testing = ctx.testing || for_test_executable;
     auto root{*manager_.try_get_file_module(opts_.input_path)};
-    auto out{uir::sema::analyze(analyzer_.get_ctx(), {.root = root.get(), .modules = lowered})};
+    auto out{uir::sema::analyze(ctx, {.root = root.get(), .modules = lowered})};
     if (out.stopped_at) {
         const auto& at{*out.stopped_at};
         const auto  where{at.where ? fmt::format("{}:{}:{}",
@@ -514,8 +517,8 @@ auto setup_analysis_flags(CLI::App* subcmd, raw_options& opts) -> void {
     subcmd
         ->add_option("--sema",
                      opts.sema,
-                     "The semantic analysis pipeline: legacy (default), or uir, which stops after "
-                     "lowering until its Sema exists")
+                     "The semantic analysis pipeline: legacy (default), or uir, the new one, "
+                     "which stops at what it doesn't analyze yet")
         ->check(CLI::IsMember({"legacy", "uir"}))
         ->default_val(opts.sema);
 #endif

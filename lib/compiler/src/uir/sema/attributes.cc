@@ -159,6 +159,7 @@ auto analyzer::attribute_items(gsl::span<const inst_id> body)
     const auto                  scope{comptime_scope()};
     std::vector<attribute_item> items;
     for (const auto inst : body) {
+        if (mod().tag_of(inst) == tag::str) { continue; }
         if (mod().tag_of(inst) != tag::attribute) {
             TRY(prepare(inst));
             continue;

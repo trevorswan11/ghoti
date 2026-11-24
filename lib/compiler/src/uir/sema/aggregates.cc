@@ -497,11 +497,19 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         }
     }
 
+    // A builtin type has only the members impls add to it
     const auto n{comp_.nominal_of(owner)};
-    if (!n) { return comp_.unsupported(u_, src, "a member of a type UIR didn't declare"); }
+    if (!n) {
+        const auto impls{TRY(comp_.impls_of(owner))};
+        if (impls.empty()) {
+            return comp_.unsupported(u_, src, "a member of a type UIR didn't declare");
+        }
+    }
+
     // A use from another module is located at what it reaches in that module
-    const auto& owner_mod{*n->owner->uir};
-    if (const auto ns{owner_mod.namespace_of(n->inst)}) {
+    const auto ns{n ? n->owner->uir->namespace_of(n->inst) : stdx::option<const namespace_info&>{}};
+    if (ns) {
+        const auto& owner_mod{*n->owner->uir};
         for (const auto decl : ns->decls) {
             if (owner_mod.string(owner_mod.decl_at(decl).name) == name) {
                 const bool here{n->owner.get() == &u_};

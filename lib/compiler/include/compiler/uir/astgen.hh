@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include <gsl/pointers>
@@ -35,6 +36,10 @@ struct lowered_module {
 // Lowers `root` and every module it imports, directly or not, once each and in load order
 [[nodiscard]] auto lower_reachable(mod::module_t& root, const astgen_context& cx)
     -> std::vector<lowered_module>;
+
+// Tried to load the program's entry code `std/start.gh` and adds what it reaches to `lowered`
+[[nodiscard]] auto lower_start(const astgen_context& cx, std::vector<lowered_module>& lowered)
+    -> stdx::result<void, std::string>;
 
 // `lower_module`, failing with the diagnostics when there are any
 [[nodiscard]] auto lower(const mod::module_t& mod, const astgen_context& cx)

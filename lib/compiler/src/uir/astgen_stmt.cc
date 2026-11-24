@@ -25,7 +25,7 @@ auto astgen::stmt(ast::stmt_handle h) -> bool {
     case node_kind::DECL_STATEMENT: local_decl(id, ast_.get_as<ast::decl_stmt>(id)); return false;
     case node_kind::EXPRESSION_STATEMENT: {
         const auto expression{ast_.get_as<ast::expr_stmt>(id).expression};
-        DISCARD(expr(expression));
+        statement_expr(expression, id);
         return expression.is<ast::unreachable_expr>();
     }
     case node_kind::BLOCK_STATEMENT: {
@@ -263,6 +263,52 @@ auto astgen::return_stmt(ast::node_id id, const ast::return_stmt& node) -> void 
         return;
     }
     emit_return(id, value);
+}
+
+} // namespace ghoti::uir::detail
+
+namespace ghoti::uir::detail {
+
+namespace {
+
+[[nodiscard]] auto is_statement_form(const ast::AST& tree, ast::expr_handle expr) -> bool {
+    if (const auto cx{tree.get_as_opt<ast::comptime_expr>(expr)}) {
+        return is_statement_form(tree, cx->rhs);
+    }
+
+    switch (ast::node_id{expr}.get_kind()) {
+    case ast::node_kind::ASSIGNMENT_EXPRESSION:
+    case ast::node_kind::IF_EXPRESSION:
+    case ast::node_kind::MATCH_EXPRESSION:
+    case ast::node_kind::WHILE_LOOP_EXPRESSION:
+    case ast::node_kind::DO_WHILE_LOOP_EXPRESSION:
+    case ast::node_kind::FOR_LOOP_EXPRESSION:
+    case ast::node_kind::INFINITE_LOOP_EXPRESSION:
+    case ast::node_kind::LABEL_EXPRESSION:
+    case ast::node_kind::FUNCTION_EXPRESSION:
+    case ast::node_kind::STRUCT_EXPRESSION:
+    case ast::node_kind::UNION_EXPRESSION:
+    case ast::node_kind::ENUM_EXPRESSION:
+    case ast::node_kind::INTERFACE_EXPRESSION:     return true;
+    default:                                       return false;
+    }
+}
+
+} // namespace
+
+auto astgen::statement_expr(ast::expr_handle expression, ast::node_id at) -> void {
+    const ast::node_id id{expression};
+    statement_arms_ = id.any<ast::if_expr, ast::match_expr>();
+    const auto value{expr(expression)};
+    statement_arms_ = false;
+    if (is_statement_form(ast_, expression)) { return; }
+
+    // A builtin's result is its own to check, and a call's may be discardable
+    ast::node_id called{id};
+    if (const auto cx{ast_.get_as_opt<ast::comptime_expr>(called)}) { called = *cx->rhs; }
+    const auto call{ast_.get_as_opt<ast::call_expr>(called)};
+    if (call && ast::node_id{call->function}.get_builtin()) { return; }
+    DISCARD(add_un(tag::unused, value, call ? 1U : 0U, at));
 }
 
 } // namespace ghoti::uir::detail

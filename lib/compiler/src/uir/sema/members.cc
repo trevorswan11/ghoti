@@ -240,6 +240,10 @@ auto analyzer::receiver_type(const operand& object) -> stdx::option<gs::type&> {
     }
 
     if (comp_.nominal_of(type)) { return type; }
+
+    // A builtin type's methods come from the impls for it
+    const auto impls{comp_.impls_of(type)};
+    if (impls && !impls->empty()) { return type; }
     return stdx::none;
 }
 

@@ -168,23 +168,25 @@ decl#2 VALUE c CONSTANT
     }
 decl#3 VALUE f CONSTANT
     value {
-        %31 = func conv=C
+        %36 = func conv=C
             ret {
                 yield @void_type
             }
             body {
-                %24 = block
+                %27 = block
                     body {
                         %11 = decl_val decl#2
                         %12 = call callee=%11
-                        %21 = condbr cond=%12
+                        %23 = condbr cond=%12
                             then {
-                                %18 = block
+                                %20 = block
                                     body {
                                         %13 = decl_val decl#1
                                         %14 = call callee=%13
-                                        %15 = decl_val decl#0
-                                        %16 = call callee=%15
+                                        unused %14
+                                        %16 = decl_val decl#0
+                                        %17 = call callee=%16
+                                        unused %17
                                         ret @void_value
                                     }
                                 yield @void_value
@@ -192,19 +194,22 @@ decl#3 VALUE f CONSTANT
                             else {
                                 yield @void_value
                             }
-                        %22 = decl_val decl#1
-                        %23 = call callee=%22
+                        %24 = decl_val decl#1
+                        %25 = call callee=%24
+                        unused %25
                     }
-                %25 = loop
+                %28 = loop
                     body {
-                        %26 = decl_val decl#1
-                        %27 = call callee=%26
-                        break_to %25, @void_value
+                        %29 = decl_val decl#1
+                        %30 = call callee=%29
+                        unused %30
+                        break_to %28, @void_value
                     }
-                %29 = decl_val decl#0
-                %30 = call callee=%29
+                %33 = decl_val decl#0
+                %34 = call callee=%33
+                unused %34
             }
-        yield %31
+        yield %36
     }
 )");
 }
@@ -232,7 +237,7 @@ const f = fn(x: u8): u8 {
     }
 decl#1 VALUE f CONSTANT
     value {
-        %24 = func conv=C
+        %26 = func conv=C
             params {
                 %6 = param name="x", flags=comptime, modifier=VALUE
                     type {
@@ -243,32 +248,34 @@ decl#1 VALUE f CONSTANT
                 yield @u8_type
             }
             body {
-                %14 = const_local name="v"
+                %15 = const_local name="v"
                     value {
-                        %12 = unwrap operand=%6, kind=PROPAGATE
+                        %13 = unwrap operand=%6, kind=PROPAGATE
                             failure {
                                 %8 = residual
                                 %9 = decl_val decl#0
                                 %10 = call callee=%9, args=(%8)
+                                unused %10
                                 ret_residual %8
                             }
-                        yield %12
+                        yield %13
                     }
-                %15 = ret_value %14
-                %16 = ret_failure %15
-                %17 = failure_is_set %16
-                %23 = condbr cond=%17
+                %16 = ret_value %15
+                %17 = ret_failure %16
+                %18 = failure_is_set %17
+                %25 = condbr cond=%18
                     then {
-                        %18 = failure_residual %16
-                        %19 = decl_val decl#0
-                        %20 = call callee=%19, args=(%18)
-                        ret %15
+                        %19 = failure_residual %17
+                        %20 = decl_val decl#0
+                        %21 = call callee=%20, args=(%19)
+                        unused %21
+                        ret %16
                     }
                     else {
-                        ret %15
+                        ret %16
                     }
             }
-        yield %24
+        yield %26
     }
 )");
 }
@@ -284,7 +291,7 @@ TEST_CASE("A closure captures what it writes by reference, the rest by value") {
 };)",
               R"(decl#0 VALUE f CONSTANT
     value {
-        %30 = func conv=C
+        %31 = func conv=C
             ret {
                 yield @i32_type
             }
@@ -322,12 +329,13 @@ TEST_CASE("A closure captures what it writes by reference, the rest by value") {
                 %24 = closure func=%22, captures=[value=%23, by_ref=0, name="counted"]
                 %15 = let_value name="copy", init=%24
                 %25 = call callee=%6
-                %26 = call callee=%15
-                %27 = load %1
-                %28 = add %26, %27
-                ret %28
+                unused %25
+                %27 = call callee=%15
+                %28 = load %1
+                %29 = add %27, %28
+                ret %29
             }
-        yield %30
+        yield %31
     }
 )");
 }

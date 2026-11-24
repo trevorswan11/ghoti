@@ -19,7 +19,7 @@ auto analyze_cmd::execute() -> stdx::result<void, clap::error> {
     auto& analyzer{compilation.get_analyzer()};
 
     // A hand-written `test_runner` must match the entry `ghoti test` would force
-    if (as_test_) {
+    if (as_test_ && !opts_.sema_uir) {
         if (auto val_res{analyzer.validate_test_entry(*module)}; !val_res) {
             fmt::println(error_stream_, "{}", val_res.error());
             return stdx::err{clap::error::COMPILATION_FAILED};

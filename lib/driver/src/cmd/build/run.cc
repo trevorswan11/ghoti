@@ -21,7 +21,9 @@ auto run_cmd::execute() -> stdx::result<void, clap::error> {
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 
-    if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
+    if (auto val_res{opts_.sema_uir ? stdx::result<void, sema::diagnostic>{}
+                                    : analyzer.validate_main_entry(*module)};
+        !val_res) {
         fmt::println(error_stream_, "{}", val_res.error());
         return stdx::err{clap::error::COMPILATION_FAILED};
     }

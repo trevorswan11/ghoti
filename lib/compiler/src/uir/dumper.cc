@@ -34,6 +34,7 @@ constexpr std::string_view INDENT{"    "};
     case tag::break_to:
     case tag::repeat:
     case tag::discard:
+    case tag::unused:
     case tag::ret_residual: return true;
     default:                return false;
     }
