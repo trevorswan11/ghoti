@@ -727,7 +727,12 @@ auto analyzer::analyze_global(decl_id                        decl,
 
     // A ctor instance's constant is folded wherever it is read, an aggregate built at each read
     if (scope_ && scope_->in_call && !is_mutable) { return stored; }
-    const bool is_undefined{data.is<ip::undefined_value>()};
+    // An `undefined` written as the initializer leaves the global unset, one it computes is kept
+    const auto init_body{mod().body(d.value_body)};
+    const bool written_undefined{
+        !init_body.empty() && mod().tag_of(init_body.back()) == tag::yield &&
+        as_well_known(mod().data_of(init_body.back()).un.operand) == well_known::undefined};
+    const bool is_undefined{data.is<ip::undefined_value>() && written_undefined};
     const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
     const auto address{data.as_opt<ip::address_value>()};
     if (address && !address->pointee.empty()) {

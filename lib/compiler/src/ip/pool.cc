@@ -84,7 +84,12 @@ class key_writer {
         elements(v.pointee);
     }
     auto write(const memory_value& v) -> void {
-        fmt::format_to(std::back_inserter(key_), "{}[{}]", v.alloc, fmt::join(v.path, ","));
+        fmt::format_to(std::back_inserter(key_),
+                       "{}[{}]{}+{}",
+                       v.alloc,
+                       fmt::join(v.path, ","),
+                       v.offset,
+                       v.len);
     }
     auto write(const dyn_value& v) -> void {
         text(v.data_symbol);

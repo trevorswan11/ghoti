@@ -315,7 +315,20 @@ auto analyzer::call_function(instance&            target,
 
     std::vector<operand> values;
     values.reserve(args.size());
-    for (const auto arg : args) { values.emplace_back(TRY(resolve_value(arg, src))); }
+    for (usize i{0}; i < args.size(); ++i) {
+        // An array in comptime memory passed for a slice is viewed where it lies
+        if (is_comptime() && i < target.params.size() &&
+            target.params[i]->get_kind() == gs::type_kind::SLICE) {
+            const auto given{TRY(resolve(args[i], src))};
+            if (const auto view{given.is<comptime_place>() ? view_of(given) : stdx::none}) {
+                values.emplace_back(memory_slice(*view, 0, view->len));
+                continue;
+            }
+        }
+
+        values.emplace_back(TRY(resolve_value(args[i], src)));
+    }
+
     return call_following_poly(target, std::move(values), src, through_member);
 }
 

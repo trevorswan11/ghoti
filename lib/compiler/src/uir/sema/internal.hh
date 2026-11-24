@@ -137,6 +137,15 @@ struct comptime_place {
     bool borrowed{false};
 };
 
+// A run of a compile-time array's elements, which a slice of it views
+struct memory_view {
+    comptime_place           array;
+    u64                      offset;
+    u64                      len;
+    gsl::not_null<gs::type*> elem;
+    bool                     is_mutable;
+};
+
 // An immutable runtime value kept in a slot, read by loading it and addressed where it lies
 struct slot_value {
     gir::value               address;
@@ -1740,6 +1749,20 @@ class analyzer {
     [[nodiscard]] auto memory_place(const operand& op) -> stdx::option<comptime_place>;
     // The memory an object's compile-time address names, held directly or in comptime memory
     [[nodiscard]] auto memory_target(const operand& object) -> stdx::option<comptime_place>;
+    // The address an object holds, read from comptime memory when it is kept there
+    [[nodiscard]] auto held_address(const operand& object) -> operand;
+    // The elements an array in comptime memory, or a compile-time slice of one, views
+    [[nodiscard]] auto view_of(const operand& object) -> stdx::option<memory_view>;
+    // A compile-time slice of a view's elements from `lo` up to `hi`
+    [[nodiscard]] auto memory_slice(const memory_view& view, u64 lo, u64 hi) -> ip::index;
+    // The element a compile-time slice or element pointer reaches at an index
+    [[nodiscard]] auto memory_element(const operand& object, ref index_ref, const source& src)
+        -> result<stdx::option<comptime_place>>;
+    // What a known pointer or slice holds, as `*p` reads it at compile time
+    [[nodiscard]] auto comptime_deref(const operand& ptr) -> stdx::option<operand>;
+    // `.ptr` or `.len` of comptime memory or a compile-time slice
+    [[nodiscard]] auto memory_field(const operand& object, std::string_view name)
+        -> stdx::option<operand>;
     // Where a store to a comptime place or reference writes, through any reference it holds
     [[nodiscard]] auto comptime_destination(const operand& target) -> stdx::option<comptime_place>;
     // `current` with the element `path` leads to replaced by `value`

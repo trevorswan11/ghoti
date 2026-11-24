@@ -133,8 +133,21 @@ auto analyzer::load_comptime(const comptime_place& p) -> operand {
     auto& alloc{comp_.alloc_at(p)};
     auto& type{alloc.type.value_or(builtin(gs::type_kind::UNDEFINED))};
     auto  value{alloc.value.value_or(pool.intern(ip::undefined_value{}, type))};
+    auto* container{&type};
     for (const auto& step : p.path) {
         const auto& data{pool.value_at(value).data};
+        const auto  ut{container->get_data().as_opt<gs::types::union_t>()};
+        container = step.type.get();
+
+        // A union's field holds its payload while it is the active one
+        if (const auto un{data.as_opt<ip::union_value>()}; un && ut) {
+            const bool active{step.index < ut->field_names.size() &&
+                              un->active_field == ut->field_names[step.index]};
+            value = active && !un->payload.empty() ? un->payload.front()
+                                                   : pool.intern(ip::undefined_value{}, *step.type);
+            continue;
+        }
+
         if (const auto agg{data.as_opt<ip::aggregate_value>()};
             agg && step.index < agg->elements.size() && agg->elements[step.index]) {
             value = *agg->elements[step.index];
@@ -199,6 +212,111 @@ auto analyzer::memory_target(const operand& object) -> stdx::option<comptime_pla
     return memory_place(object);
 }
 
+auto analyzer::held_address(const operand& object) -> operand {
+    const auto p{object.as_opt<comptime_place>()};
+    if (!p) { return object; }
+    auto& type{type_of(object)};
+    if (!gs::pointee_of(type) && type.get_kind() != gs::type_kind::SLICE) { return object; }
+    return load_comptime(*p);
+}
+
+auto analyzer::view_of(const operand& object) -> stdx::option<memory_view> {
+    const auto array_view{[&](const comptime_place& p,
+                              u64                   offset,
+                              stdx::option<u64>     len) -> stdx::option<memory_view> {
+        auto&      type{type_of(operand{p})};
+        const auto arr{type.get_data().as_opt<gs::types::array>()};
+        if (!arr) { return stdx::none; }
+        return memory_view{.array      = p,
+                           .offset     = offset,
+                           .len        = len.value_or(arr->len),
+                           .elem       = &arr->underlying,
+                           .is_mutable = !type.is_constant()};
+    }};
+
+    const auto held{held_address(object)};
+    if (const auto p{held.as_opt<comptime_place>()}) { return array_view(*p, 0, stdx::none); }
+
+    const auto index{comptime_value(held)};
+    const auto place{memory_place(held)};
+    if (!index || !place) { return stdx::none; }
+    const auto& memory{comp_.constants().value_at(*index).data.as<ip::memory_value>()};
+    auto&       type{type_of(held)};
+    if (type.get_kind() == gs::type_kind::SLICE) {
+        return array_view(*place, memory.offset, memory.len);
+    }
+
+    return array_view(*place, 0, stdx::none);
+}
+
+auto analyzer::memory_slice(const memory_view& view, u64 lo, u64 hi) -> ip::index {
+    auto&            slice_type{comp_.ctx().get_slice(
+        view.is_mutable ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT, false, *view.elem)};
+    std::vector<u32> path;
+    for (const auto& step : view.array.path) { path.emplace_back(step.index); }
+    return comp_.constants().intern(ip::memory_value{.alloc  = view.array.alloc,
+                                                     .path   = std::move(path),
+                                                     .offset = view.offset + lo,
+                                                     .len    = hi - lo},
+                                    slice_type);
+}
+
+auto analyzer::memory_element(const operand& object, ref index_ref, const source& src)
+    -> result<stdx::option<comptime_place>> {
+    const auto held{held_address(object)};
+    auto&      type{type_of(held)};
+    const bool slice{type.get_kind() == gs::type_kind::SLICE};
+    const auto pointee{gs::pointee_of(type)};
+    const bool element_pointer{type.get_kind() == gs::type_kind::POINTER && pointee &&
+                               !pointee->get_data().is<gs::types::array>()};
+    if (!slice && !element_pointer) { return stdx::option<comptime_place>{}; }
+
+    // A slice indexes the array it views, an element pointer the elements around it
+    stdx::option<memory_view> view;
+    if (slice) {
+        view = view_of(held);
+    } else if (const auto at{memory_place(held)}; at && !at->path.empty()) {
+        auto parent{*at};
+        parent.path.pop_back();
+        if (auto v{view_of(operand{parent})}) {
+            v->offset = at->path.back().index;
+            v->len    = v->len - v->offset;
+            view      = v;
+        }
+    }
+    if (!view) { return stdx::option<comptime_place>{}; }
+
+    const auto at{comptime_value(TRY(resolve_value(index_ref, src)))};
+    const auto number{at ? int_of(comp_.constants().value_at(*at)) : stdx::none};
+    const auto small{number ? number->to_u128() : stdx::none};
+    if (!small) { return comp_.needs_runtime(u_, src); }
+    if (*small >= view->len) {
+        return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
+    }
+
+    auto element{view->array};
+    element.path.emplace_back(
+        comptime_step{static_cast<u32>(view->offset + static_cast<u64>(*small)), view->elem});
+    return stdx::option<comptime_place>{std::move(element)};
+}
+
+auto analyzer::memory_field(const operand& object, std::string_view name) -> stdx::option<operand> {
+    if (name != "len" && name != "ptr") { return stdx::none; }
+    const auto held{held_address(object)};
+    if (!held.is<comptime_place>() && !memory_place(held)) { return stdx::none; }
+    const auto view{view_of(held)};
+    if (!view) { return stdx::none; }
+    if (name == "len") {
+        return operand{comp_.constants().intern(view->len, builtin(gs::type_kind::USIZE))};
+    }
+
+    auto first{view->array};
+    first.path.emplace_back(comptime_step{static_cast<u32>(view->offset), view->elem});
+    auto& ptr_type{comp_.ctx().get_pointer(
+        view->is_mutable ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT, *view->elem)};
+    return operand{memory_address(first, ptr_type)};
+}
+
 auto analyzer::comptime_destination(const operand& target) -> stdx::option<comptime_place> {
     // Assigning to a reference writes what it refers to
     const auto through{[&](const operand& held) -> stdx::option<comptime_place> {
@@ -222,10 +340,35 @@ auto analyzer::with_element(stdx::option<ip::index>        current,
     if (path.empty()) { return value; }
     auto& pool{comp_.constants()};
 
+    // Storing a union's field makes it the active one
+    if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}) {
+        const auto& step{path.front()};
+        if (step.index >= ut->field_names.size()) {
+            return comp_.unsupported(u_, src, "a store into an element of this comptime value");
+        }
+
+        const std::string       name{ut->field_names[step.index]};
+        stdx::option<ip::index> held;
+        if (current) {
+            const auto un{pool.value_at(*current).data.as_opt<ip::union_value>()};
+            if (un && un->active_field == name && !un->payload.empty()) {
+                held = un->payload.front();
+            }
+        }
+
+        const auto inner{TRY(with_element(held, *step.type, path.subspan(1), value, src))};
+        std::vector<ip::index> payload;
+        if (step.type->get_kind() != gs::type_kind::VOID_) { payload.emplace_back(inner); }
+        return pool.intern(ip::union_value{.active_field = name, .payload = std::move(payload)},
+                           type);
+    }
+
     // Each element's type, from the array or struct holding them
     std::vector<stdx::option<gs::type&>> types;
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         types.assign(arr->len, arr->underlying);
+    } else if (const auto vec{type.get_data().as_opt<gs::types::vector>()}) {
+        types.assign(vec->len, vec->underlying);
     } else if (const auto st{type.get_data().as_opt<gs::types::struct_t>()}) {
         types.assign(st->fields.begin(), st->fields.end());
     } else {
@@ -265,24 +408,38 @@ auto analyzer::comptime_elem_place(const comptime_place& p, ref index_ref, const
     const auto at{comptime_value(TRY(resolve_value(index_ref, src)))};
     auto&      container{type_of(operand{p})};
     const auto arr{container.get_data().as_opt<gs::types::array>()};
+    const auto vec{container.get_data().as_opt<gs::types::vector>()};
     const auto small{at ? int_of(comp_.constants().value_at(*at)).and_then([](const big_int& b) {
         return b.to_i128();
     })
                         : stdx::none};
-    if (!arr || !small) { return comp_.unsupported(u_, src, "an element of comptime memory"); }
-    if (*small < 0 || *small >= static_cast<i128>(arr->len)) {
+    if ((!arr && !vec) || !small) {
+        return comp_.unsupported(u_, src, "an element of comptime memory");
+    }
+
+    // A vector's lanes are its elements
+    const u64 len{arr ? arr->len : vec->len};
+    auto&     elem{arr ? arr->underlying : vec->underlying};
+    if (*small < 0 || *small >= static_cast<i128>(len)) {
         return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
     }
 
     auto inner{p};
-    inner.path.emplace_back(comptime_step{static_cast<u32>(*small), &arr->underlying});
+    inner.path.emplace_back(comptime_step{static_cast<u32>(*small), &elem});
     return operand{std::move(inner)};
 }
 
 auto analyzer::comptime_field_place(const comptime_place& p,
                                     std::string_view      name,
                                     const source&         src) -> result<operand> {
-    auto&      container{type_of(operand{p})};
+    auto& container{type_of(operand{p})};
+    if (const auto ut{container.get_data().as_opt<gs::types::union_t>()}) {
+        const auto index{TRY(field_index(container, name, src))};
+        auto       inner{p};
+        inner.path.emplace_back(comptime_step{static_cast<u32>(index), &ut->type_at(index)});
+        return operand{std::move(inner)};
+    }
+
     const auto st{container.get_data().as_opt<gs::types::struct_t>()};
     if (!st) { return comp_.unsupported(u_, src, "a field of comptime memory"); }
     const auto index{TRY(field_index(container, name, src))};
@@ -355,6 +512,20 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     } else if (init.is<cast_ref>()) {
         // An untyped binding gives a one-argument cast no target to take
         value = TRY(concrete(init, src));
+    }
+
+    // An array of mutable elements lives in comptime memory, which slices of it may write
+    if (is_comptime() && !gir_fn_) {
+        auto& type{type_of(value)};
+        if (type.get_kind() == gs::type_kind::ARRAY && !type.is_constant()) {
+            return comp_.new_alloc({
+                .type                = type,
+                .value               = TRY(require_comptime(value, src)),
+                .frame               = frame_,
+                .runtime_depth       = runtime_depth_,
+                .keeps_comptime_type = false,
+            });
+        }
     }
 
     if (is_comptime()) { return value; }
@@ -631,6 +802,12 @@ auto analyzer::analyze_load(inst_id inst) -> result<operand> {
     // A field of a compile-time value was already read, and a module's member is itself
     if (comptime_value(target) || target.is<function_ref>() || target.is<generic_ref>() ||
         target.is<module_ref>()) {
+        return target;
+    }
+
+    // An array's `.ptr` is already the value read
+    if (const auto from{as_inst(mod().data_of(inst).un.operand)};
+        from && mod().tag_of(*from) == tag::field_ptr && target.is<gir::value>()) {
         return target;
     }
     const auto slot{target.as_opt<place>()};

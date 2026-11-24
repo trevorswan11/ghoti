@@ -74,8 +74,11 @@ struct address_value {
 // An address in compile-time memory: an allocation and the elements leading into it, which only
 // compile-time code reads
 struct memory_value {
-    u32                alloc{0};
-    std::vector<u32>   path;
+    u32              alloc{0};
+    std::vector<u32> path;
+    // A slice's elements of the array `path` leads to
+    u64                offset{0};
+    u64                len{0};
     [[nodiscard]] auto operator==(const memory_value&) const noexcept -> bool = default;
 };
 

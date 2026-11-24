@@ -458,11 +458,9 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
 auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
     const auto op{TRY(resolve(r, src))};
 
-    // A reference kept in compile-time memory, such as a written parameter, reads as itself
-    if (const auto p{op.as_opt<comptime_place>()};
-        p && type_of(op).get_kind() == gs::type_kind::REFERENCE) {
-        return load_comptime(*p);
-    }
+    // Comptime memory used as a value, such as a written parameter or an array of mutable
+    // elements, reads what it holds
+    if (const auto p{op.as_opt<comptime_place>()}) { return load_comptime(*p); }
 
     if (op.is<place>() || op.is<global_ref>() || op.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a place used as a value");

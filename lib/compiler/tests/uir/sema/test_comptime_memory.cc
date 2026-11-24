@@ -205,4 +205,88 @@ TEST_CASE("A parameterized impl names its target's ctor through an alias", "[uir
     CHECK_THAT(run.gir(), Catch::Matchers::ContainsSubstring("ret i32 1"));
 }
 
+TEST_CASE("A compile-time slice or element pointer writes the array it views", "[uir]") {
+    const auto diff{diff_source(R"(
+        const fill = fn(s: []mut i32): void { s[0] = 40; };
+        const get = fn(s: []mut? i32, i: usize): &mut? i32 { return &mut? s[i]; };
+        const t = fn(): i32 {
+            let a = [_]mut i32{1, 2, 3};
+            fill(a);
+            let s: []mut i32 = a[1..];
+            s[0] = 50;
+            let inner: []mut i32 = s[1..];
+            inner[0] = 60;
+            let e = get(a, 2);
+            e += 1;
+            let mut b = [3]mut i32{ 1, 2, 3 };
+            let p: ^mut i32 = b.ptr;
+            p[2] = 4;
+            let q = ^mut b[1];
+            q[1] += 1;
+            return a[0] + a[1] + a[2] + @intCast(i32, s.len) + b[2] + p[1] * 10;
+        };
+        const folded = t();
+        pub const main = fn(): i32 { return folded + t(); };
+    )")};
+    INFO(diff.detail);
+    INFO(helpers::uir_diff_status_name(diff.status));
+    CHECK(agrees(diff));
+
+    const auto run{helpers::uir_accepted(R"(
+        const fill = fn(s: []mut i32): void { s[0] = 40; };
+        const t = fn(): i32 { let a = [_]mut i32{1, 2, 3}; fill(a); return a[0]; };
+        const folded = t();
+        pub const main = fn(): i32 { return folded; };
+    )")};
+    CHECK_THAT(run.gir(), Catch::Matchers::ContainsSubstring("ret i32 40"));
+}
+
+TEST_CASE("Comptime memory holds union fields and vector lanes", "[uir]") {
+    const auto diff{diff_source(R"(
+        const U = union(enum) { i: i32, f: f64 };
+        const W = struct { u: U, xs: [3]i32 };
+        const build = fn(): i32 {
+            comptime let mut w: W = .{ .u = .{ .i = 1 }, .xs = .{ 1, 2, 3 } };
+            w.u.i += 4;
+            w.u.f = 2.5;
+            return w.xs[2] + @as(i32, @intFromFloat(w.u.f * 2.0));
+        };
+        const iota = fn(comptime V: type): V {
+            let mut v: V = undefined;
+            for (0..@typeInfo(V).vector.len) |i| { v[i] = @intCast(i); }
+            return v;
+        };
+        const AT = build();
+        pub const main = fn(): i32 {
+            comptime {
+                const v = iota(@Vector(4, u8));
+                @assert(v[3] == 3);
+            }
+            return AT;
+        };
+    )")};
+    INFO(diff.detail);
+    INFO(helpers::uir_diff_status_name(diff.status));
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A compile-time dereference reads a known slice or undefined pointer", "[uir]") {
+    const auto diff{diff_source(R"(
+        const p: ^i32 = undefined;
+        const val_p = *p;
+        const pick = fn(): [2]u8 {
+            const s = "hello";
+            return *s[1..3];
+        };
+        const x = pick();
+        pub const main = fn(): i32 {
+            let r: i32 = x[0] + x[1];
+            return r - 200;
+        };
+    )")};
+    INFO(diff.detail);
+    INFO(helpers::uir_diff_status_name(diff.status));
+    CHECK(agrees(diff));
+}
+
 } // namespace ghoti::tests
