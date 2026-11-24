@@ -302,9 +302,9 @@ class astgen {
                                     ast::node_id          callee,
                                     syntax::builtin_t     builtin,
                                     const ast::call_expr& node) -> ref;
-    // A body yielding what an `if` / `match` / loop `else` arm evaluates to
     // An arm's body yielding its value, or void for a statement's arm
-    [[nodiscard]] auto arm_value(ast::stmt_handle arm, bool discarded = false) -> std::vector<inst_id>;
+    [[nodiscard]] auto arm_value(ast::stmt_handle arm, bool discarded = false)
+        -> std::vector<inst_id>;
     // An expression statement, whose value must be void unless it is a statement form
     auto statement_expr(ast::expr_handle expression, ast::node_id at) -> void;
     auto               bind_capture(const ast::capture_t& capture, u32 slot, source src) -> void;
@@ -418,8 +418,9 @@ class astgen {
     std::vector<std::pair<source_location, std::string_view>> mutation_sites_;
     std::string_view pending_type_name_;           // the declaration an aggregate value initializes
     stdx::option<std::string_view> pending_label_; // a label waiting for the loop it names
-    bool statement_arms_{false}; // the next `if` or `match` is a statement, whose arms have no value
-    usize                          prunable_depth_{0}; // inside arms `comptime` may prune
+    bool                           statement_arms_{
+        false};               // the next `if` or `match` is a statement, whose arms have no value
+    usize prunable_depth_{0}; // inside arms `comptime` may prune
 };
 
 } // namespace ghoti::uir::detail

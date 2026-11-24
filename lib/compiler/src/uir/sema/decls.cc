@@ -743,8 +743,7 @@ auto analyzer::analyze_global(decl_id                        decl,
             return comp_.unsupported(u_, src, "a type stored in a typed global");
         }
 
-        // Only a module-level alias is listed, by its name alone since it claims no symbol, and
-        // never one of `type` itself
+        // Only a module-level alias is listed and never one of `type` itself
         const bool module_level{std::ranges::contains(mod().root_namespace().decls, decl)};
         const bool of_type{pool.type_at(*constant_index).get_kind() == gs::type_kind::TYPE};
         if (!declared && !declares_type(d) && module_level && !of_type && !comp_.is_prelude(u_)) {

@@ -271,7 +271,6 @@ namespace ghoti::uir::detail {
 
 namespace {
 
-// An expression that is a statement of its own, whose value needs no use
 [[nodiscard]] auto is_statement_form(const ast::AST& tree, ast::expr_handle expr) -> bool {
     if (const auto cx{tree.get_as_opt<ast::comptime_expr>(expr)}) {
         return is_statement_form(tree, cx->rhs);

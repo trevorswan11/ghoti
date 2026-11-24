@@ -9,16 +9,25 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <vector>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
+#include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
+#include "gsl/pointers"
+#include "gsl/util"
 #include "internal.hh"
+#include "stdx/assert.hh"
+#include "stdx/utility.hh"
 
 namespace ghoti::uir::sema {
 
@@ -83,7 +92,7 @@ auto analyzer::export_target(ref arg, const source& src) -> result<stdx::option<
         return *fn->fn;
     }
 
-    // A function passed to a `comptime` parameter, as a helper like Zig's `symbol` does
+    // A function passed to a `comptime` parameter
     const auto index{comptime_value(value)};
     const auto fn{index ? comp_.const_function(*index) : stdx::none};
     if (!fn || !fn->captures.empty() || fn->env) { return stdx::none; }
@@ -113,7 +122,7 @@ auto analyzer::builtin_export(gsl::span<const ref> args, const source& src) -> r
         return comp_.report(u_,
                             target_src,
                             gs::error::TYPE_MISMATCH,
-                            "'@export' can't export a function that returns a type; it only "
+                            "'@export' can't export a function that returns a type as it only "
                             "exists at compile time");
     }
 
@@ -227,10 +236,6 @@ auto analyzer::known_text(ip::index value) -> stdx::option<std::string> {
     return stdx::none;
 }
 
-} // namespace ghoti::uir::sema
-
-namespace ghoti::uir::sema {
-
 auto compilation::test_units() const -> std::vector<bool> {
     // Tests are found through the imports written in another discovered module's tests
     std::vector<bool> found(units_.size(), false);
@@ -314,10 +319,6 @@ auto analyzer::analyze_test(gsl::span<const inst_id> body) -> result<void> {
     return {};
 }
 
-} // namespace ghoti::uir::sema
-
-namespace ghoti::uir::sema {
-
 auto analyzer::builtin_src(const source& src) -> result<operand> {
     auto&      ctx{comp_.ctx()};
     auto&      pool{comp_.constants()};
@@ -383,10 +384,6 @@ auto analyzer::builtin_skip(gsl::span<const ref> args, const source& src) -> res
     return comp_.constants().intern(ip::undefined_value{}, builtin(gs::type_kind::NORETURN));
 }
 
-} // namespace ghoti::uir::sema
-
-namespace ghoti::uir::sema {
-
 auto analyzer::comptime_expect(gsl::span<const ref> args, const source& src, bool require)
     -> result<operand> {
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
@@ -412,10 +409,6 @@ auto analyzer::comptime_expect(gsl::span<const ref> args, const source& src, boo
     if (require) { return failed; }
     return operand{comp_.constants().intern(false, bool_type)};
 }
-
-} // namespace ghoti::uir::sema
-
-namespace ghoti::uir::sema {
 
 namespace {
 
@@ -507,10 +500,6 @@ auto analyzer::analyze_unused(inst_id inst) -> result<operand> {
                         "result of this call is unused; bind it, pass it on, `_ =` it, or mark the "
                         "callee '@[discardable]'");
 }
-
-} // namespace ghoti::uir::sema
-
-namespace ghoti::uir::sema {
 
 auto compilation::root_unit() const -> const unit& {
     const auto root{std::ranges::find_if(

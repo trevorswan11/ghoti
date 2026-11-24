@@ -7,9 +7,12 @@
 #include <gsl/util>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -17,6 +20,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -538,7 +542,6 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     }
 
     if (is_comptime()) { return value; }
-
     if (gs::is_vector(type_of(value))) { TRY(vector_at_runtime(src)); }
 
     // A reference binding keeps one address for every use
@@ -561,8 +564,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
                 pointee->get_kind() == gs::type_kind::ENUM);
     }()};
 
-    // An aggregate binding keeps one address for every use, so it gets a slot of its own, as
-    // does an aligned one
+    // An aggregate binding keeps one address for every use as does an aligned one
     if (!alignment &&
         ((!gs::is_structural(type.get_kind()) && !type.is_generic_value() && !place_reference) ||
          value.is<merge_ref>())) {

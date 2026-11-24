@@ -19,7 +19,6 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
     auto& analyzer{compilation.get_analyzer()};
 
     // Validate that root module contains valid 'pub const main = fn(args: [][:0]u8): void'
-    // UIR Sema checks `main` where the entry code calls it
     if (auto val_res{opts_.sema_uir ? stdx::result<void, sema::diagnostic>{}
                                     : analyzer.validate_main_entry(*module)};
         !val_res) {

@@ -290,7 +290,6 @@ auto compilation::run_astgen(bool for_test_executable)
     cfg.testing = cfg.testing || for_test_executable;
     auto lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = manager_})};
 
-    // An executable's entry code is UIR Sema's to analyze too
     if (opts_.sema_uir && (for_test_executable || analyzer_.is_entry_point())) {
         if (auto attached{uir::lower_start({.cfg = cfg, .modules = manager_}, lowered)};
             !attached) {
@@ -335,7 +334,6 @@ auto compilation::run_astgen(bool for_test_executable)
 auto compilation::analyze_uir(gsl::span<const uir::lowered_module> lowered,
                               bool                                 for_test_executable)
     -> stdx::result<analyzed_module, clap::error> {
-    // A test executable runs the tests, so they are analyzed
     auto& ctx{analyzer_.get_ctx()};
     ctx.testing = ctx.testing || for_test_executable;
     auto root{*manager_.try_get_file_module(opts_.input_path)};

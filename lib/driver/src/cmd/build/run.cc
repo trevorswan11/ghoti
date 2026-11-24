@@ -21,7 +21,6 @@ auto run_cmd::execute() -> stdx::result<void, clap::error> {
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 
-    // UIR Sema checks `main` where the entry code calls it
     if (auto val_res{opts_.sema_uir ? stdx::result<void, sema::diagnostic>{}
                                     : analyzer.validate_main_entry(*module)};
         !val_res) {

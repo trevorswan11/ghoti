@@ -15,6 +15,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
+#include <fmt/format.h>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
@@ -40,6 +41,7 @@
 #include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
+#include "support/int128.hh"
 
 namespace ghoti::uir::sema {
 
@@ -732,6 +734,7 @@ class compilation {
     [[nodiscard]] auto test_units() const -> std::vector<bool>;
     // Analyzes a `test` block into a test function
     auto analyze_test(const unit& u, decl_id decl) -> void;
+
     // Modules (modules.cc)
     // The module an import of `u` loads, reached through the name `name`
     [[nodiscard]] auto

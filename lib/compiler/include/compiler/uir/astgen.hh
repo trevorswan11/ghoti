@@ -37,8 +37,7 @@ struct lowered_module {
 [[nodiscard]] auto lower_reachable(mod::module_t& root, const astgen_context& cx)
     -> std::vector<lowered_module>;
 
-// Loads the program's entry code `std/start.gh` and adds what it reaches to `lowered`, or gives
-// why it can't
+// Tried to load the program's entry code `std/start.gh` and adds what it reaches to `lowered`
 [[nodiscard]] auto lower_start(const astgen_context& cx, std::vector<lowered_module>& lowered)
     -> stdx::result<void, std::string>;
 
