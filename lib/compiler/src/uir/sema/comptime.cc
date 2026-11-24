@@ -17,6 +17,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
@@ -30,6 +31,23 @@ namespace {
 
 // The notes a diagnostic names its compile-time call stack with, past which they are counted
 constexpr usize MAX_CALL_NOTES{8};
+
+// Whether a value holds a compile-time address, whose memory a call may read or change
+[[nodiscard]] auto holds_memory(const ip::pool& pool, ip::index at) -> bool {
+    if (pool.is_type(at)) { return false; }
+    const auto& data{pool.value_at(at).data};
+    if (data.is<ip::memory_value>()) { return true; }
+    if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+        return std::ranges::any_of(
+            agg->elements, [&](stdx::option<ip::index> e) { return e && holds_memory(pool, *e); });
+    }
+
+    if (const auto un{data.as_opt<ip::union_value>()}) {
+        return std::ranges::any_of(un->payload, [&](ip::index e) { return holds_memory(pool, e); });
+    }
+
+    return false;
+}
 
 } // namespace
 
@@ -45,7 +63,11 @@ auto compilation::call_comptime(const unit&            caller,
                                 std::vector<ip::index> args) -> result<operand> {
     PROFILE_FUNCTION();
     memo_key key{.fn = &fn, .args = std::move(args)};
-    if (const auto found{memo_.find(key)}; found != memo_.end()) {
+
+    // A call given compile-time memory may read what was stored there since
+    const bool borrows{std::ranges::any_of(
+        key.args, [&](ip::index arg) { return holds_memory(constants(), arg); })};
+    if (const auto found{memo_.find(key)}; !borrows && found != memo_.end()) {
         if (!found->second) { return stdx::err{stop::POISON}; }
         return *found->second;
     }
@@ -74,7 +96,7 @@ auto compilation::call_comptime(const unit&            caller,
     calls_.pop_back();
 
     // A call that needed a runtime value or stopped early is retried by its next use
-    if (!impure && (value || value.error() == stop::POISON)) {
+    if (!impure && !borrows && (value || value.error() == stop::POISON)) {
         memo_.emplace(std::move(key), value ? memo_entry{*value} : memo_entry{});
     }
 

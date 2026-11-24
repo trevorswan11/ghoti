@@ -255,7 +255,9 @@ auto analyzer::call_through_field(ref                  object_ref,
     const auto base{TRY(address_of(object_ref, src))};
     const auto field{TRY(field_place(base, name, src))};
     auto&      field_type{*field.pointee};
-    const auto fn{field_type.get_data().as_opt<gs::types::function>()};
+    const auto pointer{field_type.get_data().as_opt<gs::types::pointer>()};
+    const auto fn{
+        (pointer ? pointer->underlying : field_type).get_data().as_opt<gs::types::function>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a field"); }
     return call_value(TRY(read(field, src)), *fn, args, src);
 }
@@ -313,7 +315,20 @@ auto analyzer::call_function(instance&            target,
 
     std::vector<operand> values;
     values.reserve(args.size());
-    for (const auto arg : args) { values.emplace_back(TRY(resolve_value(arg, src))); }
+    for (usize i{0}; i < args.size(); ++i) {
+        // An array in comptime memory passed for a slice is viewed where it lies
+        if (is_comptime() && i < target.params.size() &&
+            target.params[i]->get_kind() == gs::type_kind::SLICE) {
+            const auto given{TRY(resolve(args[i], src))};
+            if (const auto view{given.is<comptime_place>() ? view_of(given) : stdx::none}) {
+                values.emplace_back(memory_slice(*view, 0, view->len));
+                continue;
+            }
+        }
+
+        values.emplace_back(TRY(resolve_value(args[i], src)));
+    }
+
     return call_following_poly(target, std::move(values), src, through_member);
 }
 

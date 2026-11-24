@@ -77,6 +77,30 @@ auto analyzer::comptime_slice(ref               object_ref,
         return comp_.unsupported(u_, src, "a slice in a function's `const` initializer");
     }
 
+    const auto bound{[&](stdx::option<ref> r, usize fallback) -> result<usize> {
+        if (!r) { return fallback; }
+        const auto value{TRY(resolve_value(*r, src))};
+        const auto typed{TRY(
+            coerce_to(value, builtin(gs::type_kind::USIZE), src, {.what = use_site::kind::STORE}))};
+        const auto number{int_of(pool.value_at(TRY(require_comptime(typed, src))))};
+        const auto small{number ? number->to_u128() : stdx::none};
+        return small ? static_cast<usize>(*small) : usize{0};
+    }};
+    const auto range{[&](usize length) -> result<std::pair<usize, usize>> {
+        const auto lo{TRY(bound(lo_ref, 0))};
+        auto       hi{TRY(bound(hi_ref, length))};
+        if (hi_ref && inclusive) { ++hi; }
+        if (lo > hi || hi > length) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::COMPTIME_EVALUATION_FAILED,
+                fmt::format("slice range {}..{} is out of bounds for length {}", lo, hi, length));
+        }
+
+        return std::pair{lo, hi};
+    }};
+
     // A runtime body's storage, folded again here, stays at runtime
     const auto object_inst{as_inst(object_ref)};
     const auto analyzed{object_inst ? values_.find(*object_inst) : values_.end()};
@@ -84,6 +108,12 @@ auto analyzer::comptime_slice(ref               object_ref,
         (analyzed->second.is<place>() || analyzed->second.is<global_ref>() ||
          analyzed->second.is<slot_value>())) {
         return comp_.needs_runtime(u_, src);
+    }
+
+    // A slice of comptime memory views it, so writes through the slice reach the memory
+    if (const auto view{view_of(TRY(resolve(object_ref, src)))}) {
+        const auto [lo, hi]{TRY(range(static_cast<usize>(view->len)))};
+        return operand{memory_slice(*view, lo, hi)};
     }
 
     const auto object{TRY(resolve_value(object_ref, src))};
@@ -116,29 +146,12 @@ auto analyzer::comptime_slice(ref               object_ref,
 
     // A copy of mutable elements would miss writes through the slice
     if (!type.is_constant()) {
+        if (gir_fn_) { return comp_.needs_runtime(u_, src); }
         return comp_.unsupported(u_, src, "a compile-time slice of mutable elements");
     }
 
     const auto length{text ? text->size() : elements.size()};
-    const auto bound{[&](stdx::option<ref> r, usize fallback) -> result<usize> {
-        if (!r) { return fallback; }
-        const auto value{TRY(resolve_value(*r, src))};
-        const auto typed{TRY(
-            coerce_to(value, builtin(gs::type_kind::USIZE), src, {.what = use_site::kind::STORE}))};
-        const auto number{int_of(pool.value_at(TRY(require_comptime(typed, src))))};
-        const auto small{number ? number->to_u128() : stdx::none};
-        return small ? static_cast<usize>(*small) : usize{0};
-    }};
-    const auto lo{TRY(bound(lo_ref, 0))};
-    auto       hi{TRY(bound(hi_ref, length))};
-    if (hi_ref && inclusive) { ++hi; }
-    if (lo > hi || hi > length) {
-        return comp_.report(
-            u_,
-            src,
-            gs::error::COMPTIME_EVALUATION_FAILED,
-            fmt::format("slice range {}..{} is out of bounds for length {}", lo, hi, length));
-    }
+    const auto [lo, hi]{TRY(range(length))};
 
     auto& slice_type{ctx.get_slice(gs::types::mut::CONSTANT, false, *elem)};
     if (text) { return operand{pool.intern(text->substr(lo, hi - lo), slice_type)}; }

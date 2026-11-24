@@ -179,6 +179,16 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }
     if (reads_through(rhs)) { rhs = TRY(read_through_reference(rhs, src)); }
 
+    // A compile-time reference is read for what it refers to
+    for (auto* side : {&lhs, &rhs}) {
+        if (type_of(*side).get_kind() != gs::type_kind::REFERENCE ||
+            (!memory_place(*side) && !is_comptime())) {
+            continue;
+        }
+
+        if (const auto referent{comptime_referent(*side)}) { *side = operand{*referent}; }
+    }
+
     // An enum literal names a variant of the other side's enum
     if (lhs.is<enum_literal>() && type_of(rhs).get_kind() == gs::type_kind::ENUM) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
@@ -438,13 +448,17 @@ auto analyzer::compare_pointers(const binary_info& info,
         const auto& rd{pool.value_at(*known_r).data};
         const bool  l_null{ld.is<ip::nullptr_value>()};
         const bool  r_null{rd.is<ip::nullptr_value>()};
-        if (l_null || r_null || (ld.is<ip::address_value>() && rd.is<ip::address_value>())) {
+        const bool  addresses{(ld.is<ip::address_value>() && rd.is<ip::address_value>()) ||
+                              (ld.is<ip::memory_value>() && rd.is<ip::memory_value>())};
+        if (l_null || r_null || addresses) {
             const bool equal{l_null || r_null ? l_null == r_null : ld == rd};
             return operand{pool.intern(equal == (info.kind == instruction_kind::EQ),
                                        builtin(gs::type_kind::BOOL))};
         }
     }
 
+    // A runtime body folding a condition compares them at runtime instead
+    if (is_comptime() && gir_fn_) { return comp_.needs_runtime(u_, src); }
     if (is_comptime()) { return comp_.unsupported(u_, src, "comparing pointers at compile time"); }
     // Even two known pointers compare at runtime
     auto&      bool_type{builtin(gs::type_kind::BOOL)};

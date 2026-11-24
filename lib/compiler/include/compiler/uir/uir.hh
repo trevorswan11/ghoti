@@ -231,6 +231,7 @@ enum : u32 {
     PLACE      = 1U << 4, // the operand is a place, not a value
     LEN_ABSENT = 1U << 5, // `[]T{...}` sized by its items
     ASSIGNED   = 1U << 6, // field_ptr: the place an assignment writes, which may switch a union
+    MUTATED    = 1U << 7, // field_ptr, elem_ptr: a place that may be written through
 
     // fn_type, func
     VARIADIC      = 1U << 0,

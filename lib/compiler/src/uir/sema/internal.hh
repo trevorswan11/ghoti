@@ -133,6 +133,17 @@ struct comptime_step {
 struct comptime_place {
     u32                        alloc;
     std::vector<comptime_step> path{};
+    // Reached through a compile-time reference, which any analysis may write through
+    bool borrowed{false};
+};
+
+// A run of a compile-time array's elements, which a slice of it views
+struct memory_view {
+    comptime_place           array;
+    u64                      offset;
+    u64                      len;
+    gsl::not_null<gs::type*> elem;
+    bool                     is_mutable;
 };
 
 // An immutable runtime value kept in a slot, read by loading it and addressed where it lies
@@ -1316,6 +1327,9 @@ class analyzer {
                                 gs::type&                    self_type,
                                 ref                          object_ref,
                                 const source&                src) -> result<receiver_arg>;
+    // The compile-time memory an object lies in, or that its compile-time address names
+    [[nodiscard]] auto memory_receiver(ref object_ref, const source& src)
+        -> result<stdx::option<comptime_place>>;
     // The modifier a method's `self` parameter is written with, none for a plain function
     [[nodiscard]] auto self_modifier_of(const unit& u, inst_id func) const
         -> stdx::option<ast::type_modifier::modifier>;
@@ -1727,6 +1741,30 @@ class analyzer {
                                       const operand&        value,
                                       const source&         src) -> result<void>;
     [[nodiscard]] auto load_comptime(const comptime_place& p) -> operand;
+    // A runtime slot holding a copy of what comptime memory holds
+    [[nodiscard]] auto comptime_copy(const comptime_place& p, const source& src) -> result<place>;
+    // The compile-time address of a place in comptime memory, as a value of `type`
+    [[nodiscard]] auto memory_address(const comptime_place& p, gs::type& type) -> ip::index;
+    // The place a compile-time address names
+    [[nodiscard]] auto memory_place(const operand& op) -> stdx::option<comptime_place>;
+    // The memory an object's compile-time address names, held directly or in comptime memory
+    [[nodiscard]] auto memory_target(const operand& object) -> stdx::option<comptime_place>;
+    // The address an object holds, read from comptime memory when it is kept there
+    [[nodiscard]] auto held_address(const operand& object) -> operand;
+    // The elements an array in comptime memory, or a compile-time slice of one, views
+    [[nodiscard]] auto view_of(const operand& object) -> stdx::option<memory_view>;
+    // A compile-time slice of a view's elements from `lo` up to `hi`
+    [[nodiscard]] auto memory_slice(const memory_view& view, u64 lo, u64 hi) -> ip::index;
+    // The element a compile-time slice or element pointer reaches at an index
+    [[nodiscard]] auto memory_element(const operand& object, ref index_ref, const source& src)
+        -> result<stdx::option<comptime_place>>;
+    // What a known pointer or slice holds, as `*p` reads it at compile time
+    [[nodiscard]] auto comptime_deref(const operand& ptr) -> stdx::option<operand>;
+    // `.ptr` or `.len` of comptime memory or a compile-time slice
+    [[nodiscard]] auto memory_field(const operand& object, std::string_view name)
+        -> stdx::option<operand>;
+    // Where a store to a comptime place or reference writes, through any reference it holds
+    [[nodiscard]] auto comptime_destination(const operand& target) -> stdx::option<comptime_place>;
     // `current` with the element `path` leads to replaced by `value`
     [[nodiscard]] auto with_element(stdx::option<ip::index>        current,
                                     gs::type&                      type,

@@ -222,6 +222,9 @@ auto const_value::from_interned(const ip::pool& pool, ip::index at) -> const_val
         [&](const ip::dyn_value& dyn) {
             return const_value{const_dyn_fat_ptr{dyn.data_symbol, dyn.vtable_symbol}, v.type};
         },
+        [](const ip::memory_value&) -> const_value {
+            UNREACHABLE("Compile-time memory never leaves the analysis that holds it");
+        },
         [&](const ip::void_value&) { return const_value{void_val{}, v.type}; },
         [&](const ip::undefined_value&) { return const_value{undefined_val{}, v.type}; },
         [&](const ip::nullptr_value&) { return const_value{nullptr_val{}, v.type}; },

@@ -289,6 +289,11 @@ auto analyzer::tested_call(inst_id inst) -> result<operand> {
     const auto known{folded ? comptime_value(*folded) : stdx::none};
     if (known && !comp_.constants().is_type(*known)) { return operand{*known}; }
 
+    // An `if comptime` condition that can't run at compile time fails as it did there
+    if (!folded && folded.error() != stop::RUNTIME && comptime_tests_.contains(inst)) {
+        return stdx::err{folded.error()};
+    }
+
     comp_.abandon(before, false);
     return analyze_inst(inst);
 }
@@ -452,6 +457,10 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
 
 auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
     const auto op{TRY(resolve(r, src))};
+
+    // Comptime memory used as a value reads what it holds
+    if (const auto p{op.as_opt<comptime_place>()}) { return load_comptime(*p); }
+
     if (op.is<place>() || op.is<global_ref>() || op.is<comptime_place>()) {
         return comp_.unsupported(u_, src, "a place used as a value");
     }

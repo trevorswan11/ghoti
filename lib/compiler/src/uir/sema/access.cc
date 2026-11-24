@@ -38,6 +38,27 @@ namespace {
     return static_cast<usize>(found - names.begin());
 }
 
+// Whether a value of the type holds a `type`, so it exists only at compile time
+[[nodiscard]] auto holds_type(const gs::type& type, u32 depth = 0) -> bool {
+    if (depth > 8) { return false; }
+    if (type.get_kind() == gs::type_kind::TYPE) { return true; }
+    if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        return holds_type(arr->underlying, depth + 1);
+    }
+
+    if (const auto s{type.get_data().as_opt<gs::types::slice>()}) {
+        return holds_type(s->underlying, depth + 1);
+    }
+
+    if (const auto st{type.get_data().as_opt<gs::types::struct_t>()}) {
+        return std::ranges::any_of(st->fields, [&](stdx::option<gs::type&> field) {
+            return field && holds_type(*field, depth + 1);
+        });
+    }
+
+    return false;
+}
+
 } // namespace
 
 auto analyzer::spill(const gir::value& v, gs::type& type, bool to_entry) -> place {
@@ -322,9 +343,24 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
                                                 builtin(gs::type_kind::USIZE))};
     }
 
+    // A field through a compile-time address reads the memory it names
+    if (const auto field{memory_field(object, name)}) { return *field; }
+    if (const auto memory{memory_target(object)}) {
+        const auto field{TRY(comptime_field_place(*memory, name, src))};
+        return load_comptime(field.as<comptime_place>());
+    }
+
+    // A known address's field at compile time is the field of the value it holds
+    if (is_comptime() && gs::pointee_of(type_of(object))) {
+        if (const auto referent{comptime_referent(object)}) {
+            return comptime_field(*referent, name, src);
+        }
+    }
+
     if (const auto index{comptime_value(object)}) {
         if (comp_.constants().is_type(*index)) {
-            return member_of(comp_.constants().type_at(*index), name, src);
+            return declaration_use(
+                TRY(member_of(comp_.constants().type_at(*index), name, src)), false, src);
         }
 
         // A runtime body reads a known string slice through a copy of it
@@ -407,6 +443,12 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return member;
     }
 
+    // A field through a compile-time address is a field of the memory it names
+    if (const auto field{memory_field(object, name)}) { return *field; }
+    if (const auto memory{memory_target(object)}) {
+        return comptime_field_place(*memory, name, src);
+    }
+
     // A compile-time reference's field is the field of what it holds
     if (const auto referent{comptime_referent(object)}; referent && !assigned) {
         return comptime_field(*referent, name, src);
@@ -426,13 +468,11 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
         return comp_.needs_runtime(u_, src);
     }
 
-    if (const auto memory{object.as_opt<comptime_place>()}; memory && !gir_fn_) {
+    if (const auto memory{object.as_opt<comptime_place>()}) {
         return comptime_field_place(*memory, name, src);
     }
 
-    if (is_comptime() || object.is<comptime_place>()) {
-        return comp_.unsupported(u_, src, "a field of comptime memory");
-    }
+    if (is_comptime()) { return comp_.unsupported(u_, src, "a field of comptime memory"); }
 
     const auto base{TRY(address_of(object_ref, src))};
 
@@ -440,6 +480,15 @@ auto analyzer::analyze_field_ptr(inst_id inst) -> result<operand> {
     if (const auto arr{base.pointee->get_data().as_opt<gs::types::array>()};
         arr && name == "len" && !assigned) {
         return comp_.constants().intern(u64{arr->len}, builtin(gs::type_kind::USIZE));
+    }
+
+    // An array's `.ptr` is the address of its first element
+    if (const auto arr{base.pointee->get_data().as_opt<gs::types::array>()};
+        arr && name == "ptr" && !assigned) {
+        auto& ptr_type{comp_.ctx().get_pointer(base.pointee->get_key().get_mut(), arr->underlying)};
+        const auto at{builder_.emit_get_element_ptr(
+            base.address, {usize_constant(ARRAY_PTR_FIELD)}, ptr_type)};
+        return operand{gir::value{at, ptr_type}};
     }
 
     const auto field{TRY(field_place(base, name, src))};
@@ -495,6 +544,19 @@ auto analyzer::bounds_check(const gir::value& index,
 }
 
 auto analyzer::elem_place(const place& object, ref index_ref, const source& src) -> result<place> {
+    // A pointer to one element indexes the elements from where it points, the index read first
+    const auto pointer{object.pointee->get_data().as_opt<gs::types::pointer>()};
+    if (pointer && !pointer->underlying.get_data().is<gs::types::array>() &&
+        !pointer->underlying.get_data().is<gs::types::slice>()) {
+        const auto index{TRY(index_operand(index_ref, src))};
+        const auto base{TRY(through_pointer(object, src))};
+        auto&      elem{*base.pointee};
+        const auto at{builder_.emit_get_element_ptr(base.address, {index}, elem)};
+        return place{.address    = gir::value{at, elem},
+                     .pointee    = &elem,
+                     .is_mutable = writable_through(*object.pointee)};
+    }
+
     const auto base{TRY(through_pointer(object, src))};
     const auto index{TRY(index_operand(index_ref, src))};
     auto&      type{*base.pointee};
@@ -569,6 +631,16 @@ auto analyzer::analyze_elem_val(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object{TRY(resolve(d.bin.lhs, src))};
     if (const auto pack{object.as_opt<pack_ref>()}) { return pack_elem(*pack, d.bin.rhs, src); }
+    if (const auto element{TRY(memory_element(object, d.bin.rhs, src))}) {
+        return load_comptime(*element);
+    }
+
+    // An array kept in comptime memory reads its element there
+    if (const auto memory{object.as_opt<comptime_place>()}) {
+        const auto element{TRY(comptime_elem_place(*memory, d.bin.rhs, src))};
+        return load_comptime(element.as<comptime_place>());
+    }
+
     if (!object.is<module_ref>() && vector_read(type_of(object))) {
         return vector_lane(object, d.bin.rhs, src);
     }
@@ -599,12 +671,22 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     const auto  object_ref{*rec.ref_field()};
     const auto  index_ref{*rec.ref_field()};
+    const bool  mutated{(rec.u32_field() & flags::MUTATED) != 0};
     const auto  object{TRY(resolve(object_ref, src))};
 
+    // An element through a compile-time slice or address is an element of the memory it names
+    if (const auto element{TRY(memory_element(object, index_ref, src))}) {
+        return operand{*element};
+    }
+    if (const auto memory{memory_target(object)}) {
+        return comptime_elem_place(*memory, index_ref, src);
+    }
+
     // An element of a known value read at compile time is that element
-    if (is_comptime()) {
+    if (is_comptime() || holds_type(type_of(object))) {
         const auto global{object.as_opt<global_const>()};
-        const auto known{global ? stdx::option<ip::index>{global->value} : comptime_value(object)};
+        const auto known{global ? stdx::option<ip::index>{global->value}
+                                : comptime_value(held_address(object))};
         const auto at{known ? comptime_value(TRY(resolve_value(index_ref, src))) : stdx::none};
         if (known && at) { return comptime_elem(*known, *at, src); }
     }
@@ -614,14 +696,18 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
         return comp_.needs_runtime(u_, src);
     }
 
-    // A compile-time call reaches into its own memory, which a function's body reads whole
-    if (const auto memory{object.as_opt<comptime_place>()}; memory && !gir_fn_) {
+    if (const auto memory{object.as_opt<comptime_place>()}) {
+        // A runtime index reads the element from a copy of the whole value
+        const auto at{TRY(resolve_value(index_ref, src))};
+        if (gir_fn_ && !is_comptime() && !mutated && !comptime_value(at)) {
+            const auto copy{TRY(comptime_copy(*memory, src))};
+            return operand{TRY(elem_place(copy, index_ref, src))};
+        }
+
         return comptime_elem_place(*memory, index_ref, src);
     }
 
-    if (is_comptime() || object.is<comptime_place>()) {
-        return comp_.unsupported(u_, src, "an element of comptime memory");
-    }
+    if (is_comptime()) { return comp_.unsupported(u_, src, "an element of comptime memory"); }
 
     const auto object_place{TRY(address_of(object_ref, src))};
     const auto elem{TRY(elem_place(object_place, index_ref, src))};
@@ -676,6 +762,17 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     if (const auto init{target.as_opt<anon_init>()}; init && is_pointer) {
         return slice_literal{init->inst};
     }
+
+    // An address of compile-time memory names it, so writes through it reach the memory
+    if (const auto memory{target.as_opt<comptime_place>()}; memory && is_comptime()) {
+        auto& pointee{type_of(target)};
+        auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
+                                      : ctx.get_reference(mut, pointee)};
+        return operand{memory_address(*memory, address_type)};
+    }
+
+    // A function's address at compile time is the function, which a `^fn` holds as its value
+    if (target.is<function_ref>() && !is_mut && (is_comptime() || is_pointer)) { return target; }
 
     // `&f` of a function item borrows a copy of its code address
     if (const auto fn{target.as_opt<function_ref>()}; fn && !is_mut && !is_comptime()) {
@@ -738,14 +835,78 @@ auto analyzer::pointer_place(const operand& ptr, const source& src) -> result<pl
     return place{.address = value, .pointee = referent.get(), .is_mutable = writable_through(type)};
 }
 
+auto analyzer::comptime_deref(const operand& ptr) -> stdx::option<operand> {
+    auto&      pool{comp_.constants()};
+    auto&      type{type_of(ptr)};
+    const auto known{comptime_value(ptr)};
+
+    // `*s` of a known slice is the array of its elements
+    if (const auto slice{type.get_data().as_opt<gs::types::slice>()}) {
+        std::vector<stdx::option<ip::index>> elements;
+        if (const auto view{view_of(ptr)}) {
+            for (u64 i{0}; i < view->len; ++i) {
+                auto element{view->array};
+                element.path.emplace_back(
+                    comptime_step{static_cast<u32>(view->offset + i), view->elem});
+                elements.emplace_back(comptime_value(load_comptime(element)));
+            }
+        } else if (!known) {
+            return stdx::none;
+        } else if (const auto text{pool.value_at(*known).data.as_opt<std::string>()}) {
+            const std::string bytes{*text};
+            for (const char c : bytes) {
+                elements.emplace_back(pool.intern(u64{static_cast<u8>(c)}, slice->underlying));
+            }
+        } else if (const auto agg{pool.value_at(*known).data.as_opt<ip::aggregate_value>()}) {
+            elements = agg->elements;
+        } else {
+            return stdx::none;
+        }
+
+        auto& array{comp_.ctx().get_array(
+            gs::types::mut::CONSTANT, false, elements.size(), slice->underlying)};
+        return operand{pool.intern(ip::aggregate_value{std::move(elements)}, array)};
+    }
+
+    // An `undefined` pointer reads an `undefined` value
+    const auto pointee{gs::pointee_of(type)};
+    if (known && pointee && !pool.is_type(*known) &&
+        pool.value_at(*known).data.is<ip::undefined_value>()) {
+        return operand{pool.intern(ip::undefined_value{}, *pointee)};
+    }
+
+    return stdx::none;
+}
+
 auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     const auto  ptr{TRY(resolve_value(d.un.operand, src))};
+    const bool  as_place{(d.un.aux & flags::DEREF_PLACE) != 0};
+
+    // A `^fn` constant holds its function, which it dereferences to
+    if (const auto index{comptime_value(ptr)}; index && !as_place && comp_.plain_function(*index)) {
+        return ptr;
+    }
+
+    // A compile-time address reads or writes the memory it names
+    if (const auto memory{memory_place(ptr)}) {
+        if (as_place) { return operand{*memory}; }
+        return load_comptime(*memory);
+    }
+
+    if (const auto referent{comptime_referent(ptr)}; referent && !as_place && is_comptime()) {
+        return *referent;
+    }
+
+    if (is_comptime() && !as_place) {
+        if (const auto value{comptime_deref(ptr)}) { return *value; }
+    }
+
     if (is_comptime()) { return comp_.unsupported(u_, src, "a dereference at compile time"); }
     auto& type{type_of(ptr)};
     if (type.get_kind() == gs::type_kind::SLICE) {
-        return deref_slice(d.un.operand, ptr, (d.un.aux & flags::DEREF_PLACE) != 0, src);
+        return deref_slice(d.un.operand, ptr, as_place, src);
     }
 
     if (gs::is_fat_callable(type)) {
@@ -753,7 +914,7 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
     }
 
     const auto target{TRY(pointer_place(ptr, src))};
-    if ((d.un.aux & flags::DEREF_PLACE) != 0) { return target; }
+    if (as_place) { return target; }
     // An aggregate is read where it lies, so a field or element of it is addressed in place
     if (gs::is_structural(target.pointee->get_kind())) {
         return slot_value{
