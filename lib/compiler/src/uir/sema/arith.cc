@@ -179,6 +179,15 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }
     if (reads_through(rhs)) { rhs = TRY(read_through_reference(rhs, src)); }
 
+    // A compile-time reference is read for what it refers to
+    for (auto* side : {&lhs, &rhs}) {
+        if (type_of(*side).get_kind() != gs::type_kind::REFERENCE || !memory_place(*side)) {
+            continue;
+        }
+
+        if (const auto referent{comptime_referent(*side)}) { *side = operand{*referent}; }
+    }
+
     // An enum literal names a variant of the other side's enum
     if (lhs.is<enum_literal>() && type_of(rhs).get_kind() == gs::type_kind::ENUM) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));

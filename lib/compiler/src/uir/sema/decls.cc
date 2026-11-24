@@ -612,11 +612,24 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
     }
 
     if (value->is<function_ref>() || value->is<generic_ref>()) {
-        if (declared) {
+        // An immutable one names the function, while a `let mut` keeps it in storage
+        const auto fn{value->as_opt<function_ref>()};
+        const bool is_mut{d.has(decl_flags::MUT)};
+        if (!declared || (fn && !is_mut && names_function(*fn, *declared))) { return *value; }
+
+        // A typed `fn` or `^fn` global holds the function as a value
+        const auto held{[&] {
+            const auto scope{comptime_scope()};
+            return as_erased_callable(*value, *declared, src);
+        }()};
+        const auto erased{TRY(held)};
+        if (!erased) {
             return comp_.unsupported(u_, src, "a function declaration with an explicit type");
         }
 
-        return *value;
+        // A constant one is folded where it is read, with no storage
+        if (!is_mut) { return *erased; }
+        return analyze_global(decl, *erased, declared, attrs, src);
     }
 
     // An `auto` declaration takes its value's type, a number its default one
@@ -699,7 +712,7 @@ auto analyzer::analyze_global(decl_id                        decl,
     const auto stored{
         declared ? TRY(coerce_to(value, *declared, src, {.what = use_site::kind::STORE})) : value};
     const auto  index{*comptime_value(stored)};
-    auto&       type{type_of(stored)};
+    auto&       type{declared ? *declared : type_of(stored)};
     const bool  is_mutable{d.has(decl_flags::MUT)};
     const auto& data{pool.value_at(index).data};
 

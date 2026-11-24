@@ -750,13 +750,16 @@ auto analyzer::call_closure(const operand&       callee,
 
 auto analyzer::comptime_callable(const operand& op, gs::type& target, const source&)
     -> result<stdx::option<operand>> {
-    if (!target.get_data().is<gs::types::function>()) { return stdx::none; }
+    // A `^fn(...)` holds the function the same way, and is never null
+    const auto pointer{target.get_data().as_opt<gs::types::pointer>()};
+    auto&      signature{pointer ? pointer->underlying : target};
+    if (!signature.get_data().is<gs::types::function>()) { return stdx::none; }
     if (const auto index{comptime_value(op)}; index && comp_.const_function(*index)) {
         return operand{*index};
     }
 
     const auto fn{op.as_opt<function_ref>()};
-    if (!fn || fn->fn->env || !names_function(*fn, target)) { return stdx::none; }
+    if (!fn || fn->fn->env || !names_function(*fn, signature)) { return stdx::none; }
     return operand{comp_.function_value(*fn->fn)};
 }
 

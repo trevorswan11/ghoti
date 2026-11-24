@@ -8,6 +8,7 @@
 
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -81,6 +82,9 @@ class key_writer {
     auto write(const address_value& v) -> void {
         text(v.symbol);
         elements(v.pointee);
+    }
+    auto write(const memory_value& v) -> void {
+        fmt::format_to(std::back_inserter(key_), "{}[{}]", v.alloc, fmt::join(v.path, ","));
     }
     auto write(const dyn_value& v) -> void {
         text(v.data_symbol);

@@ -440,6 +440,7 @@ auto analyzer::slice_of_array(const gir::value& address, gs::type& from) -> resu
 }
 
 auto analyzer::comptime_referent(const operand& op) -> stdx::option<ip::index> {
+    if (const auto memory{memory_place(op)}) { return comptime_value(load_comptime(*memory)); }
     const auto known{comptime_value(op)};
     if (!known || comp_.constants().is_type(*known)) { return stdx::none; }
     const auto address{comp_.constants().value_at(*known).data.as_opt<ip::address_value>()};
@@ -605,6 +606,10 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
         }
 
         const auto& data{comp_.constants().value_at(*index).data};
+        if (data.is<ip::memory_value>()) {
+            return comp_.unsupported(u_, src, "a compile-time address used at runtime");
+        }
+
         if (data.is<ip::aggregate_value>() || data.is<ip::union_value>()) {
             TRY(require_runtime(src));
             return materialize(*index, src);

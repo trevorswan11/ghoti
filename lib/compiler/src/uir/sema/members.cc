@@ -150,9 +150,16 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
                             .mut   = gs::types::mut::CONSTANT};
     }
 
+    // Compile-time memory is passed by its compile-time address, which the method writes through
+    if (const auto memory{TRY(memory_receiver(object_ref, src))}) {
+        return receiver_arg{.value = memory_address(*memory, self_type),
+                            .mut   = gs::types::mut::MUTABLE};
+    }
+
     // At compile time a read-only method takes a reference holding the object's value
     if (!gir_fn_ || is_comptime()) {
-        const bool reads_only{how == modifier::REF || how == modifier::POLY_REF};
+        const bool pointer{how == modifier::PTR || how == modifier::POLY_PTR};
+        const bool reads_only{how == modifier::REF || how == modifier::POLY_REF || pointer};
         const auto object{TRY(resolve_value(object_ref, src))};
         const auto known{comptime_value(object)};
         if (!reads_only || !known) {
@@ -160,8 +167,9 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
                 u_, src, "a method taking its object's address at compile time");
         }
 
-        auto& ref_type{
-            comp_.ctx().get_reference(gs::types::mut::CONSTANT, *gs::pointee_of(self_type))};
+        auto&      pointee{*gs::pointee_of(self_type)};
+        auto&      ref_type{pointer ? comp_.ctx().get_pointer(gs::types::mut::CONSTANT, pointee)
+                                    : comp_.ctx().get_reference(gs::types::mut::CONSTANT, pointee)};
         const auto held{comptime_referent(object).value_or(*known)};
         return receiver_arg{.value = comp_.constants().intern(
                                 ip::address_value{.symbol = {}, .pointee = {held}}, ref_type),
@@ -205,6 +213,14 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
     };
 }
 
+auto analyzer::memory_receiver(ref object_ref, const source& src)
+    -> result<stdx::option<comptime_place>> {
+    const auto object{TRY(resolve(object_ref, src))};
+    if (const auto through{memory_target(object)}) { return through; }
+    if (const auto p{object.as_opt<comptime_place>()}) { return *p; }
+    return stdx::none;
+}
+
 auto analyzer::self_modifier_of(const unit& u, inst_id func) const -> stdx::option<modifier> {
     const auto&   m{*u.uir};
     record_reader rec{m, m.data_of(func).pl.extra};
@@ -246,6 +262,11 @@ auto analyzer::call_method(gs::type&            owner,
             values.emplace_back(call_arg{.value = TRY(resolve_value(arg, src)), .written = arg});
         }
 
+        if (!memory_place(values.front().value) || is_comptime()) {
+            return call_generic(g, std::move(values), src, src);
+        }
+
+        const auto scope{comptime_scope()};
         return call_generic(g, std::move(values), src, src);
     }
 
@@ -268,7 +289,16 @@ auto analyzer::call_method(gs::type&            owner,
     values.reserve(method.params.size());
     values.emplace_back(self.value);
     for (const auto arg : args) { values.emplace_back(TRY(resolve_value(arg, src))); }
-    const auto result{TRY(call_with(method, std::move(values), src, false))};
+
+    // A method given compile-time memory runs at compile time, where alone it may write it
+    const auto result{TRY([&] {
+        if (!memory_place(self.value) || is_comptime()) {
+            return call_with(method, std::move(values), src, false);
+        }
+
+        const auto scope{comptime_scope()};
+        return call_with(method, std::move(values), src, false);
+    }())};
 
     // A `mut?` method's result takes the mutability of the object it was called on
     const auto how{*method.self_modifier};

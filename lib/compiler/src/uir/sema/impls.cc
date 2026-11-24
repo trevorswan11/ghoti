@@ -136,7 +136,20 @@ auto compilation::impl_params_for(const impl_entry& entry, gs::type& target)
     if (m.tag_of(*call) == tag::call) {
         rec.skip_ref();
         if (callee && m.tag_of(*callee) == tag::decl_val) {
-            ctor_decl.emplace(m.data_of(*callee).un.aux);
+            const decl_id decl{m.data_of(*callee).un.aux};
+            ctor_decl.emplace(decl);
+
+            // A declaration may alias a ctor declared elsewhere, as `const Result = std.Result`
+            const auto& d{m.decl_at(decl)};
+            const auto  init{d.value_body ? yielded_inst(m, m.body(d.value_body)) : stdx::none};
+            if (init && (m.tag_of(*init) == tag::field_val || m.tag_of(*init) == tag::decl_val)) {
+                analyzer   a{*this, *entry.owner};
+                const auto named{TRY(a.analyze_decl(decl))};
+                if (const auto g{named.as_opt<generic_ref>()}) {
+                    ctor_decl.emplace(g->fn->decl);
+                    ctor_unit = g->fn->owner.get();
+                }
+            }
         }
     } else {
         const auto name{rec.str_field()};

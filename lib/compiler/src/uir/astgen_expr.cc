@@ -357,6 +357,7 @@ auto astgen::optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref
 auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
     const ast::node_id id{h};
     const auto         inner{u == use::MUTATE ? use::MUTATE : use::PLACE};
+    const u32          mutated{u == use::MUTATE ? flags::MUTATED : 0U};
     if (id.is<ast::identifier_expr>()) { return identifier_node(id, u); }
     if (const auto dot{ast_.get_as_opt<ast::dot_expr>(id)}) {
         const auto object{place(dot->object, inner)};
@@ -365,7 +366,7 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
                            .ref_field(object.value)
                            .str_field(name_of(dot->member))
                            .u32_field((object.is_place ? flags::PLACE : 0U) |
-                                      (assigned ? flags::ASSIGNED : 0U)),
+                                      (assigned ? flags::ASSIGNED : 0U) | mutated),
                        id),
                 true};
     }
@@ -377,7 +378,7 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
                        writer()
                            .ref_field(object.value)
                            .ref_field(at)
-                           .u32_field(object.is_place ? flags::PLACE : 0U),
+                           .u32_field((object.is_place ? flags::PLACE : 0U) | mutated),
                        id),
                 true};
     }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -54,6 +55,63 @@ struct function_text {
 [[nodiscard]] auto opcode_of(std::string_view text) -> std::string_view {
     const auto op{text.substr(0, text.find(' '))};
     return op.substr(0, op.find('.'));
+}
+
+[[nodiscard]] auto parse_int(std::string_view text) -> stdx::option<i64> {
+    if (text == "true") { return i64{1}; }
+    if (text == "false") { return i64{0}; }
+    i64        value{};
+    const auto end{text.data() + text.size()};
+    const auto [ptr, ec]{std::from_chars(text.data(), end, value)};
+    if (ec != std::errc{} || ptr != end) { return stdx::none; }
+    return value;
+}
+
+// The value an integer type of at most 63 bits holds as `value`, when it fits
+[[nodiscard]] auto fitting(std::string_view type, i64 value) -> stdx::option<std::string> {
+    const bool is_size{type == "isize" || type == "usize"};
+    if (type.size() < 2 || (type[0] != 'i' && type[0] != 'u')) { return stdx::none; }
+    const auto bits{is_size ? stdx::option<i64>{i64{64}} : parse_int(type.substr(1))};
+    if (!bits || *bits < 1 || *bits > 63) { return stdx::none; }
+    const bool is_signed{type[0] == 'i'};
+    const i64  min{is_signed ? -(i64{1} << (*bits - 1)) : 0};
+    const i64  max{is_signed ? (i64{1} << (*bits - 1)) - 1 : (i64{1} << *bits) - 1};
+    if (value < min || value > max) { return stdx::none; }
+    return fmt::format("{}", value);
+}
+
+// What an integer operator, comparison or cast of constants computes, when it fits its type
+[[nodiscard]] auto folded_int(std::string_view text) -> stdx::option<std::string> {
+    const auto op{opcode_of(text)};
+    const auto head{text.substr(0, text.find(' '))};
+    if (head != op && head.substr(op.size()) != ".checked") { return stdx::none; }
+    if (head.size() + 1 >= text.size()) { return stdx::none; }
+
+    // `<type> <operand>`, or `<type> <lhs>, <rhs>`
+    const auto rest{text.substr(head.size() + 1)};
+    const auto space{rest.find(' ')};
+    if (space == std::string_view::npos) { return stdx::none; }
+    const auto type{rest.substr(0, space)};
+    const auto operands{rest.substr(space + 1)};
+    if (op == "int_cast" || op == "widen_cast") {
+        const auto value{parse_int(operands)};
+        return value ? fitting(type, *value) : stdx::none;
+    }
+
+    const auto comma{operands.find(", ")};
+    if (comma == std::string_view::npos) { return stdx::none; }
+    const auto lhs{parse_int(operands.substr(0, comma))};
+    const auto rhs{parse_int(operands.substr(comma + 2))};
+    if (!lhs || !rhs) { return stdx::none; }
+    if (op == "eq" || op == "ne") { return (*lhs == *rhs) == (op == "eq") ? "true" : "false"; }
+    if (op != "add" && op != "sub" && op != "mul") { return stdx::none; }
+
+    i64        out{};
+    const bool overflow{op == "add"   ? __builtin_add_overflow(*lhs, *rhs, &out)
+                        : op == "sub" ? __builtin_sub_overflow(*lhs, *rhs, &out)
+                                      : __builtin_mul_overflow(*lhs, *rhs, &out)};
+    if (overflow) { return stdx::none; }
+    return fitting(type, out);
 }
 
 // Each `%N` outside a string literal, with where it starts and ends
@@ -259,8 +317,8 @@ class canonicalizer {
             } else {
                 const auto child{found->second};
                 const auto id{raw ? raw_id(child) : final_id(child)};
-                // A forwarded constant or a by-value parameter stands for itself
-                if (bare_.contains(child)) {
+                // A forwarded or folded constant or a by-value parameter stands for itself
+                if (bare_.contains(child) || (!raw && folded_.contains(child))) {
                     out += raw ? raw_names_.text(id) : shared_.text(id);
                 } else {
                     out += fmt::format("{{#{}}}", id);
@@ -543,6 +601,10 @@ class canonicalizer {
             out = raw_tree(i);
         } else {
             out = expand(line.text, false);
+            if (auto value{folded_int(out)}) {
+                out = std::move(*value);
+                folded_.insert(i);
+            }
         }
         final_[i] = std::move(out);
         return *final_[i];
@@ -579,6 +641,7 @@ class canonicalizer {
     ankerl::unordered_dense::map<usize, std::vector<usize>>            root_writes_;
     ankerl::unordered_dense::set<usize>                                scratch_;
     ankerl::unordered_dense::set<usize>                                bare_;
+    ankerl::unordered_dense::set<usize>                                folded_;
     ankerl::unordered_dense::set<usize>                                built_;
     ankerl::unordered_dense::set<usize>                                held_;
 };

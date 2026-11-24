@@ -255,7 +255,9 @@ auto analyzer::call_through_field(ref                  object_ref,
     const auto base{TRY(address_of(object_ref, src))};
     const auto field{TRY(field_place(base, name, src))};
     auto&      field_type{*field.pointee};
-    const auto fn{field_type.get_data().as_opt<gs::types::function>()};
+    const auto pointer{field_type.get_data().as_opt<gs::types::pointer>()};
+    const auto fn{
+        (pointer ? pointer->underlying : field_type).get_data().as_opt<gs::types::function>()};
     if (!fn) { return comp_.unsupported(u_, src, "a call through a field"); }
     return call_value(TRY(read(field, src)), *fn, args, src);
 }

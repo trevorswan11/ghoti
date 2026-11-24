@@ -133,6 +133,8 @@ struct comptime_step {
 struct comptime_place {
     u32                        alloc;
     std::vector<comptime_step> path{};
+    // Reached through a compile-time reference, which any analysis may write through
+    bool borrowed{false};
 };
 
 // An immutable runtime value kept in a slot, read by loading it and addressed where it lies
@@ -1316,6 +1318,9 @@ class analyzer {
                                 gs::type&                    self_type,
                                 ref                          object_ref,
                                 const source&                src) -> result<receiver_arg>;
+    // The compile-time memory an object lies in, or that its compile-time address names
+    [[nodiscard]] auto memory_receiver(ref object_ref, const source& src)
+        -> result<stdx::option<comptime_place>>;
     // The modifier a method's `self` parameter is written with, none for a plain function
     [[nodiscard]] auto self_modifier_of(const unit& u, inst_id func) const
         -> stdx::option<ast::type_modifier::modifier>;
@@ -1727,6 +1732,16 @@ class analyzer {
                                       const operand&        value,
                                       const source&         src) -> result<void>;
     [[nodiscard]] auto load_comptime(const comptime_place& p) -> operand;
+    // A runtime slot holding a copy of what comptime memory holds
+    [[nodiscard]] auto comptime_copy(const comptime_place& p, const source& src) -> result<place>;
+    // The compile-time address of a place in comptime memory, as a value of `type`
+    [[nodiscard]] auto memory_address(const comptime_place& p, gs::type& type) -> ip::index;
+    // The place a compile-time address names
+    [[nodiscard]] auto memory_place(const operand& op) -> stdx::option<comptime_place>;
+    // The memory an object's compile-time address names, held directly or in comptime memory
+    [[nodiscard]] auto memory_target(const operand& object) -> stdx::option<comptime_place>;
+    // Where a store to a comptime place or reference writes, through any reference it holds
+    [[nodiscard]] auto comptime_destination(const operand& target) -> stdx::option<comptime_place>;
     // `current` with the element `path` leads to replaced by `value`
     [[nodiscard]] auto with_element(stdx::option<ip::index>        current,
                                     gs::type&                      type,

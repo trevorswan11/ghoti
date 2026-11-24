@@ -71,6 +71,14 @@ struct address_value {
     [[nodiscard]] auto operator==(const address_value&) const noexcept -> bool = default;
 };
 
+// An address in compile-time memory: an allocation and the elements leading into it, which only
+// compile-time code reads
+struct memory_value {
+    u32                alloc{0};
+    std::vector<u32>   path;
+    [[nodiscard]] auto operator==(const memory_value&) const noexcept -> bool = default;
+};
+
 // A `dyn` object's data and vtable symbols, either of which may be empty for a null pointer
 struct dyn_value {
     std::string        data_symbol;
@@ -91,6 +99,7 @@ using value_data = stdx::variant<i64,
                                  enum_value,
                                  union_value,
                                  address_value,
+                                 memory_value,
                                  dyn_value,
                                  void_value,
                                  undefined_value,

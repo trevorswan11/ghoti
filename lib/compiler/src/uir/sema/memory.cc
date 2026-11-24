@@ -70,11 +70,11 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
 auto analyzer::store_comptime(const comptime_place& p, const operand& value, const source& src)
     -> result<void> {
     auto& alloc{comp_.alloc_at(p)};
-    if (alloc.frame != frame_ && alloc.frame != env_frame_) {
+    if (!p.borrowed && alloc.frame != frame_ && alloc.frame != env_frame_) {
         return comp_.unsupported(u_, src, "a store to another analysis's comptime allocation");
     }
 
-    if (alloc.runtime_depth != runtime_depth_) {
+    if (!p.borrowed && alloc.runtime_depth != runtime_depth_) {
         return comp_.report(
             u_, src, gs::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE, std::string{STORE_UNDER_RUNTIME});
     }
@@ -82,9 +82,12 @@ auto analyzer::store_comptime(const comptime_place& p, const operand& value, con
     // An element or field is stored by rebuilding the value around it
     if (!p.path.empty()) {
         auto&      element_type{*p.path.back().type};
-        const auto stored{
-            TRY(coerce_to(value, element_type, src, {.what = use_site::kind::STORE}))};
-        const auto element{TRY(require_comptime(stored, src))};
+        const auto stored{[&] {
+            const auto scope{comptime_scope()};
+            return coerce_to(value, element_type, src, {.what = use_site::kind::STORE});
+        }()};
+        const auto typed{TRY(stored)};
+        const auto element{TRY(require_comptime(typed, src))};
         const auto whole_type{comp_.alloc_at(p).type};
         if (!whole_type) {
             return comp_.unsupported(u_, src, "an element of untyped comptime memory");
@@ -102,9 +105,12 @@ auto analyzer::store_comptime(const comptime_place& p, const operand& value, con
             return comp_.unsupported(u_, src, "an untyped literal with no type to take");
         }
 
-        auto& type{*alloc.type};
-        return store_comptime(
-            p, TRY(coerce_to(value, type, src, {.what = use_site::kind::STORE})), src);
+        auto&      type{*alloc.type};
+        const auto typed{[&] {
+            const auto scope{comptime_scope()};
+            return coerce_to(value, type, src, {.what = use_site::kind::STORE});
+        }()};
+        return store_comptime(p, TRY(typed), src);
     }
 
     DISCARD(TRY(require_comptime(value, src)));
@@ -140,6 +146,72 @@ auto analyzer::load_comptime(const comptime_place& p) -> operand {
         }
     }
     return value;
+}
+
+auto analyzer::comptime_copy(const comptime_place& p, const source& src) -> result<place> {
+    auto&      type{type_of(operand{p})};
+    const auto value{TRY(as_runtime(load_comptime(p), src))};
+    return spill(value, type, false);
+}
+
+auto analyzer::memory_address(const comptime_place& p, gs::type& type) -> ip::index {
+    std::vector<u32> path;
+    path.reserve(p.path.size());
+    for (const auto& step : p.path) { path.emplace_back(step.index); }
+    return comp_.constants().intern(ip::memory_value{.alloc = p.alloc, .path = std::move(path)},
+                                    type);
+}
+
+auto analyzer::memory_place(const operand& op) -> stdx::option<comptime_place> {
+    const auto index{comptime_value(op)};
+    auto&      pool{comp_.constants()};
+    if (!index || pool.is_type(*index)) { return stdx::none; }
+    const auto memory{pool.value_at(*index).data.as_opt<ip::memory_value>()};
+    if (!memory) { return stdx::none; }
+
+    // Each step's type, from the array or struct holding it
+    comptime_place p{.alloc = memory->alloc, .path = {}, .borrowed = true};
+    auto           type{comp_.alloc_at(p).type};
+    for (const auto i : memory->path) {
+        if (!type) { return stdx::none; }
+        stdx::option<gs::type&> next;
+        if (const auto arr{type->get_data().as_opt<gs::types::array>()}) {
+            next.emplace(arr->underlying);
+        } else if (const auto st{type->get_data().as_opt<gs::types::struct_t>()};
+                   st && i < st->fields.size()) {
+            next = st->fields[i];
+        }
+
+        if (!next) { return stdx::none; }
+        p.path.emplace_back(comptime_step{i, next.get()});
+        type = next;
+    }
+
+    return p;
+}
+
+auto analyzer::memory_target(const operand& object) -> stdx::option<comptime_place> {
+    if (const auto p{object.as_opt<comptime_place>()}) {
+        if (!gs::pointee_of(type_of(object))) { return stdx::none; }
+        return memory_place(load_comptime(*p));
+    }
+
+    return memory_place(object);
+}
+
+auto analyzer::comptime_destination(const operand& target) -> stdx::option<comptime_place> {
+    // Assigning to a reference writes what it refers to
+    const auto through{[&](const operand& held) -> stdx::option<comptime_place> {
+        if (type_of(held).get_kind() != gs::type_kind::REFERENCE) { return stdx::none; }
+        return memory_place(held);
+    }};
+
+    if (const auto p{target.as_opt<comptime_place>()}) {
+        if (const auto referent{through(load_comptime(*p))}) { return referent; }
+        return *p;
+    }
+
+    return through(target);
 }
 
 auto analyzer::with_element(stdx::option<ip::index>        current,
@@ -465,7 +537,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
 
     const auto value{TRY(resolve_value(d.bin.rhs, src))};
 
-    if (const auto comptime_slot{target.as_opt<comptime_place>()}) {
+    if (const auto comptime_slot{comptime_destination(target)}) {
         // A runtime function's store into comptime memory runs its value at compile time
         auto known{[&] -> result<operand> {
             if (comptime_value(value)) { return value; }
@@ -556,8 +628,11 @@ auto analyzer::analyze_load(inst_id inst) -> result<operand> {
             load(place{.address = slot->address, .pointee = slot->type, .is_mutable = false})};
     }
 
-    // A field of a compile-time value was already read
-    if (comptime_value(target)) { return target; }
+    // A field of a compile-time value was already read, and a module's member is itself
+    if (comptime_value(target) || target.is<function_ref>() || target.is<generic_ref>() ||
+        target.is<module_ref>()) {
+        return target;
+    }
     const auto slot{target.as_opt<place>()};
     if (!slot || (!slot->pending && !slot->address.type)) {
         return comp_.unsupported(u_, src, "a load from a non-place");
@@ -592,6 +667,9 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
 
         return value;
     }
+
+    // `@TypeOf` asks only the global's type
+    if (only_types_ && !as_place) { return operand{gir::value{gir::local_id{}, *global->type}}; }
 
     if (is_comptime()) {
         // A runtime body folding a condition keeps a `let mut` global's read at runtime

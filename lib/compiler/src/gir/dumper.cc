@@ -48,6 +48,9 @@ auto format_constant(const ip::pool& constants, ip::index at) -> std::string {
         [](const ip::address_value&) -> std::string {
             UNREACHABLE("An address constant is never an operand");
         },
+        [](const ip::memory_value&) -> std::string {
+            UNREACHABLE("Compile-time memory is never an operand");
+        },
         [](const ip::dyn_value&) -> std::string {
             UNREACHABLE("A dyn constant is never an operand");
         },
