@@ -458,8 +458,7 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
 auto analyzer::resolve_value(ref r, const source& src) -> result<operand> {
     const auto op{TRY(resolve(r, src))};
 
-    // Comptime memory used as a value, such as a written parameter or an array of mutable
-    // elements, reads what it holds
+    // Comptime memory used as a value reads what it holds
     if (const auto p{op.as_opt<comptime_place>()}) { return load_comptime(*p); }
 
     if (op.is<place>() || op.is<global_ref>() || op.is<comptime_place>()) {

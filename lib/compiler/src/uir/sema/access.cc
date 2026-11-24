@@ -682,8 +682,7 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
         return comptime_elem_place(*memory, index_ref, src);
     }
 
-    // An element of a known value read at compile time is that element, as is one of a value
-    // that can't exist at runtime
+    // An element of a known value read at compile time is that element
     if (is_comptime() || holds_type(type_of(object))) {
         const auto global{object.as_opt<global_const>()};
         const auto known{global ? stdx::option<ip::index>{global->value}
