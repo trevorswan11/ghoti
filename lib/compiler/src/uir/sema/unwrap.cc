@@ -349,7 +349,7 @@ auto analyzer::capture_shape(const operand&                      op,
     }
 
     if (!residual) { return *shape; }
-    const source residual_src{ast::node_id{*residual->payload}};
+    const source residual_src{*residual->payload};
     if (shape->residual->get_kind() == gs::type_kind::VOID_) {
         return comp_.report(u_,
                             residual_src,

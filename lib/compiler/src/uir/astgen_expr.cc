@@ -512,7 +512,7 @@ auto astgen::builtin_call(source                src,
                                         [this](ast::explicit_type_id t) { return type(t); })};
             const bool   buffer{i == 0 || (i == 1 && copies)};
             const source at{
-                node.arguments[i].visit([](ast::expr_handle e) { return source{ast::node_id{e}}; },
+                node.arguments[i].visit([](ast::expr_handle e) { return source{e}; },
                                         [](ast::explicit_type_id t) { return source{t}; })};
             const u32 is_dest{i == 0 ? 1U : 0U};
             viewed.emplace_back(buffer ? add_un(tag::mem_view, arg, is_dest, at) : arg);
@@ -534,7 +534,7 @@ auto astgen::type_of(source src, const ast::call_expr& node) -> ref {
     for (const auto& argument : node.arguments) {
         auto&            body{operands.emplace_back()};
         const body_guard guard{*this, body};
-        argument.visit([this](ast::expr_handle e) { yields(expr(e), ast::node_id{e}); },
+        argument.visit([this](ast::expr_handle e) { yields(expr(e), e); },
                        [this](ast::explicit_type_id t) { yields(type(t), t); });
     }
 
@@ -565,9 +565,7 @@ auto astgen::lower_node(ast::node_id id, const ast::index_expr& node) -> ref {
         const auto lo{optional_expr(range->lhs)};
         const auto hi{optional_expr(range->rhs)};
         u32        bits{object.is_place ? flags::PLACE : 0U};
-        if (ast::node_id{node.index}.get_token_type() == token_type_t::DOT_DOT_EQ) {
-            bits |= flags::INCLUSIVE;
-        }
+        if (node.index.get_token_type() == token_type_t::DOT_DOT_EQ) { bits |= flags::INCLUSIVE; }
         return add_pl(tag::slice,
                       writer().ref_field(object.value).ref_field(lo).ref_field(hi).u32_field(bits),
                       id);
@@ -645,7 +643,7 @@ auto astgen::lower_node(ast::node_id id, const ast::array_expr& node) -> ref {
 auto astgen::value_body(ast::expr_handle h) -> std::vector<inst_id> {
     std::vector<inst_id> body;
     const body_guard     guard{*this, body};
-    yields(expr(h), ast::node_id{h});
+    yields(expr(h), h);
     return body;
 }
 
@@ -793,7 +791,7 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
             const auto name{
                 entry.member ? name_of(ast_.get_as<ast::implicit_access_expr>(*entry.member).member)
                              : std::string_view{}};
-            entries.emplace_back(name, pattern(ast::node_id{entry.value}, slots));
+            entries.emplace_back(name, pattern(entry.value, slots));
         }
         auto record{writer()};
         record.body_field(type_body_insts).count(entries.size());
@@ -801,8 +799,8 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
         return add_pl(tag::pat_init, record, id);
     }
     if (const auto ref_pattern{ast_.get_as_opt<ast::reference_expr>(id)};
-        ref_pattern && is_structural_pattern(ast::node_id{ref_pattern->rhs})) {
-        return add_un(tag::pat_deref, pattern(ast::node_id{ref_pattern->rhs}, slots), 0, id);
+        ref_pattern && is_structural_pattern(ref_pattern->rhs)) {
+        return add_un(tag::pat_deref, pattern(ref_pattern->rhs, slots), 0, id);
     }
     if (const auto call_pattern{ast_.get_as_opt<ast::call_expr>(id)};
         call_pattern && call_pattern->function.any<ast::implicit_access_expr, ast::dot_expr>()) {
@@ -863,7 +861,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
             const body_guard guard{*this, record.pattern_body};
             for (const auto alternative : arm.patterns) {
                 slots.alternative.clear();
-                record.roots.emplace_back(pattern(ast::node_id{alternative}, slots));
+                record.roots.emplace_back(pattern(alternative, slots));
             }
             // One binding per name, shared by every alternative that binds it
             for (u32 slot{0}; slot < slots.order.size(); ++slot) {
@@ -1153,7 +1151,7 @@ auto astgen::lower_node(ast::node_id id, const ast::cfg_value_expr& node) -> ref
     if (!chosen) { return to_ref(well_known::undefined); }
     // A selected `@compileError` already fired when the guard was evaluated
     if (const auto call{ast_.get_as_opt<ast::call_expr>(*chosen)};
-        call && ast::node_id{call->function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
+        call && call->function.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
         return add(tag::unreachable, {}, id);
     }
     return expr(*chosen);

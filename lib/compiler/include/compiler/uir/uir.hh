@@ -16,6 +16,7 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 
 namespace ghoti::uir {
@@ -187,8 +188,14 @@ union data {
 };
 static_assert(sizeof(data) == 8);
 
-// What an instruction was lowered from
-using source = stdx::variant<ast::node_id, ast::explicit_type_id>;
+// What an instruction was lowered from, built from an id or straight from a handle
+struct source : stdx::variant<ast::node_id, ast::explicit_type_id> {
+    using variant::variant;
+
+    template <ast::node_kind... Kinds>
+    constexpr source(ast::handle<Kinds...> handle) noexcept // NOLINT
+        : variant{ast::node_id{handle}} {}
+};
 
 // The kinds of field an `extra` record holds, in the order its schema lists them
 enum class field_kind : u8 {

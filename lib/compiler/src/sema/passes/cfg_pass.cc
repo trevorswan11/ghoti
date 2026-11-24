@@ -94,14 +94,13 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
         recurse_into_bodies(errdefer->deferred);
     }
     if (const auto test{module_.ast.get_as_opt<ast::test_stmt>(id)}) {
-        rewrite_items(
-            module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{test->block}).statements);
+        rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(test->block).statements);
     }
 }
 
 auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
     PROFILE_FUNCTION();
-    rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
+    rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(block).statements);
 }
 
 auto cfg_pass::recurse_into_type(ast::explicit_type_id type) -> void {

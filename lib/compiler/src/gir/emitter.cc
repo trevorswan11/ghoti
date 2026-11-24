@@ -628,7 +628,7 @@ auto decl_is_deferred_compile_error(const ast::AST& ast, const ast::decl_stmt& d
     const ast::node_id value_id{*decl.value};
     if (value_id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{ast.get_as<ast::call_expr>(value_id)};
-    return ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
+    return call.function.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
 }
 
 // Resolves an extern decl's optional `("target")` argument, defaulting to `"c"`.
@@ -1900,7 +1900,7 @@ auto emitter::branch_hint_of(const mod::module_t& owner, ast::node_id stmt)
     const auto first{owner.ast.get_as_opt<ast::expr_stmt>(*block->statements.front())};
     if (!first) { return stdx::none; }
     const auto call{owner.ast.get_as_opt<ast::call_expr>(*first->expression)};
-    if (!call || ast::node_id{call->function}.get_builtin() != syntax::builtin_t::BRANCH_HINT) {
+    if (!call || call->function.get_builtin() != syntax::builtin_t::BRANCH_HINT) {
         return stdx::none;
     }
     const auto cv{const_eval_.try_eval(*call->arguments[0].as_opt<ast::expr_handle>())};
@@ -9815,8 +9815,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
                                     elem_type)};
 
     const auto& range{active_ast().get_as<ast::range_expr>(index.index)};
-    const bool  inclusive{ast::node_id{index.index}.get_token_type() ==
-                          syntax::token_type_t::DOT_DOT_EQ};
+    const bool  inclusive{index.index.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
 
     // An omitted lower bound is `0`; an omitted upper bound is the source length, filled in once
     // it is known below.

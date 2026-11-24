@@ -2633,7 +2633,7 @@ namespace {
                               : owner.ast.get_as_opt<ast::expr_stmt>(*body.statements.front())};
         const auto  call{first ? owner.ast.get_as_opt<ast::call_expr>(*first->expression)
                                : stdx::none};
-        if (call && ast::node_id{call->function}.get_builtin() == syntax::builtin_t::BRANCH_HINT) {
+        if (call && call->function.get_builtin() == syntax::builtin_t::BRANCH_HINT) {
             const auto hint{owner.ast.get_as_opt<ast::implicit_access_expr>(
                 *call->arguments[0].as_opt<ast::expr_handle>())};
             resolved.cold =
@@ -2650,7 +2650,7 @@ auto const_eval::declared_fn_attributes(ast::expr_handle arg)
     if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(*arg)}) {
         return member_fn_attributes(*dot);
     }
-    const auto declaration{module_->get_identifier_declaration(ast::node_id{arg})};
+    const auto declaration{module_->get_identifier_declaration(arg)};
     if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
     return fn_decl_attributes(*declaration->owner, *declaration->decl);
 }
@@ -4478,7 +4478,7 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
     while (callee_mod && callee_sym) {
         const auto node{callee_sym->get_data().as_opt<sema::symbols::node_t>()};
         const auto decl{node ? callee_mod->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
-        if (!decl || !decl->value || !chain.step(*callee_mod, ast::node_id{*node})) { break; }
+        if (!decl || !decl->value || !chain.step(*callee_mod, *node)) { break; }
         if (const auto alias{callee_mod->ast.get_as_opt<ast::identifier_expr>(*decl->value)}) {
             if (!callee_mod->root_table_idx) { break; }
             const auto next{ctx_.registry.get_from_opt(*callee_mod->root_table_idx, alias->name)};
@@ -6065,7 +6065,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             !sema::comptime_int_fits(*src_int, *target, ptr_bits)) {
             auto operand_node{*op_h};
             if (const auto un{module_->ast.get_as_opt<ast::unary_expr>(operand_node)};
-                un && ast::node_id{operand_node}.get_token_type() == syntax::token_type_t::MINUS) {
+                un && operand_node.get_token_type() == syntax::token_type_t::MINUS) {
                 operand_node = un->rhs;
             }
             if (!module_->ast[operand_node].is<ast::int_literal_expr>()) { return stdx::none; }

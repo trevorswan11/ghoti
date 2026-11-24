@@ -256,8 +256,8 @@ auto compilation::test_units() const -> std::vector<bool> {
             for (const auto& stmt : ast.get_as<ast::block_stmt>(test.block)) {
                 const auto imports{u.uir->imports()};
                 const auto import{std::ranges::find_if(imports, [&](const import_info& info) {
-                    return info.node.get_index() == ast::node_id{stmt}.get_index() &&
-                           info.node.get_kind() == ast::node_id{stmt}.get_kind();
+                    return info.node.get_index() == stmt.get_index() &&
+                           info.node.get_kind() == stmt.get_kind();
                 })};
                 if (import == imports.end() || !import->path) { continue; }
                 for (const auto& target : units_) {

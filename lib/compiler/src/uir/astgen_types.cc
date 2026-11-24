@@ -309,10 +309,8 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
         const body_guard guard{*this, header};
         u32              slot{0};
         const auto       bind_assoc{[&](ast::identifier_handle name) {
-            const auto bound{
-                add_pl(tag::bind,
-                       writer().str_field(name_of(name)).u32_field(slot++).u32_field(0),
-                       ast::node_id{name})};
+            const auto bound{add_pl(
+                tag::bind, writer().str_field(name_of(name)).u32_field(slot++).u32_field(0), name)};
             DISCARD(declare_member(
                 name_of(name), location_of(name), {.kind = binding_kind::VALUE, .value = bound}));
         }};
@@ -356,9 +354,9 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
         };
         {
             const body_guard guard{*this, record.signature};
-            yields(lower_function(ast::node_id{method.signature},
-                                  ast_.get_as<ast::function_expr>(method.signature)),
-                   ast::node_id{method.signature});
+            yields(
+                lower_function(method.signature, ast_.get_as<ast::function_expr>(method.signature)),
+                method.signature);
         }
         lower_attributes(method.attributes, stdx::none, record.attrs);
         methods.emplace_back(std::move(record));
@@ -442,7 +440,7 @@ auto astgen::lower_param(const ast::function_expr::parameter& param, u32 extra_f
                                 .body_field(default_insts)
                                 .u32_field(bits)
                                 .u32_field(0),
-                            ast::node_id{param.name})};
+                            param.name)};
     if (name) {
         DISCARD(declare(name->name,
                         location_of(param.name),
@@ -476,7 +474,7 @@ auto astgen::lower_function(ast::node_id                        id,
                                         .body_field({})
                                         .u32_field(flags::PARAM_SELF)
                                         .u32_field(static_cast<u32>(fn.self->modifier.get_raw())),
-                                    ast::node_id{fn.self->name})};
+                                    fn.self->name)};
             DISCARD(declare(name,
                             location_of(fn.self->name),
                             {.kind = binding_kind::VALUE, .value = added},

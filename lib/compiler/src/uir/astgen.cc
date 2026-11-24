@@ -269,14 +269,13 @@ auto astgen::lower_decl_bodies(decl_id id, const ast::decl_stmt& decl) -> void {
         const auto       value{*decl.value};
         ref              result{};
         if (initializes_fn) {
-            result =
-                lower_function(ast::node_id{value}, ast_.get_as<ast::function_expr>(value), decl);
+            result = lower_function(value, ast_.get_as<ast::function_expr>(value), decl);
         } else {
             if (is_aggregate_value(value)) { pending_type_name_ = name_of(decl.name); }
             result             = expr(value);
             pending_type_name_ = {};
         }
-        yields(result, ast::node_id{value});
+        yields(result, value);
     }
 
     auto& d{out_.decl_at_mut(id)};
@@ -342,7 +341,7 @@ auto astgen::add_import_decl(ast::node_id            node,
 
 auto astgen::add_import(ast::node_id node, const ast::import_stmt& import) -> import_id {
     import_info info{.node = node};
-    const auto  payload{ast::node_id{import.payload}};
+    const auto  payload{import.payload};
     auto        loaded{[&] {
         if (const auto path{ast_.get_as_opt<ast::string_expr>(payload)}) {
             info.spec = std::string{path->value};
@@ -368,9 +367,7 @@ auto astgen::lower_test(decl_id id, const ast::test_stmt& test) -> void {
     {
         const body_guard guard{*this, instructions};
         auto             body{scoped_block(test.block, scope_kind::TEST)};
-        yields(
-            add_pl(tag::block, writer().str_field({}).body_field(body), ast::node_id{test.block}),
-            ast::node_id{test.block});
+        yields(add_pl(tag::block, writer().str_field({}).body_field(body), test.block), test.block);
     }
     out_.decl_at_mut(id).value_body = out_.add_body(instructions);
 }
@@ -552,7 +549,7 @@ auto astgen::lower_attributes(const stdx::option<ast::attribute_list>& attribute
         for (const auto arg : item.args) { args.emplace_back(expr(arg)); }
         DISCARD(add_pl(tag::attribute,
                        writer().u32_field(static_cast<u32>(item.kind)).refs_field(args),
-                       ast::node_id{item.name}));
+                       item.name));
     }
 }
 
@@ -571,11 +568,11 @@ auto astgen::collect_mutation_sites() -> void {
         while (true) {
             if (const auto ident{ast_.get_as_opt<ast::identifier_expr>(at)}) { return ident->name; }
             if (const auto dot{ast_.get_as_opt<ast::dot_expr>(at)}) {
-                at = ast::node_id{dot->object};
+                at = dot->object;
                 continue;
             }
             if (const auto index{ast_.get_as_opt<ast::index_expr>(at)}) {
-                at = ast::node_id{index->array};
+                at = index->array;
                 continue;
             }
             return stdx::none;

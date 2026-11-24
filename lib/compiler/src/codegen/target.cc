@@ -452,10 +452,6 @@ struct machine_baseline {
     return base;
 }
 
-} // namespace
-
-namespace {
-
 [[nodiscard]] auto lookup_target(const llvm::Triple& triple)
     -> stdx::result<const llvm::Target*, diagnostic> {
     std::string error;
@@ -581,10 +577,6 @@ constexpr std::array family_specs{
     }
     return names;
 }
-
-} // namespace
-
-namespace {
 
 // Built on first use, one family at a time: a compilation usually needs only its target's
 [[nodiscard]] auto build_family(const family_spec& spec) -> stdx::option<cpu_feature_family> {

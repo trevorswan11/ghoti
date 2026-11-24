@@ -646,10 +646,6 @@ class canonicalizer {
     ankerl::unordered_dense::set<usize>                                held_;
 };
 
-} // namespace
-
-namespace {
-
 [[nodiscard]] auto one_same(std::string_view lhs, std::string_view rhs) -> bool {
     interner      shared;
     canonicalizer left{parse(lhs), shared};

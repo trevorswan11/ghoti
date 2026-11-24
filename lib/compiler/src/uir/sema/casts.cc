@@ -154,7 +154,7 @@ auto analyzer::cast_operand_src(inst_id call, ref operand_ref) const -> source {
         const auto index{static_cast<usize>(at - args.begin())};
         if (index < expr->arguments.size()) {
             if (const auto arg{expr->arguments[index].as_opt<ast::expr_handle>()}) {
-                return source{ast::node_id{*arg}};
+                return source{*arg};
             }
         }
     }

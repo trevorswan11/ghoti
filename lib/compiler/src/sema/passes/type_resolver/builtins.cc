@@ -248,10 +248,6 @@ namespace {
     return std::ranges::contains(names, name);
 }
 
-} // namespace
-
-namespace {
-
 enum class builtin_family : u8 {
     CAST,
     REFLECTION,

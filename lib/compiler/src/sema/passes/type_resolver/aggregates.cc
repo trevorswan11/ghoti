@@ -71,7 +71,7 @@ auto type_resolver::check_enum_value(enum_value_tracker&            values,
     if (!current) { return stdx::none; }
 
     const auto& member{resolving_.ast.get_as<ast::identifier_expr>(name).name};
-    const auto  loc{resolving_.ast.location_of(value ? ast::node_id{*value} : ast::node_id{name})};
+    const auto  loc{resolving_.ast.location_of(value ? ast::node_id{*value} : name)};
     if (!comptime_int_fits(*current, values.underlying, target_ptr_bits())) {
         return diagnostic{fmt::format("Enum member '{}' has a value that does not fit its "
                                       "underlying type '{}'",

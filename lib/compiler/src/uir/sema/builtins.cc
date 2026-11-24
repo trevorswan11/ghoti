@@ -605,7 +605,7 @@ auto analyzer::builtin_name_location(const source& src) -> source_location {
     // A check is located at the builtin's name, not its call
     const auto callee{src.as_opt<ast::node_id>().and_then([&](ast::node_id id) {
         return u_.source->ast.get_as_opt<ast::call_expr>(id).transform(
-            [](const ast::call_expr& call) { return source{ast::node_id{call.function}}; });
+            [](const ast::call_expr& call) { return source{call.function}; });
     })};
     return comp_.location_of(u_, callee.value_or(src)).one_based();
 }

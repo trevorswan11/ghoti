@@ -1199,10 +1199,6 @@ TEST_CASE("match comptime reads nested patterns") {
     }
 }
 
-} // namespace ghoti::tests
-
-namespace ghoti::tests {
-
 TEST_CASE("Nested matches report exactly what they miss") {
     constexpr auto ILLEGAL{sema::error::ILLEGAL_MATCH_PATTERN};
     constexpr auto MISSING{sema::error::MISSING_FIELD};

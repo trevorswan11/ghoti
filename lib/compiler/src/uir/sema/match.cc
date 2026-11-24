@@ -506,7 +506,7 @@ auto analyzer::capture_type(const pattern::capture_site& site, const match_root&
     const auto modifier{site.capture.modifier};
     if (!modifier.is_ref() && !modifier.is_ptr()) { return &site.value_type; }
 
-    const source src{ast::node_id{*site.capture.payload}};
+    const source src{*site.capture.payload};
 
     const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
     if (wants_mutable && !root.is_addressable) {
