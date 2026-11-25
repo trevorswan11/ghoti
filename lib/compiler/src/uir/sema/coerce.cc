@@ -312,6 +312,16 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             f && gs::is_float(target.get_kind()) &&
             (from.get_kind() == gs::type_kind::COMPTIME_FLOAT ||
              gs::is_implicit_widenable(from, target))) {
+            // An untyped math result is computed again in the float it becomes, rounding once
+            const auto known{comptime_value(op)};
+            const auto origin{known && from.get_kind() == gs::type_kind::COMPTIME_FLOAT
+                                  ? comp_.math_origin_of(*known)
+                                  : stdx::none};
+            if (const auto format{gs::float_format_of(target)}; origin && format) {
+                const auto again{evaluate_traced(origin->function, origin->input, *format)};
+                return operand{gir::value::constant(pool, again.value, target).constant_index()};
+            }
+
             return operand{gir::value::constant(pool, *f, target).constant_index()};
         }
 

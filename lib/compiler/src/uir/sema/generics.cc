@@ -394,7 +394,7 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             stdx::option<gs::type&> declared;
             if (!untyped) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
             for (usize j{i}; j < args.size(); ++j) {
-                auto& type{declared ? *declared : inferred_type(args[j].value)};
+                auto& type{declared ? *declared : pack_element_type(args[j].value)};
                 if (!gs::is_value_type(type.get_kind()) ||
                     gs::is_comptime_numeric(type.get_kind())) {
                     return comp_.unsupported(*g.owner, param_src, "a pack of comptime-only values");
@@ -678,6 +678,27 @@ auto analyzer::matched_type(gs::type& declared, const operand& arg, const source
             mut, given.get_data().as<gs::types::slice>().null_terminated, *given_leaf);
     default: return &ctx.get_reference(mut, *given_leaf);
     }
+}
+
+auto analyzer::pack_element_type(const operand& arg) -> gs::type& {
+    auto& type{inferred_type(arg)};
+    if (type.get_kind() == gs::type_kind::COMPTIME_FLOAT) { return builtin(gs::type_kind::F64); }
+    const auto known{comptime_value(arg)};
+    const auto exact{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
+    if (type.get_kind() != gs::type_kind::COMPTIME_INT || !exact) { return type; }
+
+    // An untyped integer takes the first of these that holds it. The old resolver gives a wider
+    // one `i32`, which its value doesn't fit, so that stays comptime-only here
+    auto& ctx{comp_.ctx()};
+    for (const auto [bits, is_signed] : {std::pair{32U, true},
+                                         std::pair{64U, true},
+                                         std::pair{64U, false},
+                                         std::pair{128U, true}}) {
+        auto& candidate{ctx.get_int(static_cast<u16>(bits), is_signed)};
+        if (gs::comptime_int_fits(*exact, candidate, comp_.ptr_bits())) { return candidate; }
+    }
+
+    return type;
 }
 
 auto analyzer::callable_mismatch(const gs::type& pattern, const operand& arg)

@@ -677,6 +677,9 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         yielded = TRY(concrete(yielded, init_src));
     }
 
+    // An untyped `.name` stays a literal, typed by where it is used
+    if (!type_ref && yielded.is<enum_literal>()) { return yielded; }
+
     const auto known{comptime_value(yielded)};
     if (!known) {
         return comp_.report(

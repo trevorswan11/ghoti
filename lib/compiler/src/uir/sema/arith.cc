@@ -241,6 +241,46 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         return vector_binary(info, lhs, rhs, src);
     }
 
+    // Two uncoerced `.name`s are equal when their names are
+    const auto lhs_literal{lhs.as_opt<enum_literal>()};
+    const auto rhs_literal{rhs.as_opt<enum_literal>()};
+    if (info.cls == op_class::EQUALITY && lhs_literal && rhs_literal) {
+        const bool same{mod().string(mod().data_of(lhs_literal->inst).str) ==
+                        mod().string(mod().data_of(rhs_literal->inst).str)};
+        return operand{comp_.constants().intern(info.kind == instruction_kind::EQ ? same : !same,
+                                                builtin(gs::type_kind::BOOL))};
+    }
+
+    // `void` has a single value, so two of them are always equal
+    if (info.cls == op_class::EQUALITY && lhs_type.get_kind() == gs::type_kind::VOID_ &&
+        rhs_type.get_kind() == gs::type_kind::VOID_) {
+        return operand{comp_.constants().intern(info.kind == instruction_kind::EQ,
+                                                builtin(gs::type_kind::BOOL))};
+    }
+
+    // `ptr + n`, `n + ptr` and `ptr - n` step by whole pointees, the pointer written first
+    const bool lhs_ptr{lhs_type.get_kind() == gs::type_kind::POINTER};
+    const bool rhs_ptr{rhs_type.get_kind() == gs::type_kind::POINTER};
+    const bool offsets{(info.kind == instruction_kind::ADD && lhs_ptr != rhs_ptr) ||
+                       (info.kind == instruction_kind::SUB && lhs_ptr && !rhs_ptr)};
+    if (offsets && !info.wrapping && !info.saturating) {
+        const auto& ptr{lhs_ptr ? lhs : rhs};
+        const auto& count{lhs_ptr ? rhs : lhs};
+        if (is_int_like(type_of(count))) {
+            TRY(require_runtime(src));
+            const auto at{TRY(as_runtime(ptr, src))};
+            const auto typed{gs::is_comptime_numeric(type_of(count).get_kind())
+                                 ? TRY(coerce_to(count,
+                                                 builtin(gs::type_kind::USIZE),
+                                                 src,
+                                                 {.what = use_site::kind::STORE}))
+                                 : count};
+            const auto by{TRY(as_runtime(typed, src))};
+            auto&      ptr_type{*at.type};
+            return gir::value{builder_.emit_binary(info.kind, at, by, ptr_type), ptr_type};
+        }
+    }
+
     // Operators on strings, arrays and other aggregates arrive with their own phases
     const auto plain{[](const gs::type& type) {
         return gs::is_numeric(type.get_kind()) || type.get_kind() == gs::type_kind::BOOL ||
@@ -606,7 +646,11 @@ auto analyzer::analyze_shift(inst_id            inst,
     const auto  kind{info.kind};
     const auto& src{src_of(inst)};
     auto&       shifted{type_of(lhs)};
-    if (comptime_value(lhs) && comptime_value(rhs) && folds_exactly(shifted)) {
+    if (comptime_value(lhs) && comptime_value(rhs)) {
+        if (!folds_exactly(shifted)) {
+            return comp_.unsupported(u_, src, "compile-time arithmetic past 128 bits");
+        }
+
         return fold_shift(info, lhs, rhs, src);
     }
 

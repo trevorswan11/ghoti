@@ -404,6 +404,8 @@ constexpr std::array LEGACY_BUG_TESTS{
     // A type a `match comptime` yields is listed as a global constant of type `struct`, and its
     // local `const` value is built at runtime
     std::string_view{"A match arm may yield an `extern struct` type"},
+    // The evaluator leaves a comparison with an infinite constant, like `@log(0.0)`, at runtime
+    std::string_view{"math builtins reject integers, types, and results past the range"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or

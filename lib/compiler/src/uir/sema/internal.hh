@@ -42,6 +42,7 @@
 #include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::uir::sema {
@@ -780,6 +781,18 @@ class compilation {
     [[nodiscard]] auto with_environment(gs::type& signature, gs::type& env_type) -> gs::type&;
 
     // Analyzes a body whose return type is inferred now, since a caller needs that type
+    // An untyped math result's function and input, which a concrete float computes again
+    auto note_math_origin(ip::index value, math_origin origin) -> void {
+        math_origins_.insert_or_assign(std::to_underlying(value), origin);
+    }
+    [[nodiscard]] auto math_origin_of(ip::index value) const -> stdx::option<math_origin> {
+        const auto found{math_origins_.find(std::to_underlying(value))};
+        if (found == math_origins_.end()) { return stdx::none; }
+        return found->second;
+    }
+
+    // An inferred return type that an untyped `return` leaves to the peer of every `return`
+    [[nodiscard]] auto infer_peer_return(instance& fn) -> result<void>;
     [[nodiscard]] auto infer_return(instance& fn, const unit& caller, const source& use)
         -> result<void>;
     // The function type a bodyless literal written as a value spells
@@ -1092,6 +1105,7 @@ class compilation {
     function_names                          plain_functions_;
     u32                                     local_count_{0};
     u32                                     speculating_{0};
+    ankerl::unordered_dense::map<u32, math_origin> math_origins_;
     std::vector<gsl::not_null<generic_fn*>> generics_;
     std::vector<gsl::not_null<impl_entry*>> impls_;
     ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
@@ -1193,6 +1207,8 @@ class analyzer {
         -> result<gsl::not_null<gs::type*>>;
     // Analyzes the function's parameters and body into its GIR function
     [[nodiscard]] auto analyze_function() -> result<void>;
+    // Analyzes a body only to collect the types its `return`s give, for an inferred return type
+    [[nodiscard]] auto collect_returns() -> std::vector<gsl::not_null<gs::type*>>;
     // Binds a comptime parameter of a runtime body, giving an aggregate a slot runtime reads use
     [[nodiscard]] auto bind_comptime_param(inst_id param, ip::index value) -> result<void>;
     // A module-level declaration's value, emitting its GIR global when it has one
@@ -2378,6 +2394,8 @@ class analyzer {
     default_wrapper(const unit& owner, decl_id decl, usize written, const source& src)
         -> result<stdx::option<operand>>;
 
+    // The type an argument a pack takes has, an untyped number taking a concrete one
+    [[nodiscard]] auto pack_element_type(const operand& arg) -> gs::type&;
     // Why a callable argument doesn't match an `impl Fn(...)` pattern, none when it does
     [[nodiscard]] auto callable_mismatch(const gs::type& pattern, const operand& arg)
         -> stdx::option<std::string>;
@@ -2576,6 +2594,8 @@ class analyzer {
     // The loops being unrolled into a runtime body, innermost last
     std::vector<inst_id>                            unrolling_;
     ankerl::unordered_dense::map<inst_id, mem_view> mem_views_;
+    // The types an inferred return type meets, when collecting them
+    stdx::option<std::vector<gsl::not_null<gs::type*>>> collected_returns_;
     // The `@branchHint` leading each body being analyzed, innermost last
     std::vector<stdx::option<inst_id>> body_hints_;
     // What `@setRuntimeSafety` set in each body being analyzed, innermost last

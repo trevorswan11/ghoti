@@ -381,6 +381,17 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
 
+    // Collecting the types an inferred return meets records each and leaves
+    if (collected_returns_ && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
+        auto& type{type_of(value)};
+        if (gs::is_numeric(type.get_kind()) || !is_untyped_literal(value)) {
+            collected_returns_->emplace_back(&type);
+        }
+
+        if (!is_comptime()) { builder_.emit_return(); }
+        return void_value();
+    }
+
     // An inferred return type is the first returned value's
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
         // An untyped number only takes its type from the returns after it

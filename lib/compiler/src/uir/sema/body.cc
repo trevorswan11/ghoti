@@ -209,6 +209,7 @@ auto analyzer::analyze_function() -> result<void> {
     if (terminated()) { return {}; }
 
     // An inferred return type with no `return` to fix it is `void`
+    if (collected_returns_) { return {}; }
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
         fn_->return_type = &builtin(gs::type_kind::VOID_);
     }
@@ -575,5 +576,11 @@ auto analyzer::denoted_type(const operand& op, const source& src)
 }
 
 auto analyzer::interned_type(gs::type& t) -> ip::index { return t.get_ip_index(); }
+
+auto analyzer::collect_returns() -> std::vector<gsl::not_null<gs::type*>> {
+    collected_returns_.emplace();
+    DISCARD(analyze_function());
+    return *std::exchange(collected_returns_, stdx::none);
+}
 
 } // namespace ghoti::uir::sema

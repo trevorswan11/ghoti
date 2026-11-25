@@ -292,6 +292,41 @@ auto analyzer::float_math_of(syntax::builtin_t which, const operand& arg, const 
     -> result<operand> {
     const auto name{syntax::builtin_name(which)};
     auto&      type{type_of(arg)};
+
+    // An untyped operand computes exactly, and a concrete float it meets later computes it again
+    if (const auto known{comptime_value(arg)}; known && gs::is_comptime_numeric(type.get_kind())) {
+        const auto& value{comp_.constants().value_at(*known)};
+        const auto  exact{int_of(value)};
+        const auto  number{value.data.as_opt<f128>()};
+        const auto  small{exact ? exact->to_i128() : stdx::none};
+        if (!number && !small) {
+            return comp_.unsupported(u_, src, fmt::format("`{}` of this value", name));
+        }
+        const f128 input{number ? *number
+                                : gir::semantics::float_from_int({.bits = 128, .is_signed = true},
+                                                                 static_cast<u128>(*small),
+                                                                 float_format::QUAD)};
+        const auto function{*semantics::math_function_of(which)};
+        const auto folded{evaluate_traced(function, input, float_format::QUAD)};
+        if (folded.overflowed) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::LITERAL_OUT_OF_RANGE,
+                fmt::format("'{}' of {} is out of range for type 'f128'", name, input));
+        }
+
+        auto&      untyped{builtin(gs::type_kind::COMPTIME_FLOAT)};
+        const auto result{comp_.constants().intern(folded.value, untyped)};
+        const bool exact_enough{function == math_function::SQRT ||
+                                function == math_function::FLOOR ||
+                                function == math_function::CEIL};
+        if (!exact_enough) {
+            comp_.note_math_origin(result, {.function = function, .input = input});
+        }
+        return operand{result};
+    }
+
     if (!gs::is_float(type.get_kind())) {
         return comp_.unsupported(
             u_, src, fmt::format("`{}` of something other than a typed float", name));
