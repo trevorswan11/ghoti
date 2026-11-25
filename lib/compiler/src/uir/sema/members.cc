@@ -146,6 +146,23 @@ auto analyzer::global_symbol(decl_id decl, const source& src) -> result<std::str
 auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const source& src)
     -> result<receiver_arg> {
     if (how == modifier::VALUE) {
+        // A receiver named as a place or a mutable global is read from where it lives
+        const auto object{TRY(resolve(object_ref, src))};
+        const auto global{object.as_opt<global_ref>()};
+        if (is_comptime() && (object.is<place>() || global)) {
+            return comp_.needs_runtime(u_, src);
+        }
+
+        if (const auto p{object.as_opt<place>()}) {
+            return receiver_arg{.value = TRY(read(*p, src)), .mut = gs::types::mut::CONSTANT};
+        }
+
+        if (global) {
+            TRY(require_runtime(src));
+            const auto at{global_place(global->symbol, *global->type, true)};
+            return receiver_arg{.value = TRY(read(at, src)), .mut = gs::types::mut::CONSTANT};
+        }
+
         return receiver_arg{.value = TRY(resolve_value(object_ref, src)),
                             .mut   = gs::types::mut::CONSTANT};
     }
@@ -160,6 +177,10 @@ auto analyzer::receiver(modifier how, gs::type& self_type, ref object_ref, const
     if (!gir_fn_ || is_comptime()) {
         const bool pointer{how == modifier::PTR || how == modifier::POLY_PTR};
         const bool reads_only{how == modifier::REF || how == modifier::POLY_REF || pointer};
+        // An object in runtime storage needs the call to run at runtime
+        const auto stored{TRY(resolve(object_ref, src))};
+        if (stored.is<place>()) { return comp_.needs_runtime(u_, src); }
+
         const auto object{TRY(resolve_value(object_ref, src))};
         const auto known{comptime_value(object)};
         if (!reads_only || !known) {

@@ -668,7 +668,7 @@ TEST_CASE("`errdefer` in `const_eval`", "[uir]") {
         const _dummy = test_err();
         const final_log = err_log;
     )"),
-                      "an unwrap at compile time");
+                      "a `?` that propagates at compile time");
 }
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir]") {
@@ -691,7 +691,7 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir
         const final_ref = ref_log;
         const final_ptr = ptr_log;
     )"),
-                      "an unwrap at compile time");
+                      "a `?` that propagates at compile time");
 }
 
 TEST_CASE("A comptime store under a runtime condition is rejected", "[uir]") {

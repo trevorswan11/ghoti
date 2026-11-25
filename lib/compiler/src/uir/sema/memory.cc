@@ -886,6 +886,9 @@ auto analyzer::analyze_load(inst_id inst) -> result<operand> {
         from && mod().tag_of(*from) == tag::field_ptr && target.is<gir::value>()) {
         return target;
     }
+    // A mutable global is read only at runtime
+    if (is_comptime() && target.is<global_ref>()) { return comp_.needs_runtime(u_, src); }
+
     const auto slot{target.as_opt<place>()};
     if (!slot || (!slot->pending && !slot->address.type)) {
         return comp_.unsupported(u_, src, "a load from a non-place");

@@ -264,4 +264,148 @@ TEST_CASE("A range value takes the element type it is used as", "[uir]") {
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("A pointer is sliced with its bounds' order checked", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const f = fn(p: ^mut u8, q: ^u8, n: usize): void {
+            @memcpy(p[0..n], q[1..n]);
+        };
+        pub const g = fn(p: ^mut u8, n: usize): []mut u8 { return p[2..=n]; };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("An inferred cast meeting an untyped value takes the type it is used as", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const f = fn(x: u32, pad: u3, s: bool): u8 {
+            let low: u8 = @truncate(x) & 0x0f;
+            let top: u8 = if (s) @bitCast(@bitCast(i8, @as(u8, low)) >> pad) else low >> pad;
+            let both: u8 = if (s) @truncate(x) else @truncate(x >> 8);
+            return low + top + both;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A by-value method reads a `let mut` receiver where it lives", "[uir]") {
+    const auto diff{diff_source(R"(
+        const S = struct {
+            pub exp: u16,
+            pub const get = fn(self): u16 { return self.exp; };
+        };
+        pub const f = fn(sign: u16): u16 {
+            let mut dst: S = undefined;
+            dst.exp = 0;
+            dst.exp |= sign;
+            return dst.get();
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A sentinel slice passes where a plain slice is wanted", "[uir]") {
+    const auto diff{diff_source(R"(
+        const E = enum { aa, bbb };
+        const take = fn(s: []u8): usize { return s.len; };
+        const pass = fn(v: auto): usize { return take(v); };
+        pub const f = fn(e: E, z: [:0]u8): usize {
+            return take(@tagName(e)) + take(z) + pass(z) + pass(@tagName(e));
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("Closures in two modules are told apart in instance names", "[uir]") {
+    mod::memory_loader loader;
+    loader.add("a.gh", R"(
+        const rt = fn(comptime T: type): type { return @typeInfo(T).function.return_type; };
+        pub const fa = fn(): usize {
+            let mut a: u8 = 2;
+            let closure = fn(): f32 { a += 1; return 1.0; };
+            _ = closure();
+            return if (rt(@TypeOf(closure)) == f32) 10 else 0;
+        };
+    )");
+    loader.add("main.gh", R"(
+        import "a.gh" as a;
+        const rt = fn(comptime T: type): type { return @typeInfo(T).function.return_type; };
+        pub const f = fn(x: i32): usize {
+            let offset: i64 = 40;
+            let c = fn(val: i32): i64 { return @as(i64, val) + offset; };
+            _ = c(x);
+            return a.fa() + @as(usize, if (rt(@TypeOf(c)) == i64) 100 else 0);
+        };
+    )");
+    const auto diff{helpers::diff_pipelines(loader, "main.gh", {}, {})};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A generic function's type is its open signature", "[uir]") {
+    const auto diff{diff_source(R"(
+        const rt = fn(comptime T: type): type { return T; };
+        const id = fn(x: auto): @TypeOf(x) { return x; };
+        pub const name = @typeName(@TypeOf(rt));
+        pub const name2 = @typeName(@TypeOf(id));
+        pub const ret_is_type = @typeInfo(@TypeOf(rt)).function.return_type == type;
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`void`, `undefined` and wide untyped values pass as runtime arguments", "[uir]") {
+    const auto diff{diff_source(R"(
+        const take = fn(val: auto): void { _ = val; };
+        const count = fn(base: u32, args...): u32 { return base + @intCast(args.len); };
+        const pick = fn(args...): u128 { return args[1]; };
+        pub const f = fn(x: u32): u128 {
+            take({});
+            take(undefined);
+            _ = count(x, 340282366920938463463374607431768211455, {});
+            return pick(x, 340282366920938463463374607431768211455);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("Known string arms meet as a sentinel slice", "[uir]") {
+    const auto diff{diff_source(R"(
+        const take = fn(s: []u8): usize { return s.len; };
+        pub const f = fn(b: bool): usize { return take(if (b) "true" else "false"); };
+        pub const g = fn(b: bool): usize { let s: []u8 = if (b) "yes" else "no"; return s.len; };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A type declared in a runtime body is one type per set of captures", "[uir]") {
+    const auto diff{diff_source(R"(
+        const wrap = fn(comptime T: type, x: T): usize {
+            const W = struct { v: T, n: u8 };
+            let w: W = .{ .v = x, .n = 1 };
+            return @sizeOf(W) + w.n;
+        };
+        pub const f = fn(): usize {
+            const P = struct { a: i32, b: i64 };
+            let p: P = .{ .a = 1, .b = 2 };
+            return @sizeOf(P) + @intCast(usize, p.a) + wrap(u8, 3) + wrap(u64, 4);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("Comparing an integer with an untyped number past its type folds", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        pub const lt = fn(v: u32): bool { return v < 100000000000000000; };
+        pub const ne = fn(v: i8): bool { return -300 != v; };
+    )")};
+    CHECK(run.gir().contains("ret bool true"));
+    CHECK_FALSE(run.gir().contains("lt bool"));
+}
+
 } // namespace ghoti::tests

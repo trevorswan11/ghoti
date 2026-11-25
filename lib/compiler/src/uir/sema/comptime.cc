@@ -125,6 +125,21 @@ compilation::speculation::~speculation() { --owner.speculating_; }
 
 auto compilation::speculate() -> speculation { return speculation{*this}; }
 
+auto compilation::drop_value_errors(usize from) -> bool {
+    auto rest{diagnostics_.split_off(from)};
+    bool dropped{false};
+    for (const auto& d : rest) {
+        const auto e{d.get_error()};
+        if (e != gs::error::COMPTIME_EVALUATION_FAILED && e != gs::error::LITERAL_OUT_OF_RANGE) {
+            diagnostics_.push_back(d);
+        } else {
+            dropped = true;
+        }
+    }
+
+    return dropped;
+}
+
 auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
     DISCARD(diagnostics_.split_off(s.diagnostics));
 
@@ -264,9 +279,8 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
 
 auto analyzer::require_comptime(const operand& op, const source& src) -> result<ip::index> {
     if (const auto index{comptime_value(op)}) { return *index; }
-    if (op.is<function_ref>()) {
-        return comp_.unsupported(u_, src, "a function used as a compile-time value");
-    }
+    // A function's compile-time value is its symbol, which it is called and exported by
+    if (const auto fn{op.as_opt<function_ref>()}) { return comp_.function_value(*fn->fn); }
 
     return comp_.needs_runtime(u_, src);
 }

@@ -128,10 +128,11 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     std::erase_if(values, [&](const operand& v) { return is_untyped_literal(v); });
     auto& peer{*TRY(peer_type(values, src))};
 
-    // An array arm meets a slice where it is stored, which its value no longer names
+    // A runtime array arm meets a slice where it is stored, which its value no longer names. A
+    // known one, like a string, is built in its arm
     if (peer.get_kind() == gs::type_kind::SLICE &&
         std::ranges::any_of(values, [&](const operand& v) {
-            return type_of(v).get_kind() == gs::type_kind::ARRAY;
+            return type_of(v).get_kind() == gs::type_kind::ARRAY && !comptime_value(v);
         })) {
         return comp_.unsupported(u_, src, "arrays meeting as a slice");
     }
@@ -215,8 +216,27 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
     for (const auto& [seg, body, taken] :
          {std::tuple{then_seg, then_body, known.value_or(true)},
           std::tuple{else_seg, else_body, !known.value_or(false)}}) {
+        // The arm a known condition skips keeps its type errors, but no value it would compute
         switch_to(seg);
-        const auto out{TRY(analyze_body(body))};
+        const auto reported{comp_.diagnostic_count()};
+        const auto analyzed{analyze_body(body)};
+        if (known && !taken && comp_.drop_value_errors(reported)) {
+            // An arm cut short by a dropped error leaves the segments it opened unreachable
+            const auto here{builder_.get_segment()->get_id()};
+            for (auto at{std::to_underlying(merge) + 1};
+                 gir_fn_->get_segment_opt(gir::segment_id{at});
+                 ++at) {
+                if (gir::segment_id{at} == here) { continue; }
+                switch_to(gir::segment_id{at});
+                if (!terminated()) { builder_.emit_unreachable(); }
+            }
+
+            switch_to(here);
+            if (!terminated()) { builder_.emit_unreachable(); }
+            continue;
+        }
+
+        const auto out{TRY(analyzed)};
         if (out.yielded && !terminated()) {
             if (taken) {
                 arrivals.emplace_back<incoming>(

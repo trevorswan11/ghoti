@@ -296,7 +296,9 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
 
     auto base{TRY(address_of(object_ref, src))};
     if (const auto r{base.pointee->get_data().as_opt<gs::types::reference>()}) {
-        base = place{.address = load(base), .pointee = &r->underlying, .is_mutable = false};
+        base = place{.address    = gir::value{load(base).data, r->underlying},
+                     .pointee    = &r->underlying,
+                     .is_mutable = false};
     }
 
     auto&      source_type{*base.pointee};
@@ -309,16 +311,28 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
             return s->underlying;
         }
 
+        if (const auto p{source_type.get_data().as_opt<gs::types::pointer>()}) {
+            return p->underlying;
+        }
+
         return stdx::none;
     }()};
     if (!elem) { return comp_.unsupported(u_, src, "slicing this type"); }
+    const bool from_pointer{source_type.get_kind() == gs::type_kind::POINTER};
+    if (from_pointer && !hi_ref) {
+        return comp_.unsupported(u_, src, "slicing a pointer with no end");
+    }
     const auto mut{source_type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
     auto&      result_type{ctx.get_slice(mut, false, *elem)};
     auto&      ptr_type{ctx.get_pointer(mut, *elem)};
 
     gir::value base_ptr;
     gir::value length;
-    if (const auto arr{source_type.get_data().as_opt<gs::types::array>()}) {
+    if (from_pointer) {
+        // A pointer has no length, so only its bounds' order is checked
+        base_ptr = load(base);
+        TRY(check_not_null(base_ptr, src));
+    } else if (const auto arr{source_type.get_data().as_opt<gs::types::array>()}) {
         base_ptr = gir::value{
             builder_.emit_get_element_ptr(base.address, {usize_constant(0)}, ptr_type), ptr_type};
         length = usize_constant(arr->len);
@@ -340,7 +354,10 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
             usize_type};
     }
 
-    if (runtime_safety()) {
+    if (runtime_safety() && from_pointer) {
+        const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
+        TRY(guard(gir::value{lo_le_hi, bool_type}, "slice range out of bounds", src));
+    } else if (runtime_safety()) {
         const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
         const auto hi_le_len{builder_.emit_binary(instruction_kind::LE, hi, length, bool_type)};
         const auto in_bounds{builder_.emit_binary(instruction_kind::AND,

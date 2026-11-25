@@ -151,9 +151,15 @@ auto analyzer::analyze_function() -> result<void> {
         if (binding && binding->pack_size) {
             std::vector<operand> elements;
             for (usize k{0}; k < *binding->pack_size; ++k) {
-                auto&       type{*fn_->params[slot++]};
-                const auto& added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
-                elements.emplace_back(gir::value{added.id, type});
+                // A slice arrives in a slot of its own, as any slice parameter does
+                auto&            type{*fn_->params[slot++]};
+                const auto&      added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
+                const gir::value value{added.id, type};
+                if (type.get_kind() == gs::type_kind::SLICE) {
+                    elements.emplace_back(slot_value{.address = value, .type = &type});
+                } else {
+                    elements.emplace_back(value);
+                }
             }
 
             values_.insert_or_assign(param, pack_ref{static_cast<u32>(packs_.size())});

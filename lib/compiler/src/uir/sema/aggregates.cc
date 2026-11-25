@@ -229,12 +229,10 @@ auto compilation::require_fields(const unit& u, const source& use, gs::type& t) 
 }
 
 auto analyzer::analyze_nominal_decl(inst_id inst, gs::type_kind kind) -> result<operand> {
-    if (!is_comptime()) {
-        return comp_.unsupported(u_, src_of(inst), "a type declared in a runtime body");
-    }
-
-    auto  captures{TRY(captured_values(inst, kind))};
-    auto& n{comp_.declare_nominal(u_, inst, kind)};
+    // A type declared in a runtime body is one type for each set of values it captures
+    auto       captures{TRY(captured_values(inst, kind))};
+    const auto identity{is_comptime() ? std::vector<ip::index>{} : captures};
+    auto&      n{comp_.declare_nominal(u_, inst, kind, identity)};
     if (n.state == nominal_state::DECLARED && n.captures.empty()) {
         n.captures = std::move(captures);
     }

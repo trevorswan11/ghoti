@@ -257,7 +257,7 @@ auto analyzer::analyze_unwrap(inst_id inst) -> result<operand> {
 
     stdx::option<propagation> propagated;
     if (propagates) { propagated.emplace(TRY(propagation_for(op, *shape, src))); }
-    if (is_comptime()) { return comp_.unsupported(u_, src, "an unwrap at compile time"); }
+    if (is_comptime()) { return comptime_unwrap(op, *shape, propagates, src); }
 
     const auto flow{TRY(emit_flow(operand_ref, op, *shape, src))};
     const auto payload_seg{new_segment()};
@@ -280,6 +280,57 @@ auto analyzer::analyze_unwrap(inst_id inst) -> result<operand> {
 
     switch_to(payload_seg);
     return flow_output(flow, *shape);
+}
+
+auto analyzer::comptime_unwrap(const operand&      op,
+                               const unwrap_shape& shape,
+                               bool                propagates,
+                               const source&       src) -> result<operand> {
+    auto& ctx{comp_.ctx()};
+    auto& pool{comp_.constants()};
+    auto& target{unref(type_of(op))};
+
+    // `branch` is given a reference into compile-time memory holding the operand
+    auto place{memory_place(op)};
+    if (!place) {
+        const auto read{TRY(read_through_reference(op, src))};
+        const auto known{TRY(require_comptime(read, src))};
+        place = comp_.new_alloc({
+            .type                = target,
+            .value               = known,
+            .frame               = frame_,
+            .runtime_depth       = runtime_depth_,
+            .keeps_comptime_type = false,
+        });
+    }
+
+    auto&                self_ref{ctx.get_reference(gs::types::mut::POLY, target)};
+    std::vector<operand> args;
+    args.emplace_back(memory_address(*place, self_ref));
+    const auto branched{TRY(call_impl_method(*shape.applied, "branch", std::move(args), src))};
+    const auto flow{comptime_value(branched)};
+    const auto un{flow ? pool.value_at(*flow).data.as_opt<ip::union_value>() : stdx::none};
+    if (!un || un->payload.empty()) {
+        return comp_.unsupported(u_, src, "an unwrap whose `branch` isn't known at compile time");
+    }
+
+    // `continue` holds a reference to the payload, which is the result
+    if (un->active_field == "continue") {
+        const auto payload{un->payload.front()};
+        const auto referent{comptime_referent(operand{payload})};
+        if (!referent) {
+            return comp_.unsupported(u_, src, "an unwrap of this payload at compile time");
+        }
+        return operand{*referent};
+    }
+
+    if (propagates) { return comp_.unsupported(u_, src, "a `?` that propagates at compile time"); }
+    return comp_.report(u_,
+                        src,
+                        gs::error::COMPTIME_EVALUATION_FAILED,
+                        shape.residual->get_kind() == gs::type_kind::VOID_
+                            ? "'!' unwrapped an empty optional"
+                            : "'!' unwrapped an errored result");
 }
 
 auto analyzer::bind_unwrapped(gsl::span<const inst_id> body, u32 slot, const operand& value)

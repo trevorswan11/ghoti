@@ -101,7 +101,11 @@ auto analyzer::call_expanding(const operand&       callee,
 
     // `f(rest...)` passes each of the pack's values as an argument of its own
     const auto generic{callee.as_opt<generic_ref>()};
-    if (!generic) { return comp_.unsupported(u_, src, "a pack expansion into this callee"); }
+    const auto function{callee.as_opt<function_ref>()};
+    if (!generic && !function) {
+        return comp_.unsupported(u_, src, "a pack expansion into this callee");
+    }
+
     std::vector<call_arg> values;
     for (usize i{0}; i < args.size(); ++i) {
         const auto value{TRY(resolve_value(args[i], src))};
@@ -118,7 +122,22 @@ auto analyzer::call_expanding(const operand&       callee,
         }
     }
 
-    return call_generic(*generic->fn, std::move(values), src, callee_src);
+    if (generic) { return call_generic(*generic->fn, std::move(values), src, callee_src); }
+
+    // A plain function's fixed parameters take the expanded values in order
+    auto& target{*function->fn};
+    if (values.size() != target.params.size() ||
+        target.type->get_data().as<gs::types::function>().is_variadic) {
+        return comp_.report(
+            u_,
+            callee_src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Expected {} arguments, found {}", target.params.size(), values.size()));
+    }
+
+    std::vector<operand> operands;
+    for (auto& value : values) { operands.emplace_back(std::move(value.value)); }
+    return call_following_poly(target, std::move(operands), src, false);
 }
 
 auto analyzer::call_operand(const operand&       callee,

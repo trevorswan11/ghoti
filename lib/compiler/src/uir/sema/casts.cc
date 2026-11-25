@@ -116,13 +116,31 @@ auto analyzer::builtin_cast(inst_id inst, builtin_t which, gsl::span<const ref> 
 auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> target)
     -> result<operand> {
     const auto& src{src_of(cast.inst)};
-    auto        rec{record(cast.inst)};
-    const auto  which{static_cast<builtin_t>(rec.u32_field())};
-    const auto  operand_ref{rec.refs_field().front()};
+    if (mod().tag_of(cast.inst) != tag::builtin) {
+        if (!target) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                "cannot infer the type of an inferred cast meeting an untyped value");
+        }
 
-    // Only `@intFromBool` has a target of its own to fall back on
+        return binary_as(cast.inst, *target, src);
+    }
+
+    auto       rec{record(cast.inst)};
+    const auto which{static_cast<builtin_t>(rec.u32_field())};
+    const auto operand_ref{rec.refs_field().front()};
+
+    // Only `@intFromBool` has a target of its own to fall back on, a `u1` for each lane
     if (!target && which == builtin_t::INT_FROM_BOOL) {
-        target.emplace(comp_.ctx().get_int(1, false));
+        auto&      bit{comp_.ctx().get_int(1, false)};
+        const auto from{TRY(resolve_value(operand_ref, src))};
+        if (const auto vec{gs::vector_of(type_of(from))}) {
+            target.emplace(comp_.ctx().get_vector(gs::types::mut::CONSTANT, vec->len, bit));
+        } else {
+            target.emplace(bit);
+        }
     }
 
     if (!target) {
@@ -134,6 +152,7 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
             fmt::format("cannot infer the target type of '{}' here; write '{}(T, x)'", name, name));
     }
 
+    if (which == builtin_t::AS) { return as_to(*target, operand_ref, src); }
     return apply_cast(cast.inst, which, *target, operand_ref);
 }
 
@@ -937,6 +956,8 @@ auto analyzer::fold_cast(builtin_t       which,
     default: break;
     }
 
+    // Speculating, the cast only means the value is computed at runtime
+    if (comp_.speculating()) { return comp_.needs_runtime(u_, src); }
     return comp_.unsupported(u_, src, "a pointer cast at compile time");
 }
 

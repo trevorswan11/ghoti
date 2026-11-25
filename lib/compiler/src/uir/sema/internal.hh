@@ -1003,6 +1003,9 @@ class compilation {
     [[nodiscard]] auto speculate() -> speculation;
     // Whether a speculative attempt is in progress, which never builds a compile-time closure
     [[nodiscard]] auto speculating() const noexcept -> bool { return speculating_ > 0; }
+    // Drops the value errors reported since `from`, which an arm that never runs can't have
+    [[nodiscard]] auto diagnostic_count() const noexcept -> usize { return diagnostics_.size(); }
+    auto drop_value_errors(usize from) -> bool;
     // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
     auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
 
@@ -2404,6 +2407,20 @@ class analyzer {
     [[nodiscard]] auto range_value(inst_id inst, stdx::option<gs::type&> elem, const source& src)
         -> result<operand>;
 
+    // A `?` or `!` unwrapped at compile time through the operand's `branch`
+    [[nodiscard]] auto comptime_unwrap(const operand&      op,
+                                       const unwrap_shape& shape,
+                                       bool                propagates,
+                                       const source&       src) -> result<operand>;
+
+    // A comparison of an integer with an untyped number outside its type, known whatever the value
+    [[nodiscard]] auto compare_out_of_range(const binary_info& info,
+                                            const operand&     lhs,
+                                            const operand&     rhs) -> stdx::option<bool>;
+    // A binary operator of an inferred cast and an untyped value, once its type is known
+    [[nodiscard]] auto binary_as(inst_id inst, gs::type& target, const source& src)
+        -> result<operand>;
+
     // Atomics (atomics.cc)
     [[nodiscard]] auto
     builtin_atomic(syntax::builtin_t which, gsl::span<const ref> args, const source& src)
@@ -2472,7 +2489,10 @@ class analyzer {
     [[nodiscard]] auto runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
-    [[nodiscard]] auto builtin_as(gsl::span<const ref> args, const source& src) -> result<operand>;
+    [[nodiscard]] auto builtin_as(inst_id inst, gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // `@as(T, x)` with its target known
+    [[nodiscard]] auto as_to(gs::type& target, ref value_ref, const source& src) -> result<operand>;
     // Casts and conversions (casts.cc)
     [[nodiscard]] auto builtin_cast(inst_id              inst,
                                     syntax::builtin_t    which,
@@ -2612,6 +2632,8 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, dyn_entry> dyn_entries_;
     // The reference each binary operator read its left side through
     ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
+    // Compile-time string parameters built on entry, which spilling them reuses
+    ankerl::unordered_dense::map<inst_id, gir::value> entry_strings_;
     // The packed fields a nested packed field's place is reached through
     std::vector<place> packed_parents_;
     // The pattern each opaque pattern node was built from, by its AST node

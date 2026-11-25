@@ -252,8 +252,19 @@ auto compilation::test_units() const -> std::vector<bool> {
         for (const auto decl : u.uir->root_namespace().decls) {
             const auto& d{u.uir->decl_at(decl)};
             if (d.kind != decl_kind::TEST || !d.node) { continue; }
+            // An import under a `@cfg` counts when AstGen lowered it, as only a chosen arm's are
             const auto& test{ast.get_as<ast::test_stmt>(*d.node)};
-            for (const auto& stmt : ast.get_as<ast::block_stmt>(test.block)) {
+            auto        stmts{ast.get_as<ast::block_stmt>(test.block).statements};
+            while (!stmts.empty()) {
+                const auto stmt{stmts.back()};
+                stmts.pop_back();
+                if (const auto cfg{ast.get_as_opt<ast::cfg_stmt>(ast::node_id{stmt})}) {
+                    for (const auto& arm : cfg->arms) {
+                        stmts.insert(stmts.end(), arm.items.begin(), arm.items.end());
+                    }
+                    continue;
+                }
+
                 const auto imports{u.uir->imports()};
                 const auto import{std::ranges::find_if(imports, [&](const import_info& info) {
                     return info.node.get_index() == stmt.get_index() &&

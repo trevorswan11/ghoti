@@ -406,6 +406,10 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A match arm may yield an `extern struct` type"},
     // The evaluator leaves a comparison with an infinite constant, like `@log(0.0)`, at runtime
     std::string_view{"math builtins reject integers, types, and results past the range"},
+    // A product with a constant zero is folded with the call it multiplies, which never runs
+    std::string_view{"An inferred cast's target never types its operand"},
+    // A `let` holding a type through a labeled block's `break` isn't rejected
+    std::string_view{"an inline aggregate type in value position has no runtime value"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or

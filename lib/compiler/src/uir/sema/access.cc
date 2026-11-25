@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -162,7 +163,27 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
         return comp_.unsupported(u_, src, "the address of an untyped constant");
     }
 
-    const auto value{TRY(as_runtime(op, src))};
+    const auto value{TRY([&] -> result<gir::value> {
+        if (const auto built{to_entry ? entry_strings_.find(*inst) : entry_strings_.end()};
+            built != entry_strings_.end()) {
+            return built->second;
+        }
+
+        const auto here{builder_.get_segment()};
+        if (!to_entry || !op.is<ip::index>() || here->get_id() == gir::segment_id{0}) {
+            return as_runtime(op, src);
+        }
+
+        // A constant is built on entry too, so its slot is ready wherever the binding is read
+        const bool was_splicing{builder_.is_splicing()};
+        builder_.set_segment(*gir_fn_->get_segment(gir::segment_id{0}));
+        builder_.set_splice(true);
+        const auto back{gsl::finally([&] {
+            builder_.set_segment(*here);
+            builder_.set_splice(was_splicing);
+        })};
+        return as_runtime(op, src);
+    }())};
     auto&      type{*value.type};
     auto       slot{spill(value, type, to_entry)};
     if (binding) {
@@ -215,18 +236,21 @@ auto element_view(gs::context& ctx, gs::type& elem, bool constant) -> gs::type& 
 
 auto analyzer::through_pointer(const place& base, const source& src, bool checked)
     -> result<place> {
+    // The address is typed by what it points to, as every place's is
     auto& type{*base.pointee};
     if (const auto r{type.get_data().as_opt<gs::types::reference>()}) {
         const auto loaded{load(base)};
-        return place{
-            .address = loaded, .pointee = &r->underlying, .is_mutable = writable_through(type)};
+        return place{.address    = gir::value{loaded.data, r->underlying},
+                     .pointee    = &r->underlying,
+                     .is_mutable = writable_through(type)};
     }
 
     if (const auto p{type.get_data().as_opt<gs::types::pointer>()}) {
         const auto loaded{load(base)};
         if (checked) { TRY(check_not_null(loaded, src)); }
-        return place{
-            .address = loaded, .pointee = &p->underlying, .is_mutable = writable_through(type)};
+        return place{.address    = gir::value{loaded.data, p->underlying},
+                     .pointee    = &p->underlying,
+                     .is_mutable = writable_through(type)};
     }
 
     return base;
@@ -579,7 +603,8 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src,
         const auto index{TRY(index_operand(index_ref, src))};
         const auto base{TRY(through_pointer(object, src))};
         auto&      elem{*base.pointee};
-        const auto at{builder_.emit_get_element_ptr(base.address, {index}, elem)};
+        const auto at{builder_.emit_get_element_ptr(
+            gir::value{base.address.data, *object.pointee}, {index}, elem)};
         return place{.address    = gir::value{at, elem},
                      .pointee    = &elem,
                      .is_mutable = writable_through(*object.pointee)};
@@ -727,6 +752,17 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     const auto  index_ref{*rec.ref_field()};
     const bool  mutated{(rec.u32_field() & flags::MUTATED) != 0};
     const auto  object{TRY(resolve(object_ref, src))};
+
+    // A pack's element is the value it holds, a slice reached in its slot
+    if (const auto pack{object.as_opt<pack_ref>()}) {
+        const auto element{TRY(pack_elem(*pack, index_ref, src))};
+        if (const auto slot{element.as_opt<slot_value>()}; slot && !is_comptime()) {
+            return operand{
+                place{.address = slot->address, .pointee = slot->type, .is_mutable = false}};
+        }
+
+        return element;
+    }
 
     // An element through a compile-time slice or address is an element of the memory it names
     if (const auto element{TRY(memory_element(object, index_ref, src))}) {

@@ -396,11 +396,13 @@ auto analyzer::call_dyn(inst_id              call,
     }()};
     if (!loaded) { return stdx::err{loaded.error()}; }
     std::vector<gir::value> values;
+    std::vector<gs::type*>  param_types{&loaded->data.type.value()};
     values.emplace_back(loaded->data);
     for (usize i{0}; i < args.size(); ++i) {
         record_reader p{m, m.data_of(params[i + 1]).pl.extra};
         p.skip_str();
-        auto&      param_type{*TRY(sig.eval_type(p.body_field(), m.src_of(params[i + 1])))};
+        auto& param_type{*TRY(sig.eval_type(p.body_field(), m.src_of(params[i + 1])))};
+        param_types.emplace_back(&param_type);
         const auto arg{TRY(resolve_value(args[i], src))};
         const auto coerced{TRY(coerce_to(
             arg,
@@ -410,8 +412,15 @@ auto analyzer::call_dyn(inst_id              call,
         values.emplace_back(TRY(as_runtime(coerced, src)));
     }
 
-    auto&      ret_type{*TRY(sig.eval_type(ret, m.src_of(slot->func)))};
-    const auto result{builder_.emit_indirect_call(loaded->entry, std::move(values), ret_type)};
+    auto& ret_type{*TRY(sig.eval_type(ret, m.src_of(slot->func)))};
+
+    // The entry is called as the method's own signature, taking the data pointer as `self`
+    auto& ctx{comp_.ctx()};
+    auto  span{ctx.pool.get_many_unsafe(param_types.size())};
+    std::ranges::copy(param_types, span.begin());
+    auto&      fn_type{ctx.get_function(span, ret_type, false, ast::calling_convention::C, false)};
+    const auto result{builder_.emit_indirect_call(
+        gir::value{loaded->entry.data, fn_type}, std::move(values), ret_type)};
     if (!result) { return stdx::option<operand>{void_value()}; }
     return stdx::option<operand>{operand{gir::value{*result, ret_type}}};
 }
@@ -434,8 +443,10 @@ auto analyzer::load_dyn_entry(const operand& object, gs::type& dyn, u64 index, c
         gir::value{spilled, dyn}, {usize_constant(DYN_VTABLE_FIELD)}, opaque_ptr)};
     const auto data{builder_.emit_load(gir::value{data_at, opaque_ptr}, opaque_ptr)};
     const auto table{builder_.emit_load(gir::value{table_at, opaque_ptr}, opaque_ptr)};
+    // The table is an array of code pointers
+    auto&      table_ptr{ctx.get_pointer(gs::types::mut::CONSTANT, opaque_ptr)};
     const auto entry_at{builder_.emit_get_element_ptr(
-        gir::value{table, opaque_ptr}, {usize_constant(index)}, opaque_ptr)};
+        gir::value{table, table_ptr}, {usize_constant(index)}, opaque_ptr)};
     const auto entry{builder_.emit_load(gir::value{entry_at, opaque_ptr}, opaque_ptr)};
     return dyn_entry{.data = gir::value{data, opaque_ptr}, .entry = gir::value{entry, opaque_ptr}};
 }

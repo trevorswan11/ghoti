@@ -92,7 +92,7 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TRAP:                     return builtin_trap(src);
     case builtin_t::PANIC:                    return builtin_panic(args, src);
     case builtin_t::IMPLEMENTS:               return builtin_implements(args, src);
-    case builtin_t::AS:                       return builtin_as(args, src);
+    case builtin_t::AS:                       return builtin_as(inst, args, src);
     case builtin_t::THIS:                     return builtin_this(src);
     case builtin_t::INT:                      return builtin_int_type(args, src);
     case builtin_t::CLZ:
@@ -201,7 +201,9 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
         const auto generic{value.as_opt<generic_ref>()};
         const bool own_instance{generic && fn_ && fn_->owner.get() == generic->fn->owner.get() &&
                                 fn_->func == generic->fn->func};
-        auto& type{own_instance                                 ? *fn_->type
+        // Another generic's type is its signature, its comptime and `auto` parts left open
+        auto& type{own_instance ? *fn_->type
+                   : generic    ? *TRY(comp_.generic_value_type(*generic->fn))
                    : known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
                                                                 : type_of(value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
@@ -586,10 +588,16 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
     return {};
 }
 
-auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> result<operand> {
+auto analyzer::builtin_as(inst_id inst, gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    // `@as(x)` converts to the type it is used as, once it is
+    if (args.size() == 1) { return cast_ref{inst}; }
     if (args.size() != 2) { return comp_.unsupported(u_, src, "an `@as` of this arity"); }
-    auto& target{*TRY(resolve_type(args[0], src))};
-    auto  value{TRY(resolve_value(args[1], src))};
+    return as_to(*TRY(resolve_type(args[0], src)), args[1], src);
+}
+
+auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> result<operand> {
+    auto value{TRY(resolve_value(value_ref, src))};
 
     // A vector takes its lanes from a list, an array or another vector
     if (gs::is_vector(target)) {

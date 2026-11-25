@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -189,6 +190,10 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     }
 
     const auto info{binary_info_of(t)};
+    if (const auto known{compare_out_of_range(info, lhs, rhs)}) {
+        return operand{comp_.constants().intern(*known, builtin(gs::type_kind::BOOL))};
+    }
+
     if (info.cls == op_class::EQUALITY) {
         // Types are interned, so two are equal when they are the same type
         const auto lhs_known{comptime_value(lhs)};
@@ -218,12 +223,23 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         return info.cls != op_class::SHIFT && cast.is<cast_ref>() && !other.is<cast_ref>() &&
                !is_untyped_literal(other) && !gs::is_comptime_numeric(type_of(other).get_kind());
     }};
+    // An inferred cast as a shift amount takes the shifted value's type
+    if (info.cls == op_class::SHIFT && rhs.is<cast_ref>() && !lhs.is<cast_ref>() &&
+        !is_untyped_literal(lhs) && !gs::is_comptime_numeric(type_of(lhs).get_kind())) {
+        rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
+    }
+
     if (cast_meets(lhs, rhs)) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
     } else if (cast_meets(rhs, lhs)) {
         rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
     } else if (info.cls != op_class::SHIFT && (lhs.is<cast_ref>() || rhs.is<cast_ref>())) {
-        return comp_.unsupported(u_, src, "an inferred cast meeting an untyped value");
+        // Arithmetic of an inferred cast and an untyped value waits for the type it is used as
+        if (info.cls == op_class::EQUALITY || info.cls == op_class::ORDERING) {
+            return comp_.unsupported(u_, src, "an inferred cast meeting an untyped value");
+        }
+
+        return cast_ref{inst};
     }
 
     if (narrows_to(lhs, rhs)) {
@@ -333,6 +349,68 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         result_type};
 }
 
+auto analyzer::compare_out_of_range(const binary_info& info, const operand& lhs, const operand& rhs)
+    -> stdx::option<bool> {
+    if (info.cls != op_class::EQUALITY && info.cls != op_class::ORDERING) { return stdx::none; }
+
+    // An untyped number no value of the other side's integer type reaches compares the same way
+    // with every value, above all of them when it's positive
+    const auto outside{[&](const operand& typed, const operand& untyped) -> stdx::option<bool> {
+        auto&      type{type_of(typed)};
+        const auto known{comptime_value(untyped)};
+        if (!gs::is_integer(type.get_kind()) || !known ||
+            !gs::is_comptime_numeric(type_of(untyped).get_kind())) {
+            return stdx::none;
+        }
+
+        const auto exact{int_of(comp_.constants().value_at(*known))};
+        if (!exact || gs::comptime_int_fits(*exact, type, comp_.ptr_bits())) { return stdx::none; }
+        return *exact > big_int{i128{0}};
+    }};
+    const auto order{[&](gir::instruction_kind kind, bool above) {
+        switch (kind) {
+        case instruction_kind::EQ: return false;
+        case instruction_kind::NE: return true;
+        case instruction_kind::LT:
+        case instruction_kind::LE: return above;
+        default:                   return !above;
+        }
+    }};
+    const auto mirrored{[](gir::instruction_kind kind) {
+        switch (kind) {
+        case instruction_kind::LT: return instruction_kind::GT;
+        case instruction_kind::LE: return instruction_kind::GE;
+        case instruction_kind::GT: return instruction_kind::LT;
+        case instruction_kind::GE: return instruction_kind::LE;
+        default:                   return kind;
+        }
+    }};
+    if (const auto above{outside(lhs, rhs)}) { return order(info.kind, *above); }
+    if (const auto above{outside(rhs, lhs)}) { return order(mirrored(info.kind), *above); }
+    return stdx::none;
+}
+
+auto analyzer::binary_as(inst_id inst, gs::type& target, const source& src) -> result<operand> {
+    // Both sides take the target, then the operator applies to them where they were analyzed
+    const auto&                              d{mod().data_of(inst)};
+    std::vector<std::pair<inst_id, operand>> saved;
+    const auto                               restore{gsl::finally([&] {
+        for (auto& [i, value] : saved) { values_.insert_or_assign(i, std::move(value)); }
+    })};
+    for (const auto side : {d.bin.lhs, d.bin.rhs}) {
+        const auto side_inst{as_inst(side)};
+        if (!side_inst) { continue; }
+        const auto found{values_.find(*side_inst)};
+        if (found == values_.end()) { continue; }
+        const auto typed{
+            TRY(coerce_to(found->second, target, src, {.what = use_site::kind::STORE}))};
+        saved.emplace_back(*side_inst, found->second);
+        values_.insert_or_assign(*side_inst, typed);
+    }
+
+    return analyze_binary(inst, mod().tag_of(inst));
+}
+
 auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
     -> result<stdx::option<gir::value>> {
     const auto inst{as_inst(r)};
@@ -347,6 +425,10 @@ auto analyzer::widened_arithmetic(ref r, gs::type& target, const source& src)
         return comptime_value(op) && gs::is_comptime_numeric(type_of(op).get_kind());
     }};
     if (untyped(lhs) == untyped(rhs)) { return stdx::none; }
+
+    // A builtin's untyped result, like `@sizeOf`'s, meets the typed side at its type
+    const auto untyped_inst{as_inst(untyped(lhs) ? d.bin.lhs : d.bin.rhs)};
+    if (untyped_inst && mod().tag_of(*untyped_inst) == tag::builtin) { return stdx::none; }
 
     const auto widened{[&](const operand& op) -> result<gir::value> {
         if (untyped(op)) {

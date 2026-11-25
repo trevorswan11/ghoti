@@ -58,11 +58,16 @@ auto decays_to(const gs::type& from, const gs::type& to) -> bool {
 auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     -> result<stdx::option<operand>> {
     if (const auto m{op.as_opt<merge_ref>()}) {
-        const auto kind{target.get_kind()};
-        const bool literals{is_untyped_literal(merges_[m->index].arrivals.front().value)};
-        const bool takes{literals ? kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION ||
-                                        kind == gs::type_kind::ARRAY || kind == gs::type_kind::ENUM
-                                  : gs::is_numeric(kind)};
+        const auto  kind{target.get_kind()};
+        const auto& arrivals{merges_[m->index].arrivals};
+        const bool  literals{is_untyped_literal(arrivals.front().value)};
+        // An inferred cast takes whatever type it meets
+        const bool casts{std::ranges::any_of(
+            arrivals, [](const incoming& a) { return a.value.is<cast_ref>(); })};
+        const bool takes{
+            casts || (literals ? kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION ||
+                                     kind == gs::type_kind::ARRAY || kind == gs::type_kind::ENUM
+                               : gs::is_numeric(kind))};
         if (!takes) { return stdx::none; }
         return operand{TRY(materialize_merge(*m, target, src))};
     }
@@ -249,6 +254,20 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             const auto built{TRY(as_runtime(op, src))};
             const auto slot{spill(built, from, false)};
             return array_as_slice(slot.address, from, target);
+        }
+    }
+
+    // A runtime sentinel slice is a slice of the same elements, laid out the same
+    if (const auto from_slice{from.get_data().as_opt<gs::types::slice>()};
+        from_slice && from_slice->null_terminated && !comptime_value(op) &&
+        target.get_kind() == gs::type_kind::SLICE) {
+        const auto& to_slice{target.get_data().as<gs::types::slice>()};
+        if (!to_slice.null_terminated &&
+            gs::is_same_unqualified(from_slice->underlying, to_slice.underlying) &&
+            (target.is_constant() || !from.is_constant())) {
+            // The value keeps its sentinel type, as the old emitter passes it
+            TRY(require_runtime(src));
+            return operand{TRY(as_runtime(op, src))};
         }
     }
 
