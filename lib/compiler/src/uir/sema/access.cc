@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -67,6 +68,12 @@ auto analyzer::spill(const gir::value& v, gs::type& type, bool to_entry) -> plac
 
 auto analyzer::load(const place& p) -> gir::value {
     if (p.packed) { return packed_read(p); }
+    if (p.lane) {
+        return gir::value{builder_.emit_vector_op(gir::instruction_kind::EXTRACT_LANE,
+                                                  {p.lane->vector, p.lane->index},
+                                                  *p.pointee),
+                          *p.pointee};
+    }
 
     // A volatile load still reads through the volatile type, but the value it gives is plain
     auto& pointee{*p.pointee};
@@ -156,7 +163,27 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
         return comp_.unsupported(u_, src, "the address of an untyped constant");
     }
 
-    const auto value{TRY(as_runtime(op, src))};
+    const auto value{TRY([&] -> result<gir::value> {
+        if (const auto built{to_entry ? entry_strings_.find(*inst) : entry_strings_.end()};
+            built != entry_strings_.end()) {
+            return built->second;
+        }
+
+        const auto here{builder_.get_segment()};
+        if (!to_entry || !op.is<ip::index>() || here->get_id() == gir::segment_id{0}) {
+            return as_runtime(op, src);
+        }
+
+        // A constant is built on entry too, so its slot is ready wherever the binding is read
+        const bool was_splicing{builder_.is_splicing()};
+        builder_.set_segment(*gir_fn_->get_segment(gir::segment_id{0}));
+        builder_.set_splice(true);
+        const auto back{gsl::finally([&] {
+            builder_.set_segment(*here);
+            builder_.set_splice(was_splicing);
+        })};
+        return as_runtime(op, src);
+    }())};
     auto&      type{*value.type};
     auto       slot{spill(value, type, to_entry)};
     if (binding) {
@@ -209,18 +236,21 @@ auto element_view(gs::context& ctx, gs::type& elem, bool constant) -> gs::type& 
 
 auto analyzer::through_pointer(const place& base, const source& src, bool checked)
     -> result<place> {
+    // The address is typed by what it points to, as every place's is
     auto& type{*base.pointee};
     if (const auto r{type.get_data().as_opt<gs::types::reference>()}) {
         const auto loaded{load(base)};
-        return place{
-            .address = loaded, .pointee = &r->underlying, .is_mutable = writable_through(type)};
+        return place{.address    = gir::value{loaded.data, r->underlying},
+                     .pointee    = &r->underlying,
+                     .is_mutable = writable_through(type)};
     }
 
     if (const auto p{type.get_data().as_opt<gs::types::pointer>()}) {
         const auto loaded{load(base)};
         if (checked) { TRY(check_not_null(loaded, src)); }
-        return place{
-            .address = loaded, .pointee = &p->underlying, .is_mutable = writable_through(type)};
+        return place{.address    = gir::value{loaded.data, p->underlying},
+                     .pointee    = &p->underlying,
+                     .is_mutable = writable_through(type)};
     }
 
     return base;
@@ -564,7 +594,8 @@ auto analyzer::bounds_check(const gir::value& index,
     return guard(gir::value{ok, bool_type}, "index out of bounds", src);
 }
 
-auto analyzer::elem_place(const place& object, ref index_ref, const source& src) -> result<place> {
+auto analyzer::elem_place(const place& object, ref index_ref, const source& src, bool written)
+    -> result<place> {
     // A pointer to one element indexes the elements from where it points, the index read first
     const auto pointer{object.pointee->get_data().as_opt<gs::types::pointer>()};
     if (pointer && !pointer->underlying.get_data().is<gs::types::array>() &&
@@ -572,7 +603,8 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
         const auto index{TRY(index_operand(index_ref, src))};
         const auto base{TRY(through_pointer(object, src))};
         auto&      elem{*base.pointee};
-        const auto at{builder_.emit_get_element_ptr(base.address, {index}, elem)};
+        const auto at{builder_.emit_get_element_ptr(
+            gir::value{base.address.data, *object.pointee}, {index}, elem)};
         return place{.address    = gir::value{at, elem},
                      .pointee    = &elem,
                      .is_mutable = writable_through(*object.pointee)};
@@ -582,7 +614,7 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
     const auto index{TRY(index_operand(index_ref, src))};
     auto&      type{*base.pointee};
     auto&      ctx{comp_.ctx()};
-    const bool safety{ctx.runtime_safety};
+    const bool safety{runtime_safety()};
 
     // A signed index is compared as an `isize`
     const bool is_signed{index.type && gs::is_signed_integer(*index.type)};
@@ -596,6 +628,31 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src)
 
         return index;
     }};
+
+    // A lane is read from and written into the vector loaded after its index
+    if (const auto vec{gs::vector_of(type)}) {
+        auto&                    usize_type{builtin(gs::type_kind::USIZE)};
+        stdx::option<gir::value> loaded;
+        if (!written) { loaded.emplace(builder_.emit_load(base.address, type), type); }
+        if (safety && !index.data.is<ip::index>()) {
+            auto&      bool_type{builtin(gs::type_kind::BOOL)};
+            const auto as_usize{
+                index.type && gs::is_same_unqualified(*index.type, usize_type)
+                    ? index
+                    : gir::value{
+                          builder_.emit_cast(gir::instruction_kind::INT_CAST, index, usize_type),
+                          usize_type}};
+            const auto in_bounds{builder_.emit_binary(
+                gir::instruction_kind::LT, as_usize, usize_constant(vec->len), bool_type)};
+            TRY(guard(gir::value{in_bounds, bool_type}, "index out of bounds", src));
+        }
+
+        if (!loaded) { loaded.emplace(builder_.emit_load(base.address, type), type); }
+        return place{.address    = base.address,
+                     .pointee    = &vec->underlying,
+                     .is_mutable = base.is_mutable,
+                     .lane       = vector_lane_at{.index = index, .vector = *loaded}};
+    }
 
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         if (safety) {
@@ -695,6 +752,17 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     const bool  mutated{(rec.u32_field() & flags::MUTATED) != 0};
     const auto  object{TRY(resolve(object_ref, src))};
 
+    // A pack's element is the value it holds, a slice reached in its slot
+    if (const auto pack{object.as_opt<pack_ref>()}) {
+        const auto element{TRY(pack_elem(*pack, index_ref, src))};
+        if (const auto slot{element.as_opt<slot_value>()}; slot && !is_comptime()) {
+            return operand{
+                place{.address = slot->address, .pointee = slot->type, .is_mutable = false}};
+        }
+
+        return element;
+    }
+
     // An element through a compile-time slice or address is an element of the memory it names
     if (const auto element{TRY(memory_element(object, index_ref, src))}) {
         return operand{*element};
@@ -731,7 +799,7 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     if (is_comptime()) { return comp_.unsupported(u_, src, "an element of comptime memory"); }
 
     const auto object_place{TRY(address_of(object_ref, src))};
-    const auto elem{TRY(elem_place(object_place, index_ref, src))};
+    const auto elem{TRY(elem_place(object_place, index_ref, src, mutated))};
     return operand{elem};
 }
 
@@ -823,6 +891,14 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     }
 
     const auto slot{TRY(address_of(operand_ref, src))};
+    if (slot.lane) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_VECTOR_LANE_ADDRESS,
+                            fmt::format("cannot take {} a vector lane; read it into a local first",
+                                        is_pointer ? "the address of" : "a reference to"));
+    }
+
     if (slot.packed) {
         return comp_.report(u_,
                             src,
@@ -1100,6 +1176,7 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
 auto element_type_of(gs::type& t) -> stdx::option<gs::type&> {
     if (const auto arr{t.get_data().as_opt<gs::types::array>()}) { return arr->underlying; }
     if (const auto slice{t.get_data().as_opt<gs::types::slice>()}) { return slice->underlying; }
+    if (const auto vec{gs::vector_of(t)}) { return vec->underlying; }
     return stdx::none;
 }
 

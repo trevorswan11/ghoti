@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gsl/pointers>
@@ -14,6 +15,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
@@ -151,9 +153,15 @@ auto analyzer::analyze_function() -> result<void> {
         if (binding && binding->pack_size) {
             std::vector<operand> elements;
             for (usize k{0}; k < *binding->pack_size; ++k) {
-                auto&       type{*fn_->params[slot++]};
-                const auto& added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
-                elements.emplace_back(gir::value{added.id, type});
+                // A slice arrives in a slot of its own
+                auto&            type{*fn_->params[slot++]};
+                const auto&      added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
+                const gir::value value{added.id, type};
+                if (type.get_kind() == gs::type_kind::SLICE) {
+                    elements.emplace_back(slot_value{.address = value, .type = &type});
+                } else {
+                    elements.emplace_back(value);
+                }
             }
 
             values_.insert_or_assign(param, pack_ref{static_cast<u32>(packs_.size())});
@@ -194,6 +202,9 @@ auto analyzer::analyze_function() -> result<void> {
              .returns_void = fn_->return_type->get_kind() == gs::type_kind::VOID_,
              .declared_by  = declares_literal(mod(), d, fn_->func) ? stdx::option<const decl&>{d}
                                                                    : stdx::none}));
+
+        // A body that starts with `@branchHint(.cold)` makes its function cold
+        fn_->attributes->cold = branch_hint_of(body) == ast::branch_hint::COLD;
     }
 
     gir_fn_->set_attributes(*fn_->attributes);
@@ -206,12 +217,16 @@ auto analyzer::analyze_function() -> result<void> {
     if (terminated()) { return {}; }
 
     // An inferred return type with no `return` to fix it is `void`
+    if (collected_returns_) { return {}; }
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
         fn_->return_type = &builtin(gs::type_kind::VOID_);
     }
 
     auto& ret{*fn_->return_type};
-    if (ret.get_kind() == gs::type_kind::VOID_) {
+    // A naked body owns its own control flow, so falling off its end is unreachable
+    if (fn_->attributes && fn_->attributes->naked) {
+        builder_.emit_unreachable();
+    } else if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
         builder_.emit_return(constant(comp_.constants().intern(ip::undefined_value{}, ret), ret));
@@ -221,6 +236,13 @@ auto analyzer::analyze_function() -> result<void> {
 }
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
+    body_hints_.emplace_back(hint_inst_of(body));
+    safety_scopes_.emplace_back();
+    const auto pop_scope{gsl::finally([&] {
+        body_hints_.pop_back();
+        safety_scopes_.pop_back();
+    })};
+
     // A `dyn` receiver's vtable entry is loaded before the call's arguments
     if (!is_comptime()) {
         for (const auto inst : body) {
@@ -562,5 +584,11 @@ auto analyzer::denoted_type(const operand& op, const source& src)
 }
 
 auto analyzer::interned_type(gs::type& t) -> ip::index { return t.get_ip_index(); }
+
+auto analyzer::collect_returns() -> std::vector<gsl::not_null<gs::type*>> {
+    collected_returns_.emplace();
+    DISCARD(analyze_function());
+    return *std::exchange(collected_returns_, stdx::none);
+}
 
 } // namespace ghoti::uir::sema

@@ -694,6 +694,53 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
     }
 }
 
+// A widening cast of a value already of its type, which the old emitter makes for `@as` of a
+// vector, is the value itself
+auto drop_identity_casts(function_dump& fn) -> void {
+    ankerl::unordered_dense::map<std::string, std::string> defined;
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (!def.empty()) { defined.insert_or_assign(std::string{def}, std::string{body}); }
+        }
+    }
+
+    constexpr std::string_view                             CAST{"widen_cast "};
+    ankerl::unordered_dense::map<std::string, std::string> same;
+    for (const auto& seg : fn.segments) {
+        for (const auto& inst : seg.instructions) {
+            const auto [def, body]{split_definition(inst)};
+            if (def.empty() || !body.starts_with(CAST)) { continue; }
+            const auto rest{body.substr(CAST.size())};
+            const auto space{rest.rfind(' ')};
+            if (space == std::string_view::npos) { continue; }
+            const auto        type{rest.substr(0, space)};
+            const std::string operand{rest.substr(space + 1)};
+            const auto        found{defined.find(operand)};
+            if (found == defined.end()) { continue; }
+            const std::string_view source{found->second};
+            const auto             opcode_end{source.find(' ')};
+            if (opcode_end != std::string_view::npos &&
+                source.substr(opcode_end + 1).starts_with(fmt::format("{} ", type))) {
+                same.insert_or_assign(std::string{def}, operand);
+            }
+        }
+    }
+    if (same.empty()) { return; }
+
+    for (auto& seg : fn.segments) {
+        std::erase_if(seg.instructions, [&](const std::string& inst) {
+            return same.contains(std::string{split_definition(inst).first});
+        });
+        for (auto& inst : seg.instructions) {
+            inst = rewrite_temps(inst, [&](std::string_view t) -> std::string {
+                const auto found{same.find(std::string{t})};
+                return found == same.end() ? std::string{t} : found->second;
+            });
+        }
+    }
+}
+
 // An instruction that only computes its result
 [[nodiscard]] auto is_pure(std::string_view body) -> bool {
     static constexpr std::array prefixes{
@@ -710,6 +757,10 @@ auto drop_overwritten_stores(function_dump& fn) -> void {
         "ptr_from_int ", "add ",
         "sub ",          "mul ",
         "shl ",          "shr ",
+        "splat ",        "extract_lane ",
+        "insert_lane ",  "repack ",
+        "shuffle ",      "select ",
+        "reduce ",
     };
     return std::ranges::any_of(prefixes, [&](std::string_view p) { return body.starts_with(p); });
 }
@@ -1447,8 +1498,12 @@ auto normalize_gir(std::string_view dump) -> std::string {
         for (auto& seg : fn.segments) {
             for (auto& inst : seg.instructions) {
                 inst = without_value_volatility(as_direct_call(without_address_mutability(inst)));
+
+                // Returning a `void` value returns nothing
+                if (inst == "ret void void") { inst = "ret void"; }
             }
         }
+        drop_identity_casts(fn);
 
         // Merging segments exposes more to fold, so both passes run again on the merged form
         for (usize round{0}; round < 2; ++round) {

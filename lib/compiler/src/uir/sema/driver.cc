@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
@@ -15,11 +16,13 @@
 
 #include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/uir/astgen.hh"
@@ -261,9 +264,73 @@ auto compilation::infer_return(instance& fn, const unit& caller, const source& u
     return {};
 }
 
+namespace {
+
+// Whether a function's own instructions return an untyped literal
+[[nodiscard]] auto returns_untyped(const module_t& m, inst_id func) -> bool {
+    record_reader     rec{m, m.data_of(func).pl.extra};
+    const auto        params{rec.body_field()};
+    const auto        ret{rec.body_field()};
+    const auto        body{rec.body_field()};
+    stdx::option<u32> first;
+    for (const auto& part : {params, ret, body}) {
+        if (part.empty()) { continue; }
+        const auto at{std::to_underlying(part.front())};
+        first = first ? std::min(*first, at) : at;
+    }
+
+    const auto untyped{[&](ref r) {
+        const auto inst{as_inst(r)};
+        if (!inst) { return false; }
+        auto t{m.tag_of(*inst)};
+        if (t == tag::neg) {
+            const auto operand{as_inst(m.data_of(*inst).un.operand)};
+            if (!operand) { return false; }
+            t = m.tag_of(*operand);
+        }
+        return t == tag::int_value || t == tag::int_lit || t == tag::float_lit;
+    }};
+    for (u32 i{first.value_or(std::to_underlying(func))}; i < std::to_underlying(func); ++i) {
+        const inst_id at{i};
+        if (m.tag_of(at) == tag::ret && untyped(m.data_of(at).un.operand)) { return true; }
+    }
+
+    return false;
+}
+
+} // namespace
+
+auto compilation::infer_peer_return(instance& fn) -> result<void> {
+    // A first pass into a function no one emits sees every `return`, dropping what it reports
+    gir::function scratch{ctx_.arena,
+                          constants(),
+                          std::string{},
+                          ctx_.get_builtin_resolved_type(gs::type_kind::VOID_)};
+    std::vector<gsl::not_null<gs::type*>> types;
+    {
+        const auto before{speculate()};
+        analyzer   a{*this, *fn.owner, fn, scratch};
+        types = a.collect_returns();
+        abandon(before, false);
+    }
+
+    if (types.empty()) { return {}; }
+    std::vector<gs::peer_operand> peers;
+    for (const auto type : types) { peers.emplace_back<gs::peer_operand>({.type = type}); }
+    const auto peer{gs::peer_type(ctx_, peers)};
+    if (!peer) { return {}; }
+    fn.return_type = &ctx_.default_concrete(**peer);
+    return {};
+}
+
 auto compilation::analyze_body(instance& fn) -> result<void> {
     PROFILE_FUNCTION();
     fn.analyzed = true;
+    if (fn.infers_return && fn.return_type->get_kind() == gs::type_kind::AUTO &&
+        returns_untyped(*fn.owner->uir, fn.func)) {
+        TRY(infer_peer_return(fn));
+    }
+
     auto& gir_fn{gir_.add_function(fn.symbol, *fn.type, false, false, false, fn.linkage)};
     if (const auto sig{fn.type->get_data().as_opt<gs::types::function>()}) {
         gir_fn.set_calling_conv(sig->conv);

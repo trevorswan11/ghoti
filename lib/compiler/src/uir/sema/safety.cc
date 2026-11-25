@@ -118,8 +118,7 @@ auto analyzer::guard(gir::value ok, std::string_view message, const source& src)
 }
 
 auto analyzer::check_not_null(const gir::value& ptr, const source& src) -> result<void> {
-    if (!comp_.ctx().runtime_safety || !ptr.type ||
-        ptr.type->get_kind() != gs::type_kind::POINTER) {
+    if (!runtime_safety() || !ptr.type || ptr.type->get_kind() != gs::type_kind::POINTER) {
         return {};
     }
 
@@ -144,7 +143,7 @@ auto analyzer::check_active_field(const gir::value& union_address,
                                   u64               field,
                                   std::string_view  name,
                                   const source&     src) -> result<void> {
-    if (!comp_.ctx().runtime_safety) { return {}; }
+    if (!runtime_safety()) { return {}; }
     auto&      i32_type{comp_.ctx().get_int(32, true)};
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
     const auto tag_ptr{

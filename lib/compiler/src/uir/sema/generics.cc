@@ -28,6 +28,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::uir::sema {
 
@@ -155,9 +156,10 @@ auto compilation::declare_generic(const unit&           u,
 
     // An `impl` block's generic member is named after the type it implements
     const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl && member.self_type};
-    const auto enclosing{in_instance ? stdx::option<gs::type&>{*member.scope->type}
-                         : in_impl   ? stdx::option<gs::type&>{*member.self_type}
-                                     : stdx::none};
+    const auto enclosing{in_instance    ? stdx::option<gs::type&>{*member.scope->type}
+                         : in_impl      ? stdx::option<gs::type&>{*member.self_type}
+                         : member.scope ? stdx::option<gs::type&>{*member.scope->type}
+                                        : stdx::none};
     auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
@@ -190,6 +192,14 @@ auto compilation::mangle_type(const gs::type& t) -> std::string {
 
         // Instruction ids repeat across modules, so a nominal is numbered by its declaration
         return fmt::format("{}{}", kind_name, nominal_number(t));
+    }
+    case gs::type_kind::CLOSURE: {
+        // A closure is spelled by which one it is and its signature
+        const auto body{closure_body(t)};
+        const auto g{closure_generic(t)};
+        const auto id{body && body->env ? body->env->id : g && g->env ? g->env->id : 0};
+        return fmt::format(
+            "closure{}_{}", id, mangle_type(data.as<gs::types::closure_t>().signature));
     }
     case gs::type_kind::FUNCTION: {
         // A capturing generic's value is spelled by which generic it is
@@ -327,6 +337,18 @@ auto analyzer::inferred_type(const operand& arg) -> gs::type& {
         if (const auto value_type{comp_.generic_value_type(*g->fn)}) { return **value_type; }
     }
 
+    // An `@intFromBool` of a `bool` with no target falls back on `u1`
+    if (const auto cast{arg.as_opt<cast_ref>()}; cast && mod().tag_of(cast->inst) == tag::builtin) {
+        auto       rec{record(cast->inst)};
+        const auto which{static_cast<syntax::builtin_t>(rec.u32_field())};
+        const auto from{as_inst(rec.refs_field().front())};
+        const auto found{from ? values_.find(*from) : values_.end()};
+        if (which == syntax::builtin_t::INT_FROM_BOOL && found != values_.end() &&
+            type_of(found->second).get_kind() == gs::type_kind::BOOL) {
+            return comp_.ctx().get_int(1, false);
+        }
+    }
+
     auto& type{type_of(arg)};
     if (type.get_kind() == gs::type_kind::COMPTIME_INT) {
         if (const auto value{comptime_value(arg)}) { return fitted_int_type(*value); }
@@ -358,14 +380,11 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         const auto    param{params[i]};
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
-        const auto  type_body{p.body_field()};
-        const auto  default_body{p.body_field()};
+        const auto type_body{p.body_field()};
+        p.skip_body(); // A default is computed by the wrapper a short call is sent to
         const auto  param_flags{p.u32_field()};
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};
-        if (!default_body.empty()) {
-            return comp_.unsupported(*g.owner, param_src, "a default argument");
-        }
 
         if ((param_flags & flags::PARAM_SELF) != 0) {
             const auto how{static_cast<ast::type_modifier::modifier>(modifier)};
@@ -393,10 +412,15 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             stdx::option<gs::type&> declared;
             if (!untyped) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
             for (usize j{i}; j < args.size(); ++j) {
-                auto& type{declared ? *declared : inferred_type(args[j].value)};
-                if (!gs::is_value_type(type.get_kind()) ||
-                    gs::is_comptime_numeric(type.get_kind())) {
-                    return comp_.unsupported(*g.owner, param_src, "a pack of comptime-only values");
+                // A `void` value is passed like any other
+                auto&      type{declared ? *declared : pack_element_type(args[j].value)};
+                const bool passed{gs::is_value_type(type.get_kind()) ||
+                                  type.get_kind() == gs::type_kind::VOID_};
+                if (!passed || gs::is_comptime_numeric(type.get_kind())) {
+                    return comp_.unsupported(
+                        *g.owner,
+                        param_src,
+                        fmt::format("a pack of comptime-only values like `{}`", type.to_string()));
                 }
 
                 binding.key.args.emplace_back(interned_type(type));
@@ -418,8 +442,10 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         stdx::option<gs::type&> declared;
         if (!is_auto) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
 
-        const bool comptime_numeric_arg{is_auto &&
-                                        gs::is_comptime_numeric(type_of(arg).get_kind())};
+        // An untyped argument to `auto`, or a parameter whose type is untyped, binds its value
+        const bool comptime_numeric_arg{
+            (is_auto && gs::is_comptime_numeric(type_of(arg).get_kind())) ||
+            (declared && gs::is_comptime_numeric(declared->get_kind()))};
         const bool binds_type{declared && declared->get_kind() == gs::type_kind::TYPE};
         if ((param_flags & flags::PARAM_COMPTIME) != 0 || binds_type || comptime_numeric_arg) {
             const use_site use{
@@ -452,15 +478,40 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         }
 
         auto& type{declared ? *TRY(matched_type(*declared, arg, param_src)) : inferred_type(arg)};
+
+        // An `impl Fn(...)` parameter takes a callable of exactly that signature
+        if (is_impl_fn(m, type_body)) {
+            auto& pattern{*TRY(sig.eval_type(type_body, param_src))};
+            if (const auto why{callable_mismatch(pattern, arg)}) {
+                record_reader param_rec{m, m.data_of(param).pl.extra};
+                const auto    pname{param_rec.str_field()};
+                const auto    at{args[i].written.and_then(as_inst)};
+                return comp_.report(u_,
+                                    at ? src_of(*at) : src,
+                                    gs::error::UNSATISFIED_BOUND,
+                                    fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
+                                                comp_.ctx().type_display_name(type_of(arg)),
+                                                pname,
+                                                *why));
+            }
+        }
+
         for (const auto& bound : bounds) {
             if (bound.param == i) { TRY(check_bound(sig, bound, type, g, param, args[i], src)); }
         }
 
-        if (!gs::is_value_type(type.get_kind()) || gs::is_comptime_numeric(type.get_kind())) {
-            return comp_.unsupported(*g.owner, param_src, "a parameter of a comptime-only type");
+        // A `void` or `undefined` value is passed like any other
+        const bool passed{gs::is_value_type(type.get_kind()) ||
+                          type.get_kind() == gs::type_kind::VOID_ ||
+                          type.get_kind() == gs::type_kind::UNDEFINED};
+        if (!passed || gs::is_comptime_numeric(type.get_kind())) {
+            return comp_.unsupported(
+                *g.owner,
+                param_src,
+                fmt::format("a parameter of a comptime-only type like `{}`", type.to_string()));
         }
 
-        // A later type may ask a runtime parameter's type, as `@TypeOf(x)`, but never its value
+        // A later type may ask a runtime parameter's type but never its value
         sig.bind(param, operand{gir::value{gir::local_id{}, type}});
         binding.key.args.emplace_back(interned_type(type));
         binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
@@ -549,6 +600,27 @@ auto analyzer::call_generic(generic_fn&              g,
         p.skip_str().skip_body().skip_body();
         return (p.u32_field() & flags::PARAM_PACK) != 0;
     })};
+    // A call leaving trailing defaulted arguments off goes to the declaration's wrapper for them
+    const bool has_self{std::ranges::any_of(params, [&](inst_id param) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_SELF) != 0;
+    })};
+    if (has_pack ? args.size() + 1 < param_count : args.size() < param_count) {
+        const auto written{args.size() - (has_self && !args.empty() ? 1 : 0)};
+        if (const auto wrapper{TRY(default_wrapper(*g.owner, g.decl, written, src))}) {
+            if (const auto other{wrapper->as_opt<generic_ref>()}) {
+                return call_generic(*other->fn, std::move(args), src, callee_src, env);
+            }
+
+            if (const auto fn{wrapper->as_opt<function_ref>()}) {
+                std::vector<operand> values;
+                for (auto& arg : args) { values.emplace_back(std::move(arg.value)); }
+                return call_following_poly(*fn->fn, std::move(values), src, false);
+            }
+        }
+    }
+
     if (has_pack ? args.size() + 1 < param_count : args.size() != param_count) {
         return comp_.report(u_,
                             callee_src,
@@ -638,6 +710,77 @@ auto analyzer::matched_type(gs::type& declared, const operand& arg, const source
     }
 }
 
+auto analyzer::pack_element_type(const operand& arg) -> gs::type& {
+    auto& type{inferred_type(arg)};
+    if (type.get_kind() == gs::type_kind::COMPTIME_FLOAT) { return builtin(gs::type_kind::F64); }
+    const auto known{comptime_value(arg)};
+    const auto exact{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
+    if (type.get_kind() != gs::type_kind::COMPTIME_INT || !exact) { return type; }
+
+    // An untyped integer takes the first of these that holds it
+    auto& ctx{comp_.ctx()};
+    for (const auto [bits, is_signed] : {std::pair{32U, true},
+                                         std::pair{64U, true},
+                                         std::pair{64U, false},
+                                         std::pair{128U, true},
+                                         std::pair{128U, false}}) {
+        auto& candidate{ctx.get_int(static_cast<u16>(bits), is_signed)};
+        if (gs::comptime_int_fits(*exact, candidate, comp_.ptr_bits())) { return candidate; }
+    }
+
+    return type;
+}
+
+auto analyzer::callable_mismatch(const gs::type& pattern, const operand& arg)
+    -> stdx::option<std::string> {
+    const auto want{pattern.get_data().as_opt<gs::types::function>()};
+    if (!want) { return stdx::none; }
+
+    // A generic is settled by the call inside the body
+    if (arg.is<generic_ref>()) { return stdx::none; }
+
+    // A function, closure, or erased `fn` value, directly or through `^` / `&`
+    auto&      given{type_of(arg)};
+    auto&      callee{gs::pointee_of(given).value_or(given)};
+    const auto closure{callee.get_data().as_opt<gs::types::closure_t>()};
+    const auto have{closure ? closure->signature.get_data().as_opt<gs::types::function>()
+                            : callee.get_data().as_opt<gs::types::function>()};
+    if (!have) { return std::string{"it is not callable"}; }
+    if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
+
+    const auto skip{have->has_self ? 1UZ : 0UZ};
+    const auto have_count{have->params.size() - skip};
+    if (have_count != want->params.size()) {
+        return fmt::format("it takes {} parameter{}, not {}",
+                           have_count,
+                           string_utils::plural_suffix(have_count),
+                           want->params.size());
+    }
+
+    // An `auto` slot takes anything, any other must be exactly the same type
+    auto&      ctx{comp_.ctx()};
+    const auto matches{[](const gs::type& w, const gs::type& h) {
+        return w.get_kind() == gs::type_kind::AUTO || gs::is_same_unqualified(w, h);
+    }};
+    for (usize i{0}; i < want->params.size(); ++i) {
+        auto& have_t{*have->params[i + skip]};
+        if (!matches(*want->params[i], have_t)) {
+            return fmt::format("parameter {} is '{}', not '{}'",
+                               i + 1,
+                               ctx.type_display_name(have_t),
+                               ctx.type_display_name(*want->params[i]));
+        }
+    }
+
+    if (!matches(want->return_type, have->return_type)) {
+        return fmt::format("it returns '{}', not '{}'",
+                           ctx.type_display_name(have->return_type),
+                           ctx.type_display_name(want->return_type));
+    }
+
+    return stdx::none;
+}
+
 auto analyzer::check_bound(analyzer&         sig,
                            const impl_bound& bound,
                            gs::type&         type,
@@ -683,6 +826,14 @@ auto analyzer::bind_comptime_param(inst_id param, ip::index value) -> result<voi
     const bool aggregate{!pool.is_type(value) &&
                          (pool.value_at(value).data.is<ip::aggregate_value>() ||
                           pool.value_at(value).data.is<ip::union_value>())};
+    // A runtime body builds a compile-time string on entry, where the old pipeline does
+    const auto known{pool.is_type(value) ? stdx::none
+                                         : stdx::option<const ip::value&>{pool.value_at(value)}};
+    if (gir_fn_ && known && known->data.is<std::string>() && known->type &&
+        known->type->get_kind() == gs::type_kind::SLICE) {
+        entry_strings_.insert_or_assign(param, TRY(as_runtime(operand{value}, src_of(param))));
+    }
+
     if (!aggregate || holds_types(*pool.value_at(value).type)) {
         bind(param, operand{value});
         return {};

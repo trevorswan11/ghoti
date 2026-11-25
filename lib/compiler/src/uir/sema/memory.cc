@@ -512,6 +512,12 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
 
+    // A range with no type takes its bounds' type
+    if (const auto literal{init.as_opt<anon_init>()};
+        !type_ref && literal && mod().tag_of(literal->inst) == tag::range) {
+        init = TRY(concrete(init, src));
+    }
+
     if (!type_ref && (init.is<anon_init>() || init.is<enum_literal>())) {
         return comp_.unsupported(u_, src, "an untyped literal bound with no type");
     }
@@ -545,7 +551,16 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     }
 
     if (is_comptime()) { return value; }
-    if (gs::is_vector(type_of(value))) { TRY(vector_at_runtime(src)); }
+    if (gs::is_vector(type_of(value))) {
+        TRY(require_runtime(src));
+
+        // A known vector is built where it is bound, as the old emitter does
+        const auto known{comptime_value(value)};
+        if (known && !alignment &&
+            !comp_.constants().value_at(*known).data.is<ip::undefined_value>()) {
+            return bind_known_vector(*known, src);
+        }
+    }
 
     // A reference binding keeps one address for every use
     auto& type{declared && gs::is_structural(declared->get_kind()) ? *declared : type_of(value)};
@@ -589,7 +604,8 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
                       .type       = &type,
                       .is_mutable = type.get_kind() == gs::type_kind::CLOSURE,
                       .known = undefined_init || alignment ? stdx::none : comptime_value(value),
-                      .global_value = init.is<global_const>()};
+                      .global_value = init.is<global_const>(),
+                      .built = undefined_init || alignment ? stdx::none : built_value(value)};
 }
 
 auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
@@ -655,10 +671,14 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         }
 
         yielded = TRY(std::move(typed));
-    } else if (yielded.is<cast_ref>()) {
+    } else if (const auto range{yielded.as_opt<anon_init>()};
+               yielded.is<cast_ref>() || (range && mod().tag_of(range->inst) == tag::range)) {
         const auto scope{comptime_scope()};
         yielded = TRY(concrete(yielded, init_src));
     }
+
+    // An untyped `.name` stays a literal, typed by where it is used
+    if (!type_ref && yielded.is<enum_literal>()) { return yielded; }
 
     const auto known{comptime_value(yielded)};
     if (!known) {
@@ -677,9 +697,19 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         }
     }
 
-    if (!type_ref) { return yielded; }
-    auto& type{*TRY(resolve_type(*type_ref, src))};
-    return coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE});
+    if (type_ref) {
+        auto& type{*TRY(resolve_type(*type_ref, src))};
+        yielded = TRY(coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE}));
+    }
+
+    // A known vector in a runtime body is built where it is declared
+    const auto vector_value{comptime_value(yielded)};
+    if (vector_value && gir_fn_ && !is_comptime() && gs::is_vector(type_of(yielded)) &&
+        !comp_.constants().value_at(*vector_value).data.is<ip::undefined_value>()) {
+        return bind_known_vector(*vector_value, src);
+    }
+
+    return yielded;
 }
 
 namespace {
@@ -745,24 +775,41 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
 
     TRY(require_runtime(src));
 
+    // The reference a compound assignment's operator already read its left side through
+    const auto compound_read{as_inst(d.bin.rhs).and_then([&](inst_id rhs) {
+        const auto known{reference_reads_.find(rhs)};
+        if (known == reference_reads_.end()) { return stdx::option<gir::value>{}; }
+
+        // `a += b` lowers its operator at the assignment
+        const auto operand_ref{mod().data_of(rhs).bin.lhs};
+        const auto operand_inst{as_inst(operand_ref)};
+        const bool reads_target{operand_ref == d.bin.lhs ||
+                                (operand_inst && mod().tag_of(*operand_inst) == tag::load &&
+                                 mod().data_of(*operand_inst).un.operand == d.bin.lhs)};
+        const bool compound{reads_target && same_node(src_of(rhs), src)};
+        return compound ? stdx::option<gir::value>{known->second} : stdx::option<gir::value>{};
+    })};
+
     // A reference binding written through is spilled to a slot first
     auto through{target};
     if (const auto lhs{as_inst(d.bin.lhs)};
         lhs && is_binding(mod().tag_of(*lhs)) && !target.is<place>() &&
         type_of(target).get_kind() == gs::type_kind::REFERENCE) {
-        const auto read{as_inst(d.bin.rhs).and_then([&](inst_id rhs) {
-            const auto known{reference_reads_.find(rhs)};
-
-            // `a += b` lowers its operator at the assignment, `a = a + b` at the `+`
-            const bool compound{known != reference_reads_.end() &&
-                                mod().data_of(rhs).bin.lhs == d.bin.lhs &&
-                                same_node(src_of(rhs), src)};
-            return compound ? stdx::option<gir::value>{known->second} : stdx::option<gir::value>{};
-        })};
-        through = read ? *read : load(TRY(address_of(d.bin.lhs, src)));
+        through = compound_read ? *compound_read : load(TRY(address_of(d.bin.lhs, src)));
     }
 
     auto destination{TRY(store_destination(through, src))};
+
+    // A `let mut` holding a reference has value semantics
+    const auto lhs_inst{as_inst(d.bin.lhs)};
+    const bool initializes{lhs_inst && mod().tag_of(*lhs_inst) == tag::alloc_mut &&
+                           same_node(src_of(*lhs_inst), src)};
+    if (!initializes && destination.address.type && !destination.packed && !destination.lane &&
+        destination.pointee->get_kind() == gs::type_kind::REFERENCE) {
+        const auto held{compound_read ? *compound_read : load(destination)};
+        destination = TRY(pointer_place(operand{held}, src));
+    }
+
     if (!destination.is_mutable) {
         return comp_.report(u_, src, gs::error::ASSIGNMENT_TO_CONST, std::string{ASSIGN_CONSTANT});
     }
@@ -785,6 +832,13 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
         const auto runtime{TRY(as_runtime(stored, src))};
         if (destination.packed) {
             packed_store(destination, runtime);
+        } else if (const auto& lane{destination.lane}) {
+            auto&            vec_type{*lane->vector.type};
+            const gir::value updated{builder_.emit_vector_op(gir::instruction_kind::INSERT_LANE,
+                                                             {lane->vector, lane->index, runtime},
+                                                             vec_type),
+                                     vec_type};
+            builder_.emit_store(destination.address, updated);
         } else {
             builder_.emit_store(destination.address, runtime);
         }
@@ -831,6 +885,9 @@ auto analyzer::analyze_load(inst_id inst) -> result<operand> {
         from && mod().tag_of(*from) == tag::field_ptr && target.is<gir::value>()) {
         return target;
     }
+    // A mutable global is read only at runtime
+    if (is_comptime() && target.is<global_ref>()) { return comp_.needs_runtime(u_, src); }
+
     const auto slot{target.as_opt<place>()};
     if (!slot || (!slot->pending && !slot->address.type)) {
         return comp_.unsupported(u_, src, "a load from a non-place");

@@ -420,10 +420,10 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
 auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
     const auto op{id.get_token_type()};
     if (op == token_type_t::BOOLEAN_AND || op == token_type_t::BOOLEAN_OR) {
-        // The first instruction the left side lowers to, offset by one so zero means none
-        const auto before{out_.instruction_count()};
+        // The first instruction the left side adds to this body, offset by one so zero means none
+        const auto before{body_->size()};
         const auto lhs{expr(node.lhs)};
-        const u32  lhs_start{out_.instruction_count() > before ? before + 1 : 0};
+        const u32  lhs_start{body_->size() > before ? std::to_underlying((*body_)[before]) + 1 : 0};
         return add_pl(op == token_type_t::BOOLEAN_AND ? tag::bool_and : tag::bool_or,
                       writer().ref_field(lhs).body_field(value_body(node.rhs)).u32_field(lhs_start),
                       id);

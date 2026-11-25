@@ -785,6 +785,24 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
         return operand{gir::value{builder_.emit_make_callable(code, stdx::none, target), target}};
     }
 
+    // A generic that captures nothing is its instance for the signature's parameters
+    if (const auto generic{op.as_opt<generic_ref>()}; generic && !generic->fn->env) {
+        std::vector<call_arg> args;
+        for (const auto param : erased->params) {
+            args.emplace_back(call_arg{.value = operand{gir::value{gir::local_id{}, *param}}});
+        }
+
+        auto  binding{TRY(bind_generic(*generic->fn, args, src))};
+        auto& target_fn{*TRY(comp_.instance_for(*generic->fn, std::move(binding)))};
+        TRY(comp_.infer_return(target_fn, u_, src));
+        auto& thin{*target_fn.type};
+        if (&ctx.with_erasure(thin, true) != &signature) { return stdx::none; }
+        TRY(require_runtime(src));
+        comp_.request_body(target_fn);
+        const auto code{constant(comp_.constants().intern(target_fn.symbol, thin), thin)};
+        return operand{gir::value{builder_.emit_make_callable(code, stdx::none, target), target}};
+    }
+
     // A closure is its environment's address, and its body is the code
     auto& from{type_of(op)};
     if (const auto body{comp_.closure_body(from)}) {

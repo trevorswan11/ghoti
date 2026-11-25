@@ -101,7 +101,11 @@ auto analyzer::call_expanding(const operand&       callee,
 
     // `f(rest...)` passes each of the pack's values as an argument of its own
     const auto generic{callee.as_opt<generic_ref>()};
-    if (!generic) { return comp_.unsupported(u_, src, "a pack expansion into this callee"); }
+    const auto function{callee.as_opt<function_ref>()};
+    if (!generic && !function) {
+        return comp_.unsupported(u_, src, "a pack expansion into this callee");
+    }
+
     std::vector<call_arg> values;
     for (usize i{0}; i < args.size(); ++i) {
         const auto value{TRY(resolve_value(args[i], src))};
@@ -118,7 +122,22 @@ auto analyzer::call_expanding(const operand&       callee,
         }
     }
 
-    return call_generic(*generic->fn, std::move(values), src, callee_src);
+    if (generic) { return call_generic(*generic->fn, std::move(values), src, callee_src); }
+
+    // A plain function's fixed parameters take the expanded values in order
+    auto& target{*function->fn};
+    if (values.size() != target.params.size() ||
+        target.type->get_data().as<gs::types::function>().is_variadic) {
+        return comp_.report(
+            u_,
+            callee_src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Expected {} arguments, found {}", target.params.size(), values.size()));
+    }
+
+    std::vector<operand> operands;
+    for (auto& value : values) { operands.emplace_back(std::move(value.value)); }
+    return call_following_poly(target, std::move(operands), src, false);
 }
 
 auto analyzer::call_operand(const operand&       callee,
@@ -298,8 +317,20 @@ auto analyzer::call_function(instance&            target,
                              const source&        src,
                              const source&        callee_src,
                              bool                 through_member) -> result<operand> {
-    // A C-variadic function takes any arguments after its parameters
+    // A call leaving trailing defaulted arguments off goes to the declaration's wrapper for them
     const bool variadic{target.type->get_data().as<gs::types::function>().is_variadic};
+    if (!variadic && args.size() < target.params.size()) {
+        const auto written{args.size() - (target.self_modifier && !args.empty() ? 1 : 0)};
+        if (const auto wrapper{TRY(default_wrapper(*target.owner, target.decl, written, src))}) {
+            if (const auto fn{wrapper->as_opt<function_ref>()}) {
+                return call_function(*fn->fn, args, src, callee_src, through_member);
+            }
+
+            return call_operand(*wrapper, args, src, callee_src);
+        }
+    }
+
+    // A C-variadic function takes any arguments after its parameters
     if (variadic && args.size() < target.params.size()) {
         return comp_.report(u_,
                             callee_src,

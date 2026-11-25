@@ -51,10 +51,6 @@ using syntax::builtin_t;
     }
 }
 
-[[nodiscard]] auto is_int_like(const gs::type& t) noexcept -> bool {
-    return gs::is_integer(t.get_kind()) || t.get_kind() == gs::type_kind::COMPTIME_INT;
-}
-
 [[nodiscard]] auto is_float_like(const gs::type& t) noexcept -> bool {
     return gs::is_float(t.get_kind()) || t.get_kind() == gs::type_kind::COMPTIME_FLOAT;
 }
@@ -120,13 +116,31 @@ auto analyzer::builtin_cast(inst_id inst, builtin_t which, gsl::span<const ref> 
 auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> target)
     -> result<operand> {
     const auto& src{src_of(cast.inst)};
-    auto        rec{record(cast.inst)};
-    const auto  which{static_cast<builtin_t>(rec.u32_field())};
-    const auto  operand_ref{rec.refs_field().front()};
+    if (mod().tag_of(cast.inst) != tag::builtin) {
+        if (!target) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                "cannot infer the type of an inferred cast meeting an untyped value");
+        }
 
-    // Only `@intFromBool` has a target of its own to fall back on
+        return binary_as(cast.inst, *target, src);
+    }
+
+    auto       rec{record(cast.inst)};
+    const auto which{static_cast<builtin_t>(rec.u32_field())};
+    const auto operand_ref{rec.refs_field().front()};
+
+    // Only `@intFromBool` has a target of its own to fall back on (u1)
     if (!target && which == builtin_t::INT_FROM_BOOL) {
-        target.emplace(comp_.ctx().get_int(1, false));
+        auto&      bit{comp_.ctx().get_int(1, false)};
+        const auto from{TRY(resolve_value(operand_ref, src))};
+        if (const auto vec{gs::vector_of(type_of(from))}) {
+            target.emplace(comp_.ctx().get_vector(gs::types::mut::CONSTANT, vec->len, bit));
+        } else {
+            target.emplace(bit);
+        }
     }
 
     if (!target) {
@@ -138,7 +152,16 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
             fmt::format("cannot infer the target type of '{}' here; write '{}(T, x)'", name, name));
     }
 
+    if (which == builtin_t::AS) { return as_to(*target, operand_ref, src); }
     return apply_cast(cast.inst, which, *target, operand_ref);
+}
+
+auto analyzer::arg_src(const source& call_src, usize index) const -> stdx::option<source> {
+    const auto node{call_src.as_opt<ast::node_id>()};
+    const auto expr{node ? u_.source->ast.get_as_opt<ast::call_expr>(*node) : stdx::none};
+    if (!expr || index >= expr->arguments.size()) { return stdx::none; }
+    const auto arg{expr->arguments[index].as_opt<ast::expr_handle>()};
+    return arg ? stdx::option<source>{source{*arg}} : stdx::none;
 }
 
 auto analyzer::cast_operand_src(inst_id call, ref operand_ref) const -> source {
@@ -147,16 +170,8 @@ auto analyzer::cast_operand_src(inst_id call, ref operand_ref) const -> source {
     auto        rec{record(call)};
     rec.skip_u32();
     const auto args{rec.refs_field()};
-    const auto at{std::ranges::find(args, operand_ref)};
-    const auto node{src.as_opt<ast::node_id>()};
-    const auto expr{node ? u_.source->ast.get_as_opt<ast::call_expr>(*node) : stdx::none};
-    if (expr && at != args.end()) {
-        const auto index{static_cast<usize>(at - args.begin())};
-        if (index < expr->arguments.size()) {
-            if (const auto arg{expr->arguments[index].as_opt<ast::expr_handle>()}) {
-                return source{*arg};
-            }
-        }
+    if (const auto at{std::ranges::find(args, operand_ref)}; at != args.end()) {
+        if (const auto arg{arg_src(src, static_cast<usize>(at - args.begin()))}) { return *arg; }
     }
 
     if (const auto i{as_inst(operand_ref)}) { return src_of(*i); }
@@ -190,8 +205,9 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
     auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
 
-    if (which != builtin_t::SPLAT && (gs::is_vector(from) || gs::is_vector(target))) {
-        return comp_.unsupported(u_, src, "a cast of a vector");
+    if (which != builtin_t::SPLAT && which != builtin_t::BIT_CAST &&
+        (gs::is_vector(from) || gs::is_vector(target))) {
+        return vector_cast(which, value, target, src, cast_operand_src(inst, operand_ref));
     }
 
     // `@splat` puts its operand in every lane of the vector it is used as
@@ -391,8 +407,7 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
         return cast_value(instruction_kind::PTR_FROM_INT, runtime, target);
     case builtin_t::INT_FROM_FLOAT:
         return gir::value{
-            builder_.emit_cast(
-                instruction_kind::WIDEN_CAST, runtime, target, comp_.ctx().runtime_safety),
+            builder_.emit_cast(instruction_kind::WIDEN_CAST, runtime, target, runtime_safety()),
             target};
     case builtin_t::FLOAT_FROM_INT:
     case builtin_t::FLOAT_CAST: return cast_value(instruction_kind::WIDEN_CAST, runtime, target);
@@ -408,6 +423,100 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
     }
 
     return comp_.unsupported(u_, src, fmt::format("the `{}` builtin", name));
+}
+
+auto analyzer::vector_cast(builtin_t      which,
+                           const operand& value,
+                           gs::type&      target,
+                           const source&  src,
+                           const source&  operand_src) -> result<operand> {
+    auto&      ctx{comp_.ctx()};
+    auto&      pool{comp_.constants()};
+    auto&      from{type_of(value)};
+    const auto name{syntax::builtin_name(which)};
+    const auto display{[&](const gs::type& t) { return ctx.type_display_name(t); }};
+    const auto to_vec{gs::vector_of(target)};
+    const auto from_vec{gs::vector_of(from)};
+    if (!to_vec || !from_vec || to_vec->len != from_vec->len) {
+        return comp_.report(u_,
+                            operand_src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'{}' converts a vector to a vector of as many lanes; "
+                                        "found '{}' to '{}'",
+                                        name,
+                                        display(from),
+                                        display(target)));
+    }
+
+    auto&      to{to_vec->underlying};
+    auto&      lane{from_vec->underlying};
+    const bool to_int{gs::is_integer(to.get_kind())};
+    const bool to_float{gs::is_float(to.get_kind())};
+    const bool from_int{gs::is_integer(lane.get_kind())};
+    const bool from_float{gs::is_float(lane.get_kind())};
+    const auto fits{[&] -> stdx::option<bool> {
+        switch (which) {
+        case builtin_t::INT_CAST: return to_int && from_int;
+        case builtin_t::TRUNCATE:
+            return to_int && from_int && domain_of(to).bits <= domain_of(lane).bits;
+        case builtin_t::INT_FROM_BOOL:  return to_int && lane.get_kind() == gs::type_kind::BOOL;
+        case builtin_t::INT_FROM_FLOAT: return to_int && from_float;
+        case builtin_t::FLOAT_FROM_INT: return to_float && from_int;
+        case builtin_t::FLOAT_CAST:     return to_float && from_float;
+        default:                        return stdx::none;
+        }
+    }()};
+    if (!fits) { return comp_.unsupported(u_, src, fmt::format("a `{}` of a vector", name)); }
+    if (!*fits) {
+        return comp_.report(
+            u_,
+            operand_src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format(
+                "'{}' can't convert '{}' lanes to '{}' lanes", name, display(lane), display(to)));
+    }
+
+    // Lanes fold one at a time, a runtime body folding only what the old emitter evaluated whole
+    const auto known{comptime_value(value)};
+    const auto built{built_value(value)};
+    const auto fold_lanes{[&](ip::index whole) -> result<operand> {
+        const auto agg{pool.value_at(whole).data.as_opt<ip::aggregate_value>()};
+        if (!agg) { return comp_.unsupported(u_, src, fmt::format("a `{}` of this vector", name)); }
+        const std::vector<stdx::option<ip::index>> lanes{agg->elements};
+        std::vector<stdx::option<ip::index>>       out;
+        for (const auto element : lanes) {
+            if (!element) { return comp_.unsupported(u_, src, "a cast of an undefined lane"); }
+            const auto folded{TRY(fold_cast(which, *element, lane, to, src, operand_src))};
+            const auto index{comptime_value(folded)};
+            if (!index) { return comp_.unsupported(u_, src, "a cast of a lane that doesn't fold"); }
+            out.emplace_back(*index);
+        }
+
+        return operand{pool.intern(ip::aggregate_value{std::move(out)}, target)};
+    }};
+    if (known && is_comptime()) { return fold_lanes(*known); }
+    if (built && folds_whole(which, lane, to)) { return fold_lanes(*built); }
+
+    TRY(require_runtime(src));
+    const auto runtime{TRY(as_runtime(value, src))};
+    switch (which) {
+    case builtin_t::INT_CAST:
+        // A known vector is checked lane by lane at compile time instead of guarded
+        if (built) {
+            DISCARD(TRY(fold_lanes(*built)));
+        } else {
+            TRY(int_cast_guard(runtime, target, operand_src));
+        }
+
+        return cast_value(instruction_kind::INT_CAST, runtime, target);
+    case builtin_t::TRUNCATE:      return cast_value(instruction_kind::TRUNC_CAST, runtime, target);
+    case builtin_t::INT_FROM_BOOL: return cast_value(instruction_kind::INT_CAST, runtime, target);
+    case builtin_t::INT_FROM_FLOAT:
+        return gir::value{
+            builder_.emit_cast(instruction_kind::WIDEN_CAST, runtime, target, runtime_safety()),
+            target};
+    default: return cast_value(instruction_kind::WIDEN_CAST, runtime, target);
+    }
 }
 
 auto analyzer::cast_operand(ref operand_ref, const source& src) -> result<operand> {
@@ -525,6 +634,14 @@ auto analyzer::bit_width(const gs::type& t) const -> stdx::option<u64> {
         return gs::packed_union_backing_bits(*ut, ptr_bits).transform([](u32 b) { return u64{b}; });
     }
 
+    // A vector's lanes lie end to end, a `bool` lane taking one bit
+    if (const auto vec{gs::vector_of(t)}) {
+        const auto lane{vec->underlying.get_kind() == gs::type_kind::BOOL
+                            ? stdx::option<u64>{1}
+                            : bit_width(vec->underlying)};
+        return lane.transform([&](u64 bits) { return bits * vec->len; });
+    }
+
     if (!has_fixed_bit_layout(t)) { return stdx::none; }
     if (const auto format{gs::float_format_of(t)}) { return format_info(*format).storage_bits; }
     if (t.get_kind() == gs::type_kind::BOOL) { return u64{8}; }
@@ -566,6 +683,21 @@ auto analyzer::bits_of(ip::index value, const gs::type& type, const source& src)
         return field_bits(un->payload.front(), ut->type_at(index));
     }
 
+    if (const auto vec{gs::vector_of(type)}) {
+        const auto& lane{vec->underlying};
+        const auto  width{lane.get_kind() == gs::type_kind::BOOL ? u64{1} : *bit_width(lane)};
+        const auto  agg{data.as_opt<ip::aggregate_value>()};
+        u128        out{0};
+        for (usize i{0}; i < vec->len; ++i) {
+            if (!agg || i >= agg->elements.size() || !agg->elements[i]) {
+                return comp_.unsupported(u_, src, "a `@bitCast` of an undefined lane");
+            }
+
+            out |= TRY(bits_of(*agg->elements[i], lane, src)) << (i * width);
+        }
+        return out;
+    }
+
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         const auto width{*bit_width(arr->underlying)};
         const auto agg{data.as_opt<ip::aggregate_value>()};
@@ -601,6 +733,17 @@ auto analyzer::bits_of(ip::index value, const gs::type& type, const source& src)
 
 auto analyzer::value_of_bits(u128 bits, gs::type& type, const source& src) -> result<ip::index> {
     auto& pool{comp_.constants()};
+    if (const auto vec{gs::vector_of(type)}) {
+        auto&      lane{vec->underlying};
+        const auto width{lane.get_kind() == gs::type_kind::BOOL ? u64{1} : *bit_width(lane)};
+        const auto mask{width >= 128 ? ~u128{0} : (u128{1} << width) - 1};
+        std::vector<stdx::option<ip::index>> lanes;
+        for (usize i{0}; i < vec->len; ++i) {
+            lanes.emplace_back(TRY(value_of_bits((bits >> (i * width)) & mask, lane, src)));
+        }
+        return pool.intern(ip::aggregate_value{std::move(lanes)}, type);
+    }
+
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         const auto                           width{*bit_width(arr->underlying)};
         const auto                           mask{width >= 128 ? ~u128{0} : (u128{1} << width) - 1};
@@ -703,8 +846,17 @@ auto analyzer::fold_cast(builtin_t       which,
         return pool.intern(static_cast<i64>(*small), target);
     }
     case builtin_t::BIT_CAST: {
-        // An array reinterprets its elements' bits end to end, as little-endian memory holds them
-        if (from.get_kind() == gs::type_kind::ARRAY || target.get_kind() == gs::type_kind::ARRAY) {
+        // An array or vector reinterprets its elements' bits end to end
+        const auto lined{[](const gs::type& t) {
+            return t.get_kind() == gs::type_kind::ARRAY || t.get_kind() == gs::type_kind::VECTOR;
+        }};
+
+        // The old evaluator leaves a vector's bits to runtime, which its mirrored folds keep
+        if (comp_.speculating() && (gs::is_vector(from) || gs::is_vector(target))) {
+            return comp_.needs_runtime(u_, src);
+        }
+
+        if (lined(from) || lined(target)) {
             const auto facts{codegen::target_facts::resolve(ctx.target_opts.triple_str)};
             const auto width{bit_width(target)};
             if (facts.endian != "little" || !width || *width > 128) {
@@ -804,6 +956,8 @@ auto analyzer::fold_cast(builtin_t       which,
     default: break;
     }
 
+    // Speculating, the cast only means the value is computed at runtime
+    if (comp_.speculating()) { return comp_.needs_runtime(u_, src); }
     return comp_.unsupported(u_, src, "a pointer cast at compile time");
 }
 
@@ -832,6 +986,37 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
     switch (which) {
     case builtin_t::BOOL_FROM_INT: {
         auto& bool_type{builtin(gs::type_kind::BOOL)};
+
+        // Each lane of an integer vector is whether that one is non-zero
+        if (const auto vec{gs::vector_of(from)}) {
+            if (!gs::is_integer(vec->underlying.get_kind())) {
+                return mismatch(
+                    fmt::format("'@boolFromInt' expects integer lanes; found '{}'", display(from)));
+            }
+
+            auto& result_type{ctx.with_lane(from, bool_type)};
+            if (const auto lanes{lanes_of(value, vec->len)}; lanes && is_comptime()) {
+                std::vector<stdx::option<ip::index>> out;
+                for (const auto lane : *lanes) {
+                    const auto exact{int_of(pool.value_at(lane))};
+                    if (!exact) {
+                        return comp_.unsupported(u_, src, "a `@boolFromInt` of this lane");
+                    }
+                    out.emplace_back(pool.intern(!(*exact == big_int{u128{0}}), bool_type));
+                }
+
+                return operand{pool.intern(ip::aggregate_value{std::move(out)}, result_type)};
+            }
+
+            TRY(require_runtime(src));
+            const auto zero{pool.intern(ip::zero_value{}, from)};
+            const auto operand_value{TRY(as_runtime(value, src))};
+            return gir::value{
+                builder_.emit_binary(
+                    instruction_kind::NE, operand_value, constant(zero, from), result_type),
+                result_type};
+        }
+
         if (!is_int_like(from) && from.get_kind() != gs::type_kind::POINTER) {
             return mismatch(fmt::format(
                 "`@boolFromInt` operand must be an integer or pointer; found '{}'", display(from)));
@@ -999,22 +1184,31 @@ auto analyzer::slice_from_ptr(inst_id inst, ref ptr_ref, ref len_ref) -> result<
 
 auto analyzer::int_cast_guard(const gir::value& value, const gs::type& target, const source& src)
     -> result<void> {
-    if (!comp_.ctx().runtime_safety || !gs::is_integer(target.get_kind()) || !value.type) {
-        return {};
-    }
+    const auto& to_lane{gs::lane_type_of(target)};
+    if (!runtime_safety() || !gs::is_integer(to_lane.get_kind()) || !value.type) { return {}; }
 
+    // A vector's lanes are each compared against splat bounds, and must all be in range
     auto&      from_type{*value.type};
-    const auto from{domain_of(from_type)};
-    const auto to{domain_of(target)};
+    const bool is_vector{gs::is_vector(from_type)};
+    auto&      from_lane{gs::lane_type_of(from_type)};
+    const auto from{domain_of(from_lane)};
+    const auto to{domain_of(to_lane)};
     auto&      pool{comp_.constants()};
-    auto&      bool_type{builtin(gs::type_kind::BOOL)};
+    auto&      scalar_bool{builtin(gs::type_kind::BOOL)};
+    auto&      bool_type{is_vector ? comp_.ctx().with_lane(from_type, scalar_bool) : scalar_bool};
+    const auto bound{[&](const big_int& exact) {
+        const auto scalar{constant(intern_int(pool, exact, from_lane), from_lane)};
+        if (!is_vector) { return scalar; }
+        return gir::value{builder_.emit_vector_op(instruction_kind::SPLAT, {scalar}, from_type),
+                          from_type};
+    }};
 
     // The target's smallest or largest value
     const auto limit{[&](bool upper) {
         const big_int one{u128{1}};
         const auto    span{one.shl(to.is_signed ? to.bits - 1U : to.bits)};
         const auto    exact{upper ? span - one : to.is_signed ? -span : big_int{u128{0}}};
-        return constant(intern_int(pool, exact, from_type), from_type);
+        return bound(exact);
     }};
     const auto compare{[&](instruction_kind kind, const gir::value& bound) {
         return gir::value{builder_.emit_binary(kind, value, bound, bool_type), bool_type};
@@ -1034,7 +1228,7 @@ auto analyzer::int_cast_guard(const gir::value& value, const gs::type& target, c
     } else if (!from.is_signed && !to.is_signed) {
         if (from.bits > to.bits) { ok.emplace(compare(instruction_kind::LE, limit(true))); }
     } else if (from.is_signed) {
-        const auto zero{constant(intern_int(pool, big_int{u128{0}}, from_type), from_type)};
+        const auto zero{bound(big_int{u128{0}})};
         const auto non_negative{compare(instruction_kind::GE, zero)};
         if (from.bits > to.bits) {
             ok.emplace(both(non_negative, compare(instruction_kind::LE, limit(true))));
@@ -1046,6 +1240,14 @@ auto analyzer::int_cast_guard(const gir::value& value, const gs::type& target, c
     }
 
     if (!ok) { return {}; }
+    if (is_vector) {
+        ok.emplace(builder_.emit_vector_op(instruction_kind::REDUCE,
+                                           {*ok},
+                                           scalar_bool,
+                                           std::to_underlying(gir::reduce_op::AND)),
+                   scalar_bool);
+    }
+
     return guard(*ok, "integer value out of range for target type", src);
 }
 
@@ -1054,8 +1256,7 @@ auto analyzer::enum_cast_guard(const operand&    cast,
                                ref               operand_ref,
                                const source&     src) -> result<void> {
     const auto value{cast.as_opt<gir::value>()};
-    if (!comp_.ctx().runtime_safety || !value || !from.type ||
-        !gs::is_integer(from.type->get_kind())) {
+    if (!runtime_safety() || !value || !from.type || !gs::is_integer(from.type->get_kind())) {
         return {};
     }
 

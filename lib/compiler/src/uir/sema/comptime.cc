@@ -125,6 +125,21 @@ compilation::speculation::~speculation() { --owner.speculating_; }
 
 auto compilation::speculate() -> speculation { return speculation{*this}; }
 
+auto compilation::drop_value_errors(usize from) -> bool {
+    auto rest{diagnostics_.split_off(from)};
+    bool dropped{false};
+    for (const auto& d : rest) {
+        const auto e{d.get_error()};
+        if (e != gs::error::COMPTIME_EVALUATION_FAILED && e != gs::error::LITERAL_OUT_OF_RANGE) {
+            diagnostics_.push_back(d);
+        } else {
+            dropped = true;
+        }
+    }
+
+    return dropped;
+}
+
 auto compilation::abandon(const speculation& s, bool keep_unsupported) -> void {
     DISCARD(diagnostics_.split_off(s.diagnostics));
 
@@ -264,9 +279,8 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
 
 auto analyzer::require_comptime(const operand& op, const source& src) -> result<ip::index> {
     if (const auto index{comptime_value(op)}) { return *index; }
-    if (op.is<function_ref>()) {
-        return comp_.unsupported(u_, src, "a function used as a compile-time value");
-    }
+    // A function's compile-time value is its symbol, which it is called and exported by
+    if (const auto fn{op.as_opt<function_ref>()}) { return comp_.function_value(*fn->fn); }
 
     return comp_.needs_runtime(u_, src);
 }
@@ -446,6 +460,9 @@ auto analyzer::operands_known(inst_id inst) const -> bool {
             return true;
         }
 
+        // A vector built at runtime from a known value
+        if (op.is<gir::value>() && built_value(op)) { return true; }
+
         // An immutable binding of a known value
         if (const auto bound{op.as_opt<slot_value>()};
             bound && !bound->is_mutable && bound->known) {
@@ -496,6 +513,11 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     // An aggregate global is its value at compile time
     if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
     if (const auto s{found->second.as_opt<slot_value>()}; s && s->known) { return *s->known; }
+    // A vector built at runtime is known at compile time
+    if (found->second.is<gir::value>()) {
+        if (const auto built{built_value(found->second)}) { return operand{*built}; }
+    }
+
     // A field or element address is computed again on its object's compile-time value
     const auto t{mod().tag_of(*inst)};
     const bool address{found->second.is<place>() && (t == tag::field_ptr || t == tag::elem_ptr)};

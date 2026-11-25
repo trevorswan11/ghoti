@@ -397,6 +397,19 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"Guards decide between arms at runtime"},
     // A module alias named after the primitive it names is listed as a global of that type
     std::string_view{"A folded const named after a primitive can read the primitive"},
+    // A compile-time call skips the argument check a runtime one makes, so `Box(i32)` passes for a
+    // `Box(comptime_int)` parameter
+    std::string_view{"A later parameter's type may be a type-constructor call over an earlier "
+                     "parameter"},
+    // A type a `match comptime` yields is listed as a global constant of type `struct`, and its
+    // local `const` value is built at runtime
+    std::string_view{"A match arm may yield an `extern struct` type"},
+    // The evaluator leaves a comparison with an infinite constant, like `@log(0.0)`, at runtime
+    std::string_view{"math builtins reject integers, types, and results past the range"},
+    // A product with a constant zero is folded with the call it multiplies, which never runs
+    std::string_view{"An inferred cast's target never types its operand"},
+    // A `let` holding a type through a labeled block's `break` isn't rejected
+    std::string_view{"an inline aggregate type in value position has no runtime value"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
@@ -543,7 +556,8 @@ auto diff_pipelines(mod::source_loader&          loader,
     if (!out.succeeded()) {
         const auto status{only_decided_rejections(out.diagnostics)
                               ? uir_diff_status::SEMANTICS_CHANGE
-                              : uir_diff_status::REJECTED};
+                          : shows_legacy_bug() ? uir_diff_status::LEGACY_BUG
+                                               : uir_diff_status::REJECTED};
         return {.status = status, .detail = fmt::format("{}", out.diagnostics)};
     }
 

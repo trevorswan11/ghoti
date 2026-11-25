@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -7,6 +8,7 @@
 #include <fmt/format.h>
 #include <gsl/span>
 #include <gsl/util>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -68,6 +70,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TYPE_NAME:                return builtin_type_name(args, src);
     case builtin_t::TAG_NAME:                 return builtin_tag_name(args, src);
     case builtin_t::FIELD:                    return builtin_field(args, src);
+    case builtin_t::HAS_FIELD:
+    case builtin_t::FIELD_TYPE:
+    case builtin_t::FIELD_DEFAULT:            return builtin_field_query(which, args, src);
+    case builtin_t::FIELD_PARENT_PTR:         return builtin_field_parent_ptr(args, src);
     case builtin_t::TYPE_INFO:                return builtin_type_info(args, src);
     case builtin_t::ALIGN_OF:                 return builtin_layout(args, src, false);
     case builtin_t::LLVM_INTRINSIC:           return builtin_llvm_intrinsic(args, src);
@@ -86,23 +92,38 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::TRAP:                     return builtin_trap(src);
     case builtin_t::PANIC:                    return builtin_panic(args, src);
     case builtin_t::IMPLEMENTS:               return builtin_implements(args, src);
-    case builtin_t::AS:                       return builtin_as(args, src);
+    case builtin_t::AS:                       return builtin_as(inst, args, src);
     case builtin_t::THIS:                     return builtin_this(src);
     case builtin_t::INT:                      return builtin_int_type(args, src);
     case builtin_t::CLZ:
     case builtin_t::CTZ:
     case builtin_t::POPCOUNT:                 return builtin_bit_count(which, args, src);
     case builtin_t::ABS:                      return builtin_abs(args, src);
+    case builtin_t::MUL_ADD:                  return builtin_mul_add(args, src);
+    case builtin_t::ATOMIC_LOAD:
+    case builtin_t::ATOMIC_STORE:
+    case builtin_t::ATOMIC_RMW:
+    case builtin_t::CMPXCHG_WEAK:
+    case builtin_t::CMPXCHG_STRONG:
+    case builtin_t::FENCE:                    return builtin_atomic(which, args, src);
+    case builtin_t::BRANCH_HINT:              return builtin_branch_hint(inst, args, src);
+    case builtin_t::SET_RUNTIME_SAFETY:       return builtin_set_runtime_safety(args, src);
+    case builtin_t::RUNTIME_SAFETY:
+        return operand{comp_.constants().intern(runtime_safety(), builtin(gs::type_kind::BOOL))};
+    case builtin_t::ADD_WITH_OVERFLOW:
+    case builtin_t::SUB_WITH_OVERFLOW:
+    case builtin_t::MUL_WITH_OVERFLOW:
+    case builtin_t::SHL_WITH_OVERFLOW: return builtin_overflow(which, args, src);
     case builtin_t::MEMCPY:
     case builtin_t::MEMMOVE:
-    case builtin_t::MEMSET:                   return builtin_mem(which, args, src);
+    case builtin_t::MEMSET:            return builtin_mem(which, args, src);
     case builtin_t::MIN:
     case builtin_t::MAX:
     case builtin_t::DIV_TRUNC:
     case builtin_t::DIV_FLOOR:
     case builtin_t::DIV_EXACT:
     case builtin_t::REM:
-    case builtin_t::MOD:                      return builtin_binary_math(which, args, src);
+    case builtin_t::MOD:               return builtin_binary_math(which, args, src);
     case builtin_t::SQRT:
     case builtin_t::SIN:
     case builtin_t::COS:
@@ -113,16 +134,26 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::LOG2:
     case builtin_t::LOG10:
     case builtin_t::FLOOR:
-    case builtin_t::CEIL:                     return builtin_float_math(which, args, src);
-    case builtin_t::VECTOR:                   return builtin_vector_type(args, src);
-    case builtin_t::ENUM:                     return builtin_enum(inst, args, src);
-    case builtin_t::STRUCT:                   return builtin_struct(inst, args, src);
-    case builtin_t::UNION:                    return builtin_union(inst, args, src);
+    case builtin_t::CEIL:              return builtin_float_math(which, args, src);
+    case builtin_t::VECTOR:            return builtin_vector_type(args, src);
+    case builtin_t::ENUM:              return builtin_enum(inst, args, src);
+    case builtin_t::STRUCT:            return builtin_struct(inst, args, src);
+    case builtin_t::UNION:             return builtin_union(inst, args, src);
     case builtin_t::TARGET_OS:
     case builtin_t::TARGET_ARCH:
     case builtin_t::TARGET_ABI:
-    case builtin_t::TARGET_FAMILY:            return builtin_target(which, src);
-    case builtin_t::FLOAT:                    return builtin_float_type(args, src);
+    case builtin_t::TARGET_FAMILY:
+    case builtin_t::TARGET_ENDIAN:
+    case builtin_t::TARGET_TRIPLE:
+    case builtin_t::TARGET_PTR_BITS:
+    case builtin_t::OPTIMIZE_MODE:     return builtin_target(which, src);
+    case builtin_t::FLOAT:             return builtin_float_type(args, src);
+    case builtin_t::POINTER:
+    case builtin_t::REFERENCE:
+    case builtin_t::SLICE:
+    case builtin_t::ARRAY:             return builtin_shaped_type(which, args, src);
+    case builtin_t::FN:                return builtin_fn_type(args, src);
+    case builtin_t::ENUM_LITERAL:      return interned_type(builtin(gs::type_kind::ENUM_LITERAL));
     case builtin_t::INT_CAST:
     case builtin_t::TRUNCATE:
     case builtin_t::BIT_CAST:
@@ -140,10 +171,15 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::CONST_CAST:
     case builtin_t::VOLATILE_CAST:
     case builtin_t::SLICE_FROM_PTR:
-    case builtin_t::SPLAT:                    return builtin_cast(inst, which, args);
-    case builtin_t::REDUCE:                   return builtin_reduce(args, src);
-    case builtin_t::SELECT:                   return builtin_select(args, src);
-    default:                                  break;
+    case builtin_t::SPLAT:             return builtin_cast(inst, which, args);
+    case builtin_t::REDUCE:            return builtin_reduce(args, src);
+    case builtin_t::SELECT:            return builtin_select(args, src);
+    case builtin_t::SHUFFLE:           return builtin_shuffle(args, src);
+    case builtin_t::MASKED_LOAD:
+    case builtin_t::MASKED_STORE:
+    case builtin_t::GATHER:
+    case builtin_t::SCATTER:           return builtin_masked(which, args, src);
+    default:                           break;
     }
 
     return comp_.unsupported(u_, src, fmt::format("the `{}` builtin", syntax::builtin_name(which)));
@@ -165,14 +201,12 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
         const auto generic{value.as_opt<generic_ref>()};
         const bool own_instance{generic && fn_ && fn_->owner.get() == generic->fn->owner.get() &&
                                 fn_->func == generic->fn->func};
-        auto& type{own_instance                                 ? *fn_->type
+        // Another generic's type is its signature, its comptime and `auto` parts left open
+        auto& type{own_instance ? *fn_->type
+                   : generic    ? *TRY(comp_.generic_value_type(*generic->fn))
                    : known && comp_.constants().is_type(*known) ? comp_.constants().type_at(*known)
                                                                 : type_of(value)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
-
-        if (!fn_ && !declaring_ && gs::is_comptime_numeric(type.get_kind())) {
-            return comp_.unsupported(u_, src, "a signature's `@TypeOf` of an untyped value");
-        }
 
         peers.emplace_back<gs::peer_operand>({.type = &type});
         sources.emplace_back(body.empty() ? src : src_of(body.back()));
@@ -220,6 +254,142 @@ auto analyzer::analyze_unemitted(gsl::span<const inst_id> body) -> result<flow> 
     gir_fn_.emplace(scratch);
     builder_.set_insert_point(scratch, scratch.add_segment());
     return analyze_body(body);
+}
+
+auto analyzer::hint_inst_of(gsl::span<const inst_id> body) const -> stdx::option<inst_id> {
+    for (const auto inst : body) {
+        const auto t{mod().tag_of(inst)};
+        if (t == tag::implicit_access || t == tag::str) { continue; }
+        if (t == tag::block) {
+            auto rec{record(inst)};
+            rec.skip_str();
+            return hint_inst_of(rec.body_field());
+        }
+
+        if (t != tag::builtin) { return stdx::none; }
+        auto       rec{record(inst)};
+        const auto which{static_cast<syntax::builtin_t>(rec.u32_field())};
+        return which == syntax::builtin_t::BRANCH_HINT ? stdx::option<inst_id>{inst} : stdx::none;
+    }
+
+    return stdx::none;
+}
+
+auto analyzer::branch_hint_of(gsl::span<const inst_id> body) const
+    -> stdx::option<ast::branch_hint> {
+    const auto inst{hint_inst_of(body)};
+    if (!inst) { return stdx::none; }
+    auto rec{record(*inst)};
+    rec.skip_u32();
+    const auto args{rec.refs_field()};
+    const auto arg{args.empty() ? stdx::none : as_inst(args.front())};
+    if (!arg || mod().tag_of(*arg) != tag::implicit_access) { return stdx::none; }
+    return ast::branch_hint_from_name(mod().string(mod().data_of(*arg).str));
+}
+
+auto analyzer::apply_branch_hints(gir::instruction&        branch,
+                                  gsl::span<const inst_id> on_true,
+                                  gsl::span<const inst_id> on_false) const -> void {
+    static constexpr u32 LIKELY_WEIGHT{2'000};
+    static constexpr u32 UNLIKELY_WEIGHT{1};
+    const auto           weight_of{[](stdx::option<ast::branch_hint> hint) -> stdx::option<u32> {
+        if (hint == ast::branch_hint::LIKELY) { return LIKELY_WEIGHT; }
+        if (hint == ast::branch_hint::UNLIKELY || hint == ast::branch_hint::COLD) {
+            return UNLIKELY_WEIGHT;
+        }
+        return stdx::none;
+    }};
+    const auto           opposite{
+        [](u32 weight) { return weight == LIKELY_WEIGHT ? UNLIKELY_WEIGHT : LIKELY_WEIGHT; }};
+
+    const auto true_hint{branch_hint_of(on_true)};
+    const auto false_hint{branch_hint_of(on_false)};
+    const auto true_weight{weight_of(true_hint)};
+    const auto false_weight{weight_of(false_hint)};
+    if (true_weight || false_weight) {
+        branch.branch_weights.emplace(true_weight.value_or(opposite(*false_weight)),
+                                      false_weight.value_or(opposite(*true_weight)));
+    }
+    branch.unpredictable = true_hint == ast::branch_hint::UNPREDICTABLE ||
+                           false_hint == ast::branch_hint::UNPREDICTABLE;
+}
+
+auto analyzer::builtin_branch_hint(inst_id inst, gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "a `@branchHint` of this arity"); }
+    const auto arg_at{arg_src(src, 0).value_or(src)};
+    auto&      hint_type{*TRY(comp_.prelude_type("BranchHint", u_, src))};
+    const auto given{TRY(resolve_value(args[0], src))};
+    const auto value{[&]() -> result<stdx::option<ip::index>> {
+        const auto scope{comptime_scope()};
+        return comptime_value(
+            TRY(coerce_to(given, hint_type, arg_at, {.what = use_site::kind::STORE})));
+    }()};
+    if (!value && value.error() != stop::RUNTIME) { return stdx::err{value.error()}; }
+    const auto variant{value && *value ? variant_name(**value) : stdx::none};
+    if (!variant) {
+        return comp_.report(u_,
+                            arg_at,
+                            gs::error::TYPE_MISMATCH,
+                            "@branchHint requires a compile-time 'builtin.BranchHint'");
+    }
+
+    // A hint leads an `if` / `else` branch, a `match` arm or a function body
+    if (body_hints_.empty() || body_hints_.back() != inst) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "@branchHint must be the first statement of an 'if'/'else' branch, a "
+                            "'match' arm, or a function body");
+    }
+
+    const auto hint{ast::branch_hint_from_name(*variant)};
+    if (body_hints_.size() == 1 && hint != ast::branch_hint::COLD &&
+        hint != ast::branch_hint::NONE) {
+        return comp_.report(u_,
+                            arg_at,
+                            gs::error::TYPE_MISMATCH,
+                            "A function body only accepts '@branchHint(.cold)'");
+    }
+
+    return void_value();
+}
+
+auto analyzer::runtime_safety() const -> bool {
+    for (const auto& scope : std::views::reverse(safety_scopes_)) {
+        if (scope) { return *scope; }
+    }
+
+    return comp_.ctx().runtime_safety;
+}
+
+auto analyzer::builtin_set_runtime_safety(gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    if (args.size() != 1) {
+        return comp_.unsupported(u_, src, "a `@setRuntimeSafety` of this arity");
+    }
+
+    if (!gir_fn_ || !fn_ || safety_scopes_.empty()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "@setRuntimeSafety can only be used within a function body");
+    }
+
+    const auto arg_at{arg_src(src, 0).value_or(src)};
+    const auto given{TRY(resolve_value(args[0], src))};
+    const auto known{comptime_value(given)};
+    const auto enabled{known ? comp_.constants().value_at(*known).data.as_opt<bool>() : stdx::none};
+    if (!enabled) {
+        return comp_.report(u_,
+                            arg_at,
+                            gs::error::TYPE_MISMATCH,
+                            "@setRuntimeSafety requires a compile-time 'bool'");
+    }
+
+    // The body holding the call is checked as it says from here on, with what it contains
+    safety_scopes_.back() = *enabled;
+    return void_value();
 }
 
 auto analyzer::builtin_compile_error(gsl::span<const ref> args, const source& src)
@@ -418,10 +588,16 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
     return {};
 }
 
-auto analyzer::builtin_as(gsl::span<const ref> args, const source& src) -> result<operand> {
+auto analyzer::builtin_as(inst_id inst, gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    // `@as(x)` converts to the type it is used as
+    if (args.size() == 1) { return cast_ref{inst}; }
     if (args.size() != 2) { return comp_.unsupported(u_, src, "an `@as` of this arity"); }
-    auto& target{*TRY(resolve_type(args[0], src))};
-    auto  value{TRY(resolve_value(args[1], src))};
+    return as_to(*TRY(resolve_type(args[0], src)), args[1], src);
+}
+
+auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> result<operand> {
+    auto value{TRY(resolve_value(value_ref, src))};
 
     // A vector takes its lanes from a list, an array or another vector
     if (gs::is_vector(target)) {
@@ -594,6 +770,136 @@ auto analyzer::builtin_field(gsl::span<const ref> args, const source& src) -> re
     return field_value(args[0], field_name, src, false);
 }
 
+auto analyzer::field_name_arg(ref arg, const source& src) -> result<stdx::option<std::string>> {
+    const auto given{[&]() -> result<operand> {
+        const auto scope{comptime_scope()};
+        return resolve_value(arg, src);
+    }()};
+    if (!given && given.error() != stop::RUNTIME) { return stdx::err{given.error()}; }
+    const auto known{given ? comptime_value(*given) : stdx::none};
+    const auto text{known ? comp_.constants().value_at(*known).data.as_opt<std::string>()
+                          : stdx::none};
+    return text ? stdx::option<std::string>{*text} : stdx::none;
+}
+
+auto analyzer::builtin_field_query(syntax::builtin_t    which,
+                                   gsl::span<const ref> args,
+                                   const source&        src) -> result<operand> {
+    using syntax::builtin_t;
+    const auto prefix{syntax::builtin_name(which)};
+    if (args.size() != 2) { return comp_.unsupported(u_, src, "a field builtin's arity"); }
+    const auto name_at{arg_src(src, 1).value_or(src)};
+    auto&      pool{comp_.constants()};
+
+    // `@hasField` asks of any type, reading no value
+    if (which == builtin_t::HAS_FIELD) {
+        const auto owner{TRY(resolve_value(args[0], src))};
+        const auto owner_index{comptime_value(owner)};
+        if (!owner_index || !pool.is_type(*owner_index)) {
+            return comp_.report(u_,
+                                arg_src(src, 0).value_or(src),
+                                gs::error::TYPE_MISMATCH,
+                                "@hasField: the first argument must be a type");
+        }
+
+        const auto name{TRY(field_name_arg(args[1], src))};
+        if (!name) {
+            return comp_.report(u_,
+                                name_at,
+                                gs::error::TYPE_MISMATCH,
+                                "@hasField: the field name must be a compile-time-known string");
+        }
+
+        auto& type{pool.type_at(*owner_index)};
+        if (comp_.nominal_of(type)) { TRY(comp_.require_fields(u_, src, type)); }
+        return operand{pool.intern(gs::find_aggregate_field(type, *name).has_value(),
+                                   builtin(gs::type_kind::BOOL))};
+    }
+
+    auto&      type{*TRY(resolve_type(args[0], src))};
+    const auto name{TRY(field_name_arg(args[1], src))};
+    if (comp_.nominal_of(type)) { TRY(comp_.require_fields(u_, src, type)); }
+    const auto field{name ? gs::find_aggregate_field(type, *name) : stdx::none};
+    if (!field) {
+        return comp_.report(u_,
+                            name_at,
+                            gs::error::FIELD_NOT_FOUND,
+                            fmt::format("{}: unknown field (the name must be a compile-time-known "
+                                        "string)",
+                                        prefix));
+    }
+
+    if (which == builtin_t::FIELD_TYPE) { return interned_type(field->field_type); }
+
+    // `@fieldDefault` is the field's own default, of the field's type
+    const auto defaults{type.get_data().is<gs::types::struct_t>() ? TRY(field_defaults(type, src))
+                                                                  : std::vector<default_source>{}};
+    if (field->index >= defaults.size() || !defaults[field->index].present()) {
+        return comp_.report(u_,
+                            name_at,
+                            gs::error::FIELD_HAS_NO_DEFAULT,
+                            "@fieldDefault: field has no default value");
+    }
+
+    return field_default(type, field->index, defaults[field->index], src);
+}
+
+auto analyzer::builtin_field_parent_ptr(gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    if (args.size() != 3) {
+        return comp_.unsupported(u_, src, "a `@fieldParentPtr` of this arity");
+    }
+    auto&      ctx{comp_.ctx()};
+    auto&      parent{*TRY(resolve_type(args[0], src))};
+    const auto display{[&](const gs::type& t) { return ctx.type_display_name(t); }};
+    if (!parent.get_data().is<gs::types::struct_t>()) {
+        return comp_.report(
+            u_,
+            arg_src(src, 0).value_or(src),
+            gs::error::TYPE_MISMATCH,
+            fmt::format("'@fieldParentPtr' expects a struct type; found '{}'", display(parent)));
+    }
+
+    const auto name_at{arg_src(src, 1).value_or(src)};
+    const auto name{string_literal(mod(), args, 1)};
+    if (!name) {
+        return comp_.report(u_,
+                            name_at,
+                            gs::error::TYPE_MISMATCH,
+                            "'@fieldParentPtr' expects a string-literal field name");
+    }
+
+    if (comp_.nominal_of(parent)) { TRY(comp_.require_fields(u_, src, parent)); }
+    const auto field{gs::find_aggregate_field(parent, *name)};
+    if (!field) {
+        return comp_.report(u_,
+                            name_at,
+                            gs::error::UNKNOWN_FIELD,
+                            fmt::format("'{}' is not a field of the given struct", *name));
+    }
+
+    const auto ptr{TRY(resolve_value(args[2], src))};
+    auto&      ptr_type{type_of(ptr)};
+    if (ptr_type.get_kind() != gs::type_kind::POINTER) {
+        return comp_.report(u_,
+                            arg_src(src, 2).value_or(src),
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'@fieldParentPtr' expects a field pointer; found '{}'",
+                                        display(ptr_type)));
+    }
+
+    // The parent's address is the field's minus its offset
+    TRY(require_runtime(src));
+    auto&                   result_type{ctx.get_pointer(
+        ptr_type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE, parent)};
+    std::vector<gir::value> call_args;
+    call_args.emplace_back(TRY(as_runtime(ptr, src)));
+    call_args.emplace_back(usize_constant(field->index));
+    const auto result{
+        builder_.emit_builtin_call("@fieldParentPtr", std::move(call_args), result_type)};
+    return operand{gir::value{*result, result_type}};
+}
+
 auto analyzer::builtin_return_address(const source& src) -> result<operand> {
     TRY(require_runtime(src));
     auto&      usize_type{builtin(gs::type_kind::USIZE)};
@@ -658,7 +964,7 @@ auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool
         if (held && *held) { return void_value(); }
     }
 
-    if (!verify && !ctx.runtime_safety) { return void_value(); }
+    if (!verify && !runtime_safety()) { return void_value(); }
     const auto text{string_literal(mod(), args, 1)};
     if (args.size() > 1 && !text) {
         return comp_.unsupported(u_, src, "an `@assert` message that isn't a literal");
@@ -767,14 +1073,141 @@ auto analyzer::builtin_float_type(gsl::span<const ref> args, const source& src) 
     return interned_type(builtin(*kind));
 }
 
+auto analyzer::builtin_shaped_type(syntax::builtin_t    which,
+                                   gsl::span<const ref> args,
+                                   const source&        src) -> result<operand> {
+    using syntax::builtin_t;
+    const auto name{syntax::builtin_name(which)};
+    const auto info{which == builtin_t::SLICE   ? "SliceInfo"
+                    : which == builtin_t::ARRAY ? "ArrayInfo"
+                                                : "PointerInfo"};
+    const auto desc{TRY(descriptor(args, name, info, src))};
+    auto&      ctx{comp_.ctx()};
+    auto&      pool{comp_.constants()};
+    const auto missing{[&](std::string_view field) -> stdx::err<stop> {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            fmt::format(
+                "'{}': descriptor is missing a compile-time-known '{}' field", name, field));
+    }};
+    const auto flag{[&](std::string_view field) -> result<bool> {
+        const auto known{TRY(known_field(desc, field, src))};
+        const auto value{known ? pool.value_at(*known).data.as_opt<bool>() : stdx::none};
+        if (!value) { return missing(field); }
+        return *value;
+    }};
+
+    const auto child_index{TRY(known_field(desc, "child", src))};
+    if (!child_index || !pool.is_type(*child_index)) { return missing("child"); }
+    auto& child{pool.type_at(*child_index)};
+    auto  mods{TRY(flag("is_mut")) ? gs::types::mut::MUTABLE : gs::types::mut::CONSTANT};
+    if (TRY(flag("is_volatile"))) { mods |= gs::types::mut::VOLATILE; }
+    switch (which) {
+    case builtin_t::POINTER:   return interned_type(ctx.get_pointer(mods, child));
+    case builtin_t::REFERENCE: return interned_type(ctx.get_reference(mods, child));
+    case builtin_t::SLICE: return interned_type(ctx.get_slice(mods, TRY(flag("sentinel")), child));
+    default:               break;
+    }
+
+    const auto len_index{TRY(known_field(desc, "len", src))};
+    const auto len{len_index ? int_of(pool.value_at(*len_index)) : stdx::none};
+    const auto small{len ? len->to_u128() : stdx::none};
+    if (!small) { return missing("len"); }
+    return interned_type(
+        ctx.get_array(mods, TRY(flag("sentinel")), static_cast<usize>(*small), child));
+}
+
+auto analyzer::builtin_fn_type(gsl::span<const ref> args, const source& src) -> result<operand> {
+    const auto desc{TRY(descriptor(args, "@Fn", "FnInfo", src))};
+    auto&      ctx{comp_.ctx()};
+    auto&      pool{comp_.constants()};
+    const auto fail{[&](gs::error code, std::string message) -> stdx::err<stop> {
+        return comp_.report(u_, src, code, std::move(message));
+    }};
+    const auto missing{[&](std::string_view field) {
+        return fail(
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            fmt::format("'@Fn': descriptor is missing a compile-time-known '{}' field", field));
+    }};
+    const auto flag{[&](std::string_view field) -> result<bool> {
+        const auto known{TRY(known_field(desc, field, src))};
+        const auto value{known ? pool.value_at(*known).data.as_opt<bool>() : stdx::none};
+        if (!value) { return missing(field); }
+        return *value;
+    }};
+
+    const auto params_index{TRY(known_field(desc, "params", src))};
+    const auto params{params_index ? pool.value_at(*params_index).data.as_opt<ip::aggregate_value>()
+                                   : stdx::none};
+    if (!params) { return missing("params"); }
+    const std::vector<stdx::option<ip::index>> elements{params->elements};
+    const auto ret_index{TRY(known_field(desc, "return_type", src))};
+    if (!ret_index || !pool.is_type(*ret_index)) { return missing("return_type"); }
+    auto&      ret{pool.type_at(*ret_index)};
+    const bool variadic{TRY(flag("variadic"))};
+    const bool has_self{TRY(flag("has_self"))};
+    const bool erased{TRY(flag("erased"))};
+    const auto conv_index{TRY(known_field(desc, "callconv", src))};
+    const auto conv_name{conv_index ? variant_name(*conv_index) : stdx::none};
+    if (!conv_name) { return missing("callconv"); }
+    const auto conv{ast::calling_convention_from_name(*conv_name)};
+    if (!conv) {
+        return fail(gs::error::TYPE_MISMATCH,
+                    fmt::format("'@Fn': unknown calling convention '{}'", *conv_name));
+    }
+
+    if (erased && has_self) {
+        return fail(gs::error::TYPE_MISMATCH,
+                    "'@Fn': a method-shaped (`has_self`) type is never erased; set "
+                    "`.erased = false`");
+    }
+
+    if (erased && *conv != ast::calling_convention::C) {
+        return fail(gs::error::CALLCONV_REQUIRES_EXTERN_FN,
+                    "`callconv(...)` only applies to a thin `extern fn(...)` type; an erased "
+                    "`fn(...)` callable has no C calling convention");
+    }
+
+    auto param_types{ctx.pool.get_many_unsafe(elements.size())};
+    for (usize i{0}; i < elements.size(); ++i) {
+        if (!elements[i] || !pool.is_type(*elements[i])) {
+            return fail(gs::error::COMPTIME_EVALUATION_FAILED,
+                        "'@Fn': every element of 'params' must be a compile-time-known type");
+        }
+
+        param_types[i] = &pool.type_at(*elements[i]);
+    }
+
+    return interned_type(
+        ctx.get_function_like(param_types, ret, has_self, variadic, *conv, erased));
+}
+
 auto analyzer::builtin_target(syntax::builtin_t which, const source& src) -> result<operand> {
-    const auto facts{codegen::target_facts::resolve(comp_.ctx().target_opts.triple_str)};
+    auto&      ctx{comp_.ctx()};
+    auto&      pool{comp_.constants()};
+    const auto facts{codegen::target_facts::resolve(ctx.target_opts.triple_str)};
+    if (which == syntax::builtin_t::TARGET_PTR_BITS) {
+        return operand{
+            intern_int(pool, big_int{u128{facts.ptr_bits}}, builtin(gs::type_kind::COMPTIME_INT))};
+    }
+
+    if (which == syntax::builtin_t::TARGET_TRIPLE) {
+        auto& text{ctx.get_slice(gs::types::mut::CONSTANT, true, ctx.get_int(8, false))};
+        return operand{
+            pool.intern(codegen::resolve_target_triple(ctx.target_opts.triple_str).str(), text)};
+    }
+
     const auto [enum_name, member]{[&] -> std::pair<std::string_view, std::string_view> {
         switch (which) {
-        case syntax::builtin_t::TARGET_OS:   return {"Os", facts.os};
-        case syntax::builtin_t::TARGET_ARCH: return {"Arch", facts.arch};
-        case syntax::builtin_t::TARGET_ABI:  return {"Abi", facts.abi};
-        default:                             return {"Family", facts.family};
+        case syntax::builtin_t::TARGET_OS:     return {"Os", facts.os};
+        case syntax::builtin_t::TARGET_ARCH:   return {"Arch", facts.arch};
+        case syntax::builtin_t::TARGET_ABI:    return {"Abi", facts.abi};
+        case syntax::builtin_t::TARGET_ENDIAN: return {"Endian", facts.endian};
+        case syntax::builtin_t::OPTIMIZE_MODE:
+            return {"OptimizeMode", gs::optimize_mode_name(ctx.build_mode)};
+        default: return {"Family", facts.family};
         }
     }()};
 

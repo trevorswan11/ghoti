@@ -367,7 +367,8 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
     }
 
     if (arr.len == 0) { return comp_.unsupported(u_, src, "an empty array at runtime"); }
-    const auto slot{builder_.emit_alloca(type)};
+    const auto                           slot{builder_.emit_alloca(type)};
+    std::vector<stdx::option<ip::index>> known;
     for (u64 i{0}; const auto value_ref : *values) {
         // A `[N]type` holds no runtime value
         if (elem.get_kind() != gs::type_kind::TYPE) {
@@ -375,6 +376,7 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
                 builder_.emit_get_element_ptr(gir::value{slot, type}, {usize_constant(i)}, elem)};
             const auto given{TRY(resolve_value(value_ref, src))};
             const auto value{TRY(coerce_to(given, elem, src, {.what = use_site::kind::STORE}))};
+            known.emplace_back(comptime_value(value));
             builder_.emit_store(gir::value{at, elem}, TRY(as_runtime(value, src))).is_initializer =
                 true;
         }
@@ -391,7 +393,15 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
             .is_initializer = true;
     }
 
-    return gir::value{builder_.emit_load(gir::value{slot, type}, type), type};
+    // Known elements leave a value vector folds may still read
+    const gir::value loaded{builder_.emit_load(gir::value{slot, type}, type), type};
+    if (known.size() == arr.len &&
+        std::ranges::all_of(known, [](auto k) { return k.has_value(); })) {
+        remember_built(loaded,
+                       comp_.constants().intern(ip::aggregate_value{std::move(known)}, type));
+    }
+
+    return loaded;
 }
 
 auto analyzer::materialize(ip::index index, const source& src) -> result<gir::value> {
@@ -407,7 +417,7 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
 
     // A known vector is built lane by lane
     if (const auto vec{gs::vector_of(type)}) {
-        TRY(vector_at_runtime(src));
+        TRY(require_runtime(src));
         const auto agg{value.data.as_opt<ip::aggregate_value>()};
         if (!agg) { return comp_.unsupported(u_, src, "a known vector of this form"); }
         const std::vector<stdx::option<ip::index>> lanes{agg->elements};
