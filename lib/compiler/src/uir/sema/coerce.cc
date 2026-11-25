@@ -21,6 +21,7 @@
 #include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::uir::sema {
 
@@ -124,6 +125,36 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
 
     if (const auto init{op.as_opt<anon_init>()}) {
         const auto kind{target.get_kind()};
+
+        // A range value is the array its values fill, which a slice views
+        if (mod().tag_of(init->inst) == tag::range) {
+            const auto arr{target.get_data().as_opt<gs::types::array>()};
+            const auto s{target.get_data().as_opt<gs::types::slice>()};
+            if (!arr && !s) { return stdx::none; }
+            auto&      elem{arr ? arr->underlying : s->underlying};
+            const auto value{TRY(range_value(init->inst, elem, src))};
+            if (arr) {
+                const auto len{comp_.constants()
+                                   .value_at(*comptime_value(value))
+                                   .data.as<ip::aggregate_value>()
+                                   .elements.size()};
+                if (len != arr->len) {
+                    return comp_.report(u_,
+                                        src,
+                                        gs::error::TYPE_MISMATCH,
+                                        fmt::format("Expected {} array element{}, found {}",
+                                                    arr->len,
+                                                    string_utils::plural_suffix(arr->len),
+                                                    len));
+                }
+
+                return operand{comp_.constants().intern(
+                    comp_.constants().value_at(*comptime_value(value)).data, target)};
+            }
+
+            return coerce_to(value, target, src, {.what = use_site::kind::STORE});
+        }
+
         if (kind == gs::type_kind::VECTOR) { return coerce_vector(op, target, target, src); }
         if (kind != gs::type_kind::STRUCT && kind != gs::type_kind::UNION &&
             kind != gs::type_kind::ARRAY) {
@@ -580,6 +611,10 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
 
 auto analyzer::concrete(const operand& op, const source& src) -> result<operand> {
     if (const auto cast{op.as_opt<cast_ref>()}) { return cast_target_inferred(*cast, stdx::none); }
+    if (const auto init{op.as_opt<anon_init>()}; init && mod().tag_of(init->inst) == tag::range) {
+        return range_value(init->inst, stdx::none, src);
+    }
+
     if (const auto m{op.as_opt<merge_ref>()}) {
         if (is_untyped_literal(merges_[m->index].arrivals.front().value)) {
             return comp_.unsupported(u_, src, "an untyped literal with no type to take");
@@ -609,6 +644,9 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
     if (const auto global{typed.as_opt<global_const>()}) {
         TRY(require_runtime(src));
+
+        // A vector constant reads as its value, which the old emitter builds in place
+        if (gs::is_vector(*global->type)) { return materialize(global->value, src); }
         return load(global_place(global->symbol, *global->type, false));
     }
 

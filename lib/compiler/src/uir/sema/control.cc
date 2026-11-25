@@ -209,7 +209,7 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
         if (known) { c = constant(comp_.constants().intern(*known, type_of(cond)), type_of(cond)); }
     }
 
-    builder_.emit_cond_goto(c, then_seg, else_seg);
+    apply_branch_hints(builder_.emit_cond_goto(c, then_seg, else_seg), then_body, else_body);
     std::vector<incoming> arrivals;
     const auto            branch{runtime_branch()};
     for (const auto& [seg, body, taken] :
@@ -596,7 +596,7 @@ auto analyzer::analyze_unreachable(inst_id inst) -> result<operand> {
     }
 
     // With safety checks, reaching it panics
-    if (comp_.ctx().runtime_safety) {
+    if (runtime_safety()) {
         TRY(emit_panic("reached unreachable code", src));
     } else {
         builder_.emit_unreachable();

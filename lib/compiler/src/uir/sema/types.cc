@@ -202,9 +202,9 @@ auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
     const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
     const auto bits{rec.u32_field()};
     const bool is_extern{(bits & flags::EXTERN_FN) != 0};
-    // `dyn Fn(...)` is an erased `fn(...)`, and an `impl Fn(...)` bound only says what a call
-    // passes
-    if ((bits & flags::IMPL_FN) != 0) { return comp_.unsupported(u_, src, "an `impl fn` type"); }
+    // `dyn Fn(...)` is an erased `fn(...)`, and an `impl Fn(...)` bound is a pattern a call's
+    // callable matches, whose `auto` slots take anything
+    const bool is_pattern{(bits & flags::IMPL_FN) != 0};
 
     if (!is_extern && (bits & flags::EXPLICIT_CONV) != 0) {
         return comp_.report(u_,
@@ -216,7 +216,7 @@ auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
 
     // Neither end of a function type may be inferred or have no size
     const auto check{[&](gs::type& type, const source& at, std::string_view end) -> result<void> {
-        if (type.get_kind() == gs::type_kind::AUTO) {
+        if (type.get_kind() == gs::type_kind::AUTO && !is_pattern) {
             return comp_.report(u_,
                                 at,
                                 gs::error::ILLEGAL_AUTO_USAGE,

@@ -446,6 +446,9 @@ auto analyzer::operands_known(inst_id inst) const -> bool {
             return true;
         }
 
+        // A vector built at runtime from a known value
+        if (op.is<gir::value>() && built_value(op)) { return true; }
+
         // An immutable binding of a known value
         if (const auto bound{op.as_opt<slot_value>()};
             bound && !bound->is_mutable && bound->known) {
@@ -496,6 +499,11 @@ auto analyzer::reevaluate(ref r, const source& src) -> result<operand> {
     // An aggregate global is its value at compile time
     if (const auto g{found->second.as_opt<global_const>()}) { return g->value; }
     if (const auto s{found->second.as_opt<slot_value>()}; s && s->known) { return *s->known; }
+    // A vector built at runtime is known at compile time
+    if (found->second.is<gir::value>()) {
+        if (const auto built{built_value(found->second)}) { return operand{*built}; }
+    }
+
     // A field or element address is computed again on its object's compile-time value
     const auto t{mod().tag_of(*inst)};
     const bool address{found->second.is<place>() && (t == tag::field_ptr || t == tag::elem_ptr)};

@@ -289,4 +289,32 @@ TEST_CASE("A function in a constant struct is called through its field", "[uir]"
     CHECK(poly.as<std::string>() == "inc");
 }
 
+TEST_CASE("A call leaving defaulted arguments off goes to the declaration's wrapper", "[uir]") {
+    const auto diff{diff_source(R"(
+        const add = fn(a: i32, b: i32 = 2, c: i32 = a + 1): i32 { return a + b + c; };
+        const pick = fn(comptime T: type, x: T, y: T = 7): T { return if (x > y) x; else y; };
+        pub const f = fn(): i32 { return add(1) + add(1, 5) + pick(i32, 3); };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("A method's defaults reach calls through a value and through its type", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Counter = struct {
+            value: i32,
+            pub const bump = fn(&mut self, by: i32 = 1): void { self.value += by; };
+            pub const get = fn(&self, offset: i32 = 0): i32 { return self.value + offset; };
+        };
+        pub const f = fn(): i32 {
+            let mut c: Counter = .{ .value = 5 };
+            c.bump();
+            Counter.bump(&mut c);
+            return c.get() + Counter.get(&c);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
 } // namespace ghoti::tests

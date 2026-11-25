@@ -249,7 +249,7 @@ TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer wid
 
 TEST_CASE("Target builtins constant eval", "[uir]") {
     CHECK(accepted("const os_name = @targetOs();").has_value("os_name"));
-    check_later_phase("const ptr_bits = @targetPtrBits();", "@targetPtrBits");
+    CHECK(accepted("const ptr_bits = @targetPtrBits();").int_value("ptr_bits") == 64);
 }
 
 TEST_CASE("Target enum comparison folds against a bare member", "[uir]") {
@@ -258,7 +258,7 @@ TEST_CASE("Target enum comparison folds against a bare member", "[uir]") {
 }
 
 TEST_CASE("MulAdd and TagName constant eval", "[uir]") {
-    check_later_phase("const v_mul_add = @mulAdd(i32, 2, 3, 4);", "@mulAdd");
+    CHECK(accepted("const v_mul_add = @mulAdd(i32, 2, 3, 4);").int_value("v_mul_add") == 10);
     const auto run{accepted("const Color = enum { RED, GREEN, BLUE };\n"
                             "const tag = @tagName(Color.GREEN);\nconst len = tag.len;")};
     CHECK(run.int_value("len") == 5);

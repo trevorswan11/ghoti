@@ -16,6 +16,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
@@ -29,9 +30,11 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// The declaration flags this phase gives a meaning to
+// The declaration flags this phase gives a meaning to. A synthesized one, such as a default's
+// wrapper or a destructured binding, is analyzed like any other
 constexpr auto HANDLED_FLAGS{decl_flags::PUBLIC | decl_flags::CONSTANT | decl_flags::LET |
-                             decl_flags::MUT | decl_flags::COMPTIME | decl_flags::WEAK};
+                             decl_flags::MUT | decl_flags::COMPTIME | decl_flags::WEAK |
+                             decl_flags::SYNTHESIZED};
 
 constexpr std::string_view GLOBAL_CONSTANT{
     "global variable initializer must be a constant expression"};
@@ -42,6 +45,21 @@ constexpr std::string_view GLOBAL_CONSTANT{
 }
 
 } // namespace
+
+auto analyzer::default_wrapper(const unit& owner, decl_id decl, usize written, const source& src)
+    -> result<stdx::option<operand>> {
+    const auto& m{*owner.uir};
+    const auto& d{m.decl_at(decl)};
+    const auto  wanted{ast::default_wrapper_name(m.string(d.name), written)};
+    const auto  decls{m.decls()};
+    for (usize i{0}; i < decls.size(); ++i) {
+        if (decls[i].owner != d.owner || m.string(decls[i].name) != wanted) { continue; }
+        return stdx::option<operand>{
+            TRY(comp_.analyze_decl(owner, decl_id{static_cast<u32>(i)}, src))};
+    }
+
+    return stdx::option<operand>{};
+}
 
 auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -> result<operand> {
     // A member of a type declared outside any call reads the type's namespace
@@ -376,11 +394,11 @@ auto compilation::declare_function(const unit&           u,
     record_reader rec{m, m.data_of(func).pl.extra};
     const auto    params{rec.body_field()};
     const auto    ret{rec.body_field()};
-    rec.skip_body();
-    const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
-    const auto fn_flags{rec.u32_field()};
-    const auto attrs{rec.body_field()};
-    const auto bound_count{rec.count()};
+    const auto    fn_body{rec.body_field()};
+    const auto    conv{static_cast<ast::calling_convention>(rec.u32_field())};
+    const auto    fn_flags{rec.u32_field()};
+    const auto    attrs{rec.body_field()};
+    const auto    bound_count{rec.count()};
 
     // A bodyless literal written as a value is the function type it spells
     const bool type_expr{(fn_flags & flags::BODYLESS) != 0 && (fn_flags & flags::TYPE_EXPR) != 0};
@@ -406,12 +424,12 @@ auto compilation::declare_function(const unit&           u,
     for (const auto param : params) {
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
-        const auto  type_body{p.body_field()};
-        const auto  default_body{p.body_field()};
+        const auto type_body{p.body_field()};
+        // A default is computed by the wrapper a short call is sent to, not by the function
+        p.skip_body();
         const auto  param_flags{p.u32_field()};
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};
-        if (!default_body.empty()) { return unsupported(u, param_src, "a default argument"); }
         if ((param_flags & (flags::PARAM_COMPTIME | flags::PARAM_PACK)) != 0) {
             return unsupported(u, param_src, "a comptime or pack parameter");
         }
@@ -452,7 +470,7 @@ auto compilation::declare_function(const unit&           u,
     auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
 
     // A non-generic function's attributes are known before its body, for `@typeInfo`
-    const auto folded{TRY(sig.fold_attributes(
+    auto folded{TRY(sig.fold_attributes(
         attrs,
         {
             .target       = ast::attribute_target::FN,
@@ -460,6 +478,9 @@ auto compilation::declare_function(const unit&           u,
             .declared_by =
                 declares_literal(m, d, func) ? stdx::option<const uir::decl&>{d} : stdx::none,
         }))};
+
+    // A body that starts with `@branchHint(.cold)` makes its function cold
+    folded.cold = sig.branch_hint_of(fn_body) == ast::branch_hint::COLD;
 
     auto  symbol{TRY(member_symbol(u, decl, func, member))};
     auto& fn{*instances_.emplace_back(arena_.make<instance>(instance{

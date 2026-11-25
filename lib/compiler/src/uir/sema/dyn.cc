@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -176,7 +177,10 @@ auto compilation::associated_value(const nominal&               iface,
         }
     }
 
-    return unsupported(owner, use, fmt::format("an associated item `{}` with no value", name));
+    // Reported where the interface is, since `use` may be in another module
+    DISCARD(use);
+    return unsupported(
+        owner, m.src_of(iface.inst), fmt::format("an associated item `{}` with no value", name));
 }
 
 auto compilation::associated_captures(const nominal&               iface,
@@ -207,22 +211,54 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     auto&       iface{*TRY(resolve_type(*rec.ref_field(), src))};
-    if (rec.count() != 0) { return comp_.unsupported(u_, src, "a `dyn` with associated types"); }
+
+    // `dyn I(Assoc = T)` binds associated types by name, a later binding of one replacing it
+    std::vector<std::pair<std::string_view, gsl::not_null<gs::type*>>> bound;
+    const auto                                                         count{rec.count()};
+    for (u32 i{0}; i < count; ++i) {
+        const auto name{rec.str_field()};
+        const auto type_ref{*rec.ref_field()};
+        const auto at{
+            as_inst(type_ref).transform([&](inst_id t) { return src_of(t); }).value_or(src)};
+        bound.emplace_back(name, TRY(resolve_type(type_ref, at)));
+    }
+
     if (iface.get_kind() != gs::type_kind::INTERFACE) {
         return comp_.unsupported(u_, src, "a `dyn` of something other than an interface");
     }
 
     const auto n{comp_.nominal_of(iface)};
     if (!n) { return comp_.unsupported(u_, src, "a `dyn` of an interface UIR didn't declare"); }
-    if (comp_.declares_associated_items(*n) && !comp_.defaults_every_associated_item(*n)) {
+    auto&       ctx{comp_.ctx()};
+    const auto& names{iface.get_data().as<gs::types::interface_t>().assoc_type_names};
+    for (const auto& [name, type] : bound) {
+        if (!std::ranges::contains(names, name)) {
+            return comp_.unsupported(u_, src, "a `dyn` binding an associated type it doesn't have");
+        }
+    }
+
+    // Each associated type is bound as written, else to its default
+    const auto written{[&](std::string_view name) -> stdx::option<gs::type&> {
+        for (const auto& [bound_name, type] : std::views::reverse(bound)) {
+            if (bound_name == name) { return *type; }
+        }
+
+        return stdx::none;
+    }};
+    const bool every_bound{
+        std::ranges::all_of(names, [&](auto name) { return written(name).has_value(); })};
+    if (!every_bound && comp_.declares_associated_items(*n) &&
+        !comp_.defaults_every_associated_item(*n)) {
         return comp_.unsupported(u_, src, "a `dyn` of an associated item with no default");
     }
 
-    // Each associated type is bound to its default
-    auto&       ctx{comp_.ctx()};
-    const auto& names{iface.get_data().as<gs::types::interface_t>().assoc_type_names};
-    auto        bindings{ctx.pool.get_many_unsafe(names.size())};
+    auto bindings{ctx.pool.get_many_unsafe(names.size())};
     for (usize i{0}; i < names.size(); ++i) {
+        if (const auto type{written(names[i])}) {
+            bindings[i] = &*type;
+            continue;
+        }
+
         const auto value{TRY(comp_.associated_value(*n, stdx::none, names[i], src))};
         bindings[i] = &comp_.constants().type_at(value);
     }
@@ -318,9 +354,27 @@ auto analyzer::call_dyn(inst_id              call,
     const auto    params{params_of(m, rec.body_field())};
     const auto    ret{rec.body_field()};
     analyzer      sig{comp_, owner};
+    // An associated type the `dyn` binds is that binding, any other its default
     if (slot != methods.end() && slot->closure) {
-        sig.enter(member_context{
-            .captures = TRY(comp_.associated_captures(*iface, *slot->closure, stdx::none, src))});
+        const auto&   bound{dyn->get_data().as<gs::types::dyn_t>().assoc_bindings};
+        const auto&   names{iface_type.get_data().as<gs::types::interface_t>().assoc_type_names};
+        record_reader closure_rec{m, m.data_of(*slot->closure).pl.extra};
+        std::vector<ip::index> captures;
+        closure_rec.skip_ref();
+        for (u32 i{0}, count{closure_rec.count()}; i < count; ++i) {
+            closure_rec.skip_ref().skip_u32();
+            const auto item{closure_rec.str_field()};
+            const auto at{std::ranges::find(names, item)};
+            if (at != names.end() && static_cast<usize>(at - names.begin()) < bound.size()) {
+                captures.emplace_back(
+                    bound[static_cast<usize>(at - names.begin())]->get_ip_index());
+                continue;
+            }
+
+            captures.emplace_back(TRY(comp_.associated_value(*iface, stdx::none, item, src)));
+        }
+
+        sig.enter(member_context{.captures = std::move(captures)});
     }
 
     if (params.size() != args.size() + 1) {

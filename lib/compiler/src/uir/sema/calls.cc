@@ -298,8 +298,20 @@ auto analyzer::call_function(instance&            target,
                              const source&        src,
                              const source&        callee_src,
                              bool                 through_member) -> result<operand> {
-    // A C-variadic function takes any arguments after its parameters
+    // A call leaving trailing defaulted arguments off goes to the declaration's wrapper for them
     const bool variadic{target.type->get_data().as<gs::types::function>().is_variadic};
+    if (!variadic && args.size() < target.params.size()) {
+        const auto written{args.size() - (target.self_modifier && !args.empty() ? 1 : 0)};
+        if (const auto wrapper{TRY(default_wrapper(*target.owner, target.decl, written, src))}) {
+            if (const auto fn{wrapper->as_opt<function_ref>()}) {
+                return call_function(*fn->fn, args, src, callee_src, through_member);
+            }
+
+            return call_operand(*wrapper, args, src, callee_src);
+        }
+    }
+
+    // A C-variadic function takes any arguments after its parameters
     if (variadic && args.size() < target.params.size()) {
         return comp_.report(u_,
                             callee_src,

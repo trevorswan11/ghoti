@@ -83,10 +83,17 @@ TEST_CASE("A runtime cast of a known operand keeps the old emitter's shape", "[u
     CHECK_FALSE(gir.contains("widen_cast.checked i32"));
 }
 
-TEST_CASE("A range used as a value stops as unsupported", "[uir]") {
-    const helpers::uir_run run{"pub const f = fn(): u8 { let y: [4]u8 = 2..6; return y[0]; };"};
-    REQUIRE(run.out().stopped_at);
-    CHECK(run.out().stopped_at->what == "a range used as a value");
+TEST_CASE("A range used as a value is the array of the values it takes", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        const down: [3]usize = 3..0;
+        const typed: [4]u8 = 2..6;
+        pub const first: i32 = down[0];
+        pub const count: i32 = down.len;
+        pub const last: i32 = typed[3];
+    )")};
+    CHECK(run.int_value("first") == 3);
+    CHECK(run.int_value("count") == 3);
+    CHECK(run.int_value("last") == 5);
 }
 
 TEST_CASE("A range a for iterates is known whatever its other iterables lower to", "[uir]") {

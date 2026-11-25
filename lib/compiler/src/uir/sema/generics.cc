@@ -28,6 +28,7 @@
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 #include "support/big_int.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::uir::sema {
 
@@ -153,11 +154,13 @@ auto compilation::declare_generic(const unit&           u,
     auto       name{unprefixed ? std::string{u.uir->string(d.name)}
                                : TRY(member_symbol(u, decl, func, member))};
 
-    // An `impl` block's generic member is named after the type it implements
+    // An `impl` block's generic member is named after the type it implements, any other member
+    // after the type declaring it
     const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl && member.self_type};
-    const auto enclosing{in_instance ? stdx::option<gs::type&>{*member.scope->type}
-                         : in_impl   ? stdx::option<gs::type&>{*member.self_type}
-                                     : stdx::none};
+    const auto enclosing{in_instance    ? stdx::option<gs::type&>{*member.scope->type}
+                         : in_impl      ? stdx::option<gs::type&>{*member.self_type}
+                         : member.scope ? stdx::option<gs::type&>{*member.scope->type}
+                                        : stdx::none};
     auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
@@ -358,14 +361,12 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         const auto    param{params[i]};
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
-        const auto  type_body{p.body_field()};
-        const auto  default_body{p.body_field()};
+        const auto type_body{p.body_field()};
+        // A default is computed by the wrapper a short call is sent to, not by the function
+        p.skip_body();
         const auto  param_flags{p.u32_field()};
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};
-        if (!default_body.empty()) {
-            return comp_.unsupported(*g.owner, param_src, "a default argument");
-        }
 
         if ((param_flags & flags::PARAM_SELF) != 0) {
             const auto how{static_cast<ast::type_modifier::modifier>(modifier)};
@@ -418,8 +419,10 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         stdx::option<gs::type&> declared;
         if (!is_auto) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
 
-        const bool comptime_numeric_arg{is_auto &&
-                                        gs::is_comptime_numeric(type_of(arg).get_kind())};
+        // An untyped argument to `auto`, or a parameter whose type is untyped, binds its value
+        const bool comptime_numeric_arg{
+            (is_auto && gs::is_comptime_numeric(type_of(arg).get_kind())) ||
+            (declared && gs::is_comptime_numeric(declared->get_kind()))};
         const bool binds_type{declared && declared->get_kind() == gs::type_kind::TYPE};
         if ((param_flags & flags::PARAM_COMPTIME) != 0 || binds_type || comptime_numeric_arg) {
             const use_site use{
@@ -452,6 +455,24 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         }
 
         auto& type{declared ? *TRY(matched_type(*declared, arg, param_src)) : inferred_type(arg)};
+
+        // An `impl Fn(...)` parameter takes a callable of exactly that signature
+        if (is_impl_fn(m, type_body)) {
+            auto& pattern{*TRY(sig.eval_type(type_body, param_src))};
+            if (const auto why{callable_mismatch(pattern, arg)}) {
+                record_reader param_rec{m, m.data_of(param).pl.extra};
+                const auto    pname{param_rec.str_field()};
+                const auto    at{args[i].written.and_then(as_inst)};
+                return comp_.report(u_,
+                                    at ? src_of(*at) : src,
+                                    gs::error::UNSATISFIED_BOUND,
+                                    fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
+                                                comp_.ctx().type_display_name(type_of(arg)),
+                                                pname,
+                                                *why));
+            }
+        }
+
         for (const auto& bound : bounds) {
             if (bound.param == i) { TRY(check_bound(sig, bound, type, g, param, args[i], src)); }
         }
@@ -549,6 +570,27 @@ auto analyzer::call_generic(generic_fn&              g,
         p.skip_str().skip_body().skip_body();
         return (p.u32_field() & flags::PARAM_PACK) != 0;
     })};
+    // A call leaving trailing defaulted arguments off goes to the declaration's wrapper for them
+    const bool has_self{std::ranges::any_of(params, [&](inst_id param) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_SELF) != 0;
+    })};
+    if (has_pack ? args.size() + 1 < param_count : args.size() < param_count) {
+        const auto written{args.size() - (has_self && !args.empty() ? 1 : 0)};
+        if (const auto wrapper{TRY(default_wrapper(*g.owner, g.decl, written, src))}) {
+            if (const auto other{wrapper->as_opt<generic_ref>()}) {
+                return call_generic(*other->fn, std::move(args), src, callee_src, env);
+            }
+
+            if (const auto fn{wrapper->as_opt<function_ref>()}) {
+                std::vector<operand> values;
+                for (auto& arg : args) { values.emplace_back(std::move(arg.value)); }
+                return call_following_poly(*fn->fn, std::move(values), src, false);
+            }
+        }
+    }
+
     if (has_pack ? args.size() + 1 < param_count : args.size() != param_count) {
         return comp_.report(u_,
                             callee_src,
@@ -636,6 +678,56 @@ auto analyzer::matched_type(gs::type& declared, const operand& arg, const source
             mut, given.get_data().as<gs::types::slice>().null_terminated, *given_leaf);
     default: return &ctx.get_reference(mut, *given_leaf);
     }
+}
+
+auto analyzer::callable_mismatch(const gs::type& pattern, const operand& arg)
+    -> stdx::option<std::string> {
+    const auto want{pattern.get_data().as_opt<gs::types::function>()};
+    if (!want) { return stdx::none; }
+
+    // A generic is settled by the call inside the body
+    if (arg.is<generic_ref>()) { return stdx::none; }
+
+    // A function, closure, or erased `fn` value, directly or through `^` / `&`
+    auto&      given{type_of(arg)};
+    auto&      callee{gs::pointee_of(given).value_or(given)};
+    const auto closure{callee.get_data().as_opt<gs::types::closure_t>()};
+    const auto have{closure ? closure->signature.get_data().as_opt<gs::types::function>()
+                            : callee.get_data().as_opt<gs::types::function>()};
+    if (!have) { return std::string{"it is not callable"}; }
+    if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
+
+    const auto skip{have->has_self ? 1UZ : 0UZ};
+    const auto have_count{have->params.size() - skip};
+    if (have_count != want->params.size()) {
+        return fmt::format("it takes {} parameter{}, not {}",
+                           have_count,
+                           string_utils::plural_suffix(have_count),
+                           want->params.size());
+    }
+
+    // An `auto` slot takes anything, any other must be exactly the same type
+    auto&      ctx{comp_.ctx()};
+    const auto matches{[](const gs::type& w, const gs::type& h) {
+        return w.get_kind() == gs::type_kind::AUTO || gs::is_same_unqualified(w, h);
+    }};
+    for (usize i{0}; i < want->params.size(); ++i) {
+        auto& have_t{*have->params[i + skip]};
+        if (!matches(*want->params[i], have_t)) {
+            return fmt::format("parameter {} is '{}', not '{}'",
+                               i + 1,
+                               ctx.type_display_name(have_t),
+                               ctx.type_display_name(*want->params[i]));
+        }
+    }
+
+    if (!matches(want->return_type, have->return_type)) {
+        return fmt::format("it returns '{}', not '{}'",
+                           ctx.type_display_name(have->return_type),
+                           ctx.type_display_name(want->return_type));
+    }
+
+    return stdx::none;
 }
 
 auto analyzer::check_bound(analyzer&         sig,

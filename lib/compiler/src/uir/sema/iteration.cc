@@ -48,7 +48,66 @@ auto analyzer::analyze_range(inst_id inst) -> result<operand> {
     auto rec{record(inst)};
     rec.skip_ref().skip_ref();
     if ((rec.u32_field() & flags::FOR_RANGE) != 0) { return void_value(); }
-    return comp_.unsupported(u_, src_of(inst), "a range used as a value");
+
+    // Anywhere else a range is the array of the values it takes, typed by where it is used
+    return anon_init{inst};
+}
+
+auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const source& src)
+    -> result<operand> {
+    const auto bounds{bounds_of(mod(), inst)};
+    if (!bounds.lo || !bounds.hi) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "a range used as a value needs both of its bounds");
+    }
+
+    // Both bounds are known at compile time
+    auto&      pool{comp_.constants()};
+    const auto bound{[&](ref r) -> result<operand> {
+        const auto scope{comptime_scope()};
+        const auto value{TRY(resolve_value(r, src))};
+        if (!comptime_value(value) || !int_of(pool.value_at(*comptime_value(value)))) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_EVALUATION_FAILED,
+                                "a range used as a value needs bounds known at compile time");
+        }
+
+        return value;
+    }};
+    const auto lo{TRY(bound(*bounds.lo))};
+    const auto hi{TRY(bound(*bounds.hi))};
+    const auto first{*int_of(pool.value_at(*comptime_value(lo)))};
+    const auto last{*int_of(pool.value_at(*comptime_value(hi)))};
+
+    // The element type is the one asked for, else a typed bound's, else an untyped one's default
+    auto& element{[&]() -> gs::type& {
+        if (elem) { return *elem; }
+        for (const auto& b : {lo, hi}) {
+            if (!gs::is_comptime_numeric(type_of(b).get_kind())) { return type_of(b); }
+        }
+
+        const bool negative{first.is_negative() || last.is_negative()};
+        return builtin(negative ? gs::type_kind::ISIZE : gs::type_kind::USIZE);
+    }()};
+
+    // A range whose start is past its end counts down
+    const bool                           down{first > last};
+    const big_int                        one{u128{1}};
+    std::vector<stdx::option<ip::index>> values;
+    for (auto at{first}; down ? (bounds.inclusive ? at >= last : at > last)
+                              : (bounds.inclusive ? at <= last : at < last);
+         at = down ? at - one : at + one) {
+        const auto untyped{intern_int(pool, at, builtin(gs::type_kind::COMPTIME_INT))};
+        const auto typed{
+            TRY(coerce_to(operand{untyped}, element, src, {.what = use_site::kind::STORE}))};
+        values.emplace_back(*comptime_value(typed));
+    }
+
+    auto& array{comp_.ctx().get_array(gs::types::mut::CONSTANT, false, values.size(), element)};
+    return operand{pool.intern(ip::aggregate_value{std::move(values)}, array)};
 }
 
 auto analyzer::analyze_bind(inst_id inst) -> result<operand> {
@@ -161,6 +220,59 @@ auto analyzer::comptime_slice(ref               object_ref,
                                slice_type)};
 }
 
+auto analyzer::pack_slice(pack_ref          pack,
+                          stdx::option<ref> lo_ref,
+                          stdx::option<ref> hi_ref,
+                          bool              inclusive,
+                          const source&     src) -> result<operand> {
+    // The pack's name, which the diagnostics spell, is the indexed expression's
+    const auto node{src.as_opt<ast::node_id>()};
+    const auto index{node ? u_.source->ast.get_as_opt<ast::index_expr>(*node) : stdx::none};
+    const auto ident{index ? u_.source->ast.get_as_opt<ast::identifier_expr>(index->array)
+                           : stdx::none};
+    const auto name{ident ? std::string_view{ident->name} : std::string_view{"pack"}};
+    const auto len{static_cast<i128>(packs_[pack.index].size())};
+    const auto bound{[&](stdx::option<ref> at, i128 fallback) -> result<i128> {
+        if (!at) { return fallback; }
+        const auto value{[&]() -> result<operand> {
+            const auto scope{comptime_scope()};
+            return resolve_value(*at, src);
+        }()};
+        if (!value && value.error() != stop::RUNTIME) { return stdx::err{value.error()}; }
+        const auto known{value ? comptime_value(*value) : stdx::none};
+        const auto exact{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
+        const auto small{exact ? exact->to_i128() : stdx::none};
+        if (!small) {
+            return comp_.report(
+                u_,
+                as_inst(*at).transform([&](inst_id i) { return src_of(i); }).value_or(src),
+                gs::error::PACK_INDEX_NOT_CONST,
+                fmt::format("'{}[lo..hi]' requires compile-time constant bounds", name));
+        }
+
+        return *small;
+    }};
+
+    const auto lo{TRY(bound(lo_ref, 0))};
+    const auto hi{TRY(bound(hi_ref, len)) + (inclusive && hi_ref ? 1 : 0)};
+    if (lo < 0 || hi > len || lo > hi) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::PACK_INDEX_OUT_OF_RANGE,
+                            fmt::format("pack slice {}..{} out of range for '{}' (len {})",
+                                        static_cast<i64>(lo),
+                                        static_cast<i64>(hi),
+                                        name,
+                                        static_cast<i64>(len)));
+    }
+
+    const auto&          elements{packs_[pack.index]};
+    std::vector<operand> picked{elements.begin() + static_cast<std::ptrdiff_t>(lo),
+                                elements.begin() + static_cast<std::ptrdiff_t>(hi)};
+    packs_.emplace_back(std::move(picked));
+    return operand{pack_ref{.index = static_cast<u32>(packs_.size() - 1)}};
+}
+
 auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -168,6 +280,13 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     const auto  lo_ref{rec.ref_field()};
     const auto  hi_ref{rec.ref_field()};
     const bool  inclusive{(rec.u32_field() & flags::INCLUSIVE) != 0};
+
+    // A pack's slice is the pack of the elements its compile-time bounds select
+    const auto object{TRY(resolve(object_ref, src))};
+    if (const auto pack{object.as_opt<pack_ref>()}) {
+        return pack_slice(*pack, lo_ref, hi_ref, inclusive, src);
+    }
+
     if (is_comptime()) { return comptime_slice(object_ref, lo_ref, hi_ref, inclusive, src); }
 
     auto&      ctx{comp_.ctx()};
@@ -221,7 +340,7 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
             usize_type};
     }
 
-    if (ctx.runtime_safety) {
+    if (runtime_safety()) {
         const auto lo_le_hi{builder_.emit_binary(instruction_kind::LE, lo, hi, bool_type)};
         const auto hi_le_len{builder_.emit_binary(instruction_kind::LE, hi, length, bool_type)};
         const auto in_bounds{builder_.emit_binary(instruction_kind::AND,

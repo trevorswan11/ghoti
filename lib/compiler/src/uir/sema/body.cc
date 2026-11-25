@@ -194,6 +194,9 @@ auto analyzer::analyze_function() -> result<void> {
              .returns_void = fn_->return_type->get_kind() == gs::type_kind::VOID_,
              .declared_by  = declares_literal(mod(), d, fn_->func) ? stdx::option<const decl&>{d}
                                                                    : stdx::none}));
+
+        // A body that starts with `@branchHint(.cold)` makes its function cold
+        fn_->attributes->cold = branch_hint_of(body) == ast::branch_hint::COLD;
     }
 
     gir_fn_->set_attributes(*fn_->attributes);
@@ -211,7 +214,10 @@ auto analyzer::analyze_function() -> result<void> {
     }
 
     auto& ret{*fn_->return_type};
-    if (ret.get_kind() == gs::type_kind::VOID_) {
+    // A naked body owns its own control flow, so falling off its end is unreachable
+    if (fn_->attributes && fn_->attributes->naked) {
+        builder_.emit_unreachable();
+    } else if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
         builder_.emit_return(constant(comp_.constants().intern(ip::undefined_value{}, ret), ret));
@@ -221,6 +227,13 @@ auto analyzer::analyze_function() -> result<void> {
 }
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
+    body_hints_.emplace_back(hint_inst_of(body));
+    safety_scopes_.emplace_back();
+    const auto pop_scope{gsl::finally([&] {
+        body_hints_.pop_back();
+        safety_scopes_.pop_back();
+    })};
+
     // A `dyn` receiver's vtable entry is loaded before the call's arguments
     if (!is_comptime()) {
         for (const auto inst : body) {

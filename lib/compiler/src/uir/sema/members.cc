@@ -279,7 +279,19 @@ auto analyzer::call_method(gs::type&            owner,
         return comp_.unsupported(u_, src, "a call of a member that isn't a method");
     }
 
-    auto& method{*fn->fn};
+    // A call leaving trailing defaulted arguments off goes to the method's wrapper for them
+    auto* chosen{fn->fn.get()};
+    if (args.size() + 1 < chosen->params.size()) {
+        if (const auto wrapper{
+                TRY(default_wrapper(*chosen->owner, chosen->decl, args.size(), src))}) {
+            if (const auto other{wrapper->as_opt<function_ref>()};
+                other && other->fn->self_modifier) {
+                chosen = other->fn.get();
+            }
+        }
+    }
+
+    auto& method{*chosen};
     if (args.size() + 1 != method.params.size()) {
         return comp_.report(
             u_,
