@@ -408,4 +408,122 @@ TEST_CASE("Comparing an integer with an untyped number past its type folds", "[u
     CHECK_FALSE(run.gir().contains("lt bool"));
 }
 
+// The same GIR, or the same effects with values computed in another place
+[[nodiscard]] auto agrees(const helpers::uir_diff& diff) -> bool {
+    return diff.status == helpers::uir_diff_status::MATCH ||
+           diff.status == helpers::uir_diff_status::EVAL_ORDER ||
+           diff.status == helpers::uir_diff_status::FOLD_PLACEMENT;
+}
+
+TEST_CASE("Untyped integers wrap, saturate, shift, count bits and divide exactly", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        pub const wrap = 200 +% 100;
+        pub const sat = 200 *| 3;
+        pub const shifted = 1 <<% 70;
+        pub const clz = @clz(1);
+        pub const pop = @popCount(7);
+        pub const floor = @divFloor(-7, 2);
+        pub const modulo = @mod(-7, 2);
+        pub const exact = @divExact(-12, 4);
+    )")};
+    CHECK(run.int_text("wrap") == "300");
+    CHECK(run.int_text("sat") == "600");
+    CHECK(run.int_text("shifted") == "1180591620717411303424");
+    CHECK(run.int_text("clz") == "31");
+    CHECK(run.int_text("pop") == "3");
+    CHECK(run.int_text("floor") == "-4");
+    CHECK(run.int_text("modulo") == "1");
+    CHECK(run.int_text("exact") == "-3");
+
+    const auto inexact{helpers::uir_rejected("pub const x = @divExact(7, 2);")};
+    CHECK(inexact.codes().front() == error::COMPTIME_EVALUATION_FAILED);
+}
+
+TEST_CASE("An untyped value shifted by a runtime amount takes the type it is used as", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const f = fn(n: u6): u64 {
+            let d: u64 = 1 << n;
+            let e = 1 << n;
+            return d + @intCast(e);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("Integers wider than 128 bits fold exactly", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        pub const big = 0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+        pub const sum: u256 = (1 << 200) + 5;
+        pub const low: u8 = @truncate(u8, sum);
+        pub const high: u8 = @truncate(u8, sum >> 200);
+        pub const neg: i256 = -%@as(i256, 5);
+        pub const pattern: u200 = @bitCast(u200, @as(i200, -1));
+        pub const product: u2048 = (@as(u2048, 1) << 1500) * ((@as(u2048, 1) << 500) + 1);
+        pub const as_float: u64 = @bitCast(u64, @as(f64, 340282366920938463463374607431768211456));
+        pub const ones = @popCount(@as(u256, 0xFF) << 130);
+    )")};
+    CHECK(run.int_text("big") == "680564733841876926926749214863536422911");
+    CHECK(run.int_text("low") == "5");
+    CHECK(run.int_text("high") == "1");
+    CHECK(run.int_text("neg") == "-5");
+    CHECK(run.int_text("pattern") ==
+          "1606938044258990275541962092341162602522202993782792835301375");
+    CHECK(run.int_text("ones") == "8");
+    CHECK(run.int_text("as_float") == "5183643171103440896");
+
+    const auto overflow{helpers::uir_rejected("pub const x = @as(i256, 1 << 254) * 4;")};
+    CHECK(overflow.codes().front() == error::COMPTIME_EVALUATION_FAILED);
+}
+
+TEST_CASE("An untyped float literal rounds once into the float it becomes", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        pub const above: u32 = @bitCast(u32, @as(f32, 1.0000000596046447753906250000000000000001));
+        pub const tie: u32 = @bitCast(u32, @as(f32, 1.0000000596046447753906250000000000000000));
+    )")};
+    CHECK(run.int_text("above") == "1065353217");
+    CHECK(run.int_text("tie") == "1065353216");
+}
+
+TEST_CASE("Enum literals bind to untyped globals and comptime parameters", "[uir]") {
+    const auto diff{diff_source(R"(
+        const pick = fn(comptime k: auto): i32 {
+            return match comptime (k) { .fast => 1, .small => 2, _ => 3 };
+        };
+        const name_len = fn(comptime k: auto): usize { return @tagName(k).len; };
+        pub const main = fn(): i32 {
+            return pick(.small) + pick(.other) * 10 + @intCast(i32, name_len(.abc));
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+
+    const auto run{helpers::uir_accepted(R"(
+        const Opt = fn(comptime T: type): type { return union(enum) { some: T, none: void }; };
+        const nothing = .none;
+        pub const f = fn(): bool { let o: Opt(i32) = nothing; return o == .none; };
+    )")};
+    CHECK(run.gir().contains("store void"));
+}
+
+TEST_CASE("An inferred return of an untyped comptime parameter takes its default type", "[uir]") {
+    const auto diff{diff_source(R"(
+        const echo = fn(v: auto): auto { return v; };
+        const clamp = fn(val: auto, low: auto, high: auto): auto {
+            if (val < low) { return low; }
+            if (val > high) { return high; }
+            return val;
+        };
+        pub const main = fn(): i32 {
+            let v: i64 = 500;
+            const r = clamp(v, 0, 100);
+            let e = echo(9);
+            let c: i32 = if (@TypeOf(r) == i64) @intCast(r) else 1;
+            return e + c;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
 } // namespace ghoti::tests

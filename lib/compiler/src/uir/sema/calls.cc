@@ -50,10 +50,10 @@ auto analyzer::with_modifier(stdx::option<ref>                       modifier,
         const auto scope{comptime_scope()};
         return resolve_value(*modifier, at);
     }()};
-    std::string_view name;
+    std::string name;
     if (value) {
         if (const auto literal{value->as_opt<enum_literal>()}) {
-            name = mod().string(mod().data_of(literal->inst).str);
+            name = literal_name(*literal);
         } else if (const auto index{comptime_value(*value)}) {
             if (const auto e{comp_.constants().value_at(*index).data.as_opt<ip::enum_value>()}) {
                 name = e->name;

@@ -553,8 +553,9 @@ auto analyzer::comptime_argument(const call_arg&         arg,
                                  stdx::option<gs::type&> declared,
                                  const use_site&         use,
                                  const source&           src) -> result<ip::index> {
-    if (!declared && arg.value.is<enum_literal>()) {
-        return comp_.unsupported(u_, src, "an enum literal bound to an untyped comptime parameter");
+    // An untyped parameter holds an enum literal by its name
+    if (const auto literal{arg.value.as_opt<enum_literal>()}; literal && !declared) {
+        return literal_value(*literal);
     }
 
     auto known{[&] -> result<operand> {
@@ -569,8 +570,9 @@ auto analyzer::comptime_argument(const call_arg&         arg,
         if (declared) { value = TRY(coerce_to(value, *declared, src, use)); }
         const auto known{TRY(require_comptime(value, src))};
 
-        // A `comptime` parameter takes a function as a copy of it, like the old emitter
-        if (const auto fn{comp_.plain_function(known)}) {
+        // A `comptime` parameter takes a function as a copy of it, and a generic's instance as it
+        // is
+        if (const auto fn{comp_.plain_function(known)}; fn && fn->bindings.empty()) {
             return operand{TRY(comp_.comptime_function(*fn, {}))};
         }
 
@@ -794,6 +796,12 @@ auto analyzer::check_bound(analyzer&         sig,
         const auto interface{TRY(sig.value_of(interface_ref, m.src_of(param)))};
         const auto index{comptime_value(interface)};
         auto&      pool{comp_.constants()};
+        // An `impl Fn(...)` bound was matched against the callable already
+        if (index && pool.is_type(*index) &&
+            pool.type_at(*index).get_kind() == gs::type_kind::FUNCTION) {
+            continue;
+        }
+
         if (!index || !pool.is_type(*index) ||
             pool.type_at(*index).get_kind() != gs::type_kind::INTERFACE) {
             return comp_.unsupported(*g.owner, m.src_of(param), "a callable `impl` bound");
@@ -832,6 +840,12 @@ auto analyzer::bind_comptime_param(inst_id param, ip::index value) -> result<voi
     if (gir_fn_ && known && known->data.is<std::string>() && known->type &&
         known->type->get_kind() == gs::type_kind::SLICE) {
         entry_strings_.insert_or_assign(param, TRY(as_runtime(operand{value}, src_of(param))));
+    }
+
+    if (known && known->data.is<ip::enum_value>() && known->type &&
+        known->type->get_kind() == gs::type_kind::ENUM_LITERAL) {
+        bind(param, enum_literal{.inst = param, .named = value});
+        return {};
     }
 
     if (!aggregate || holds_types(*pool.value_at(value).type)) {

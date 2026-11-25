@@ -222,8 +222,8 @@ auto astgen::find_target(ast::node_id                                id,
         const auto& target{state.targets[i]};
         if (i < state.target_floor) {
             report(location_of(id),
-                   sema::error::ILLEGAL_CONTROL_FLOW,
-                   "A {} cannot leave a defer body",
+                   sema::error::DEFER_BODY_JUMP,
+                   "cannot '{}' from inside a 'defer' body",
                    stmt_name);
             return stdx::none;
         }
@@ -258,8 +258,8 @@ auto astgen::return_stmt(ast::node_id id, const ast::return_stmt& node) -> void 
     }
     if (functions_.back().in_defer) {
         report(location_of(id),
-               sema::error::ILLEGAL_CONTROL_FLOW,
-               "A return cannot leave a defer body");
+               sema::error::DEFER_BODY_JUMP,
+               "cannot 'return' from inside a 'defer' body");
         return;
     }
     emit_return(id, value);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -234,6 +235,8 @@ struct anon_init {
 // An untyped `.name`, which names a variant of the enum it is coerced to
 struct enum_literal {
     inst_id inst;
+    // The `ip::enum_value` holding its name, when it was bound to an untyped comptime parameter
+    stdx::option<ip::index> named{};
 };
 
 // `.name(args)`, a call of the member of the type it is coerced to
@@ -790,6 +793,22 @@ class compilation {
         return found->second;
     }
 
+    // An untyped float literal's own nearest value in each format quad can't round into once
+    // The literal analyzed last wins, since a literal is analyzed just before it is used
+    auto note_literal_digits(ip::index value, stdx::option<std::array<f128, 4>> narrowed) -> void {
+        if (!narrowed) {
+            literal_digits_.erase(std::to_underlying(value));
+            return;
+        }
+        literal_digits_.insert_or_assign(std::to_underlying(value), *narrowed);
+    }
+    [[nodiscard]] auto literal_digits_in(ip::index value, float_format format) const
+        -> stdx::option<f128> {
+        const auto found{literal_digits_.find(std::to_underlying(value))};
+        if (found == literal_digits_.end() || format == float_format::QUAD) { return stdx::none; }
+        return found->second.at(std::to_underlying(format));
+    }
+
     // An inferred return type that an untyped `return` leaves to the peer of every `return`
     [[nodiscard]] auto infer_peer_return(instance& fn) -> result<void>;
     // Analyzes a body whose return type is inferred now, since a caller needs that type
@@ -1109,6 +1128,7 @@ class compilation {
     u32                                     local_count_{0};
     u32                                     speculating_{0};
     ankerl::unordered_dense::map<u32, math_origin> math_origins_;
+    ankerl::unordered_dense::map<u32, std::array<f128, 4>> literal_digits_;
     std::vector<gsl::not_null<generic_fn*>> generics_;
     std::vector<gsl::not_null<impl_entry*>> impls_;
     ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
@@ -1198,6 +1218,8 @@ class analyzer {
     [[nodiscard]] auto eval_comptime(gsl::span<const inst_id> body) -> result<operand>;
     // `body` analyzed into a function no one emits, so nothing in it runs
     [[nodiscard]] auto analyze_unemitted(gsl::span<const inst_id> body) -> result<flow>;
+    // The top-level statement this analysis checks, which a function literal in it is declared by
+    auto checking_statement(decl_id decl) -> void { statement_.emplace(decl); }
     // A `test` block's body, which passes when it reaches its end
     [[nodiscard]] auto analyze_test(gsl::span<const inst_id> body) -> result<void>;
     // Runs the function's body at compile time on arguments of its parameter types
@@ -1939,6 +1961,9 @@ class analyzer {
         -> result<operand>;
     [[nodiscard]] auto init_union(inst_id inst, gs::type& type, const source& src)
         -> result<operand>;
+    // A union whose `index` field holds `given`
+    [[nodiscard]] auto union_of(gs::type& type, usize index, const operand& given, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto init_array(inst_id inst, gs::type& type, const source& src)
         -> result<operand>;
     // Each field's default, none for a field without one
@@ -2036,9 +2061,18 @@ class analyzer {
     // A function or callable value as the erased `target`, none when it isn't one
     [[nodiscard]] auto as_erased_callable(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
+    // A generic's instance for the parameters of `signature`
+    [[nodiscard]] auto instance_for_signature(generic_fn&                  g,
+                                              const gs::types::function& signature,
+                                              const source& src)
+        -> result<gsl::not_null<instance*>>;
     [[nodiscard]] auto materialize_merge(merge_ref m, gs::type& type, const source& src)
         -> result<gir::value>;
     // A `.{...}` or `.name` that takes its type from where it is used
+    // The variant an enum literal names
+    [[nodiscard]] auto literal_name(const enum_literal& literal) const -> std::string;
+    // An enum literal as a compile-time value of `@EnumLiteral()`
+    [[nodiscard]] auto literal_value(const enum_literal& literal) -> ip::index;
     [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
         return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>() ||
                op.is<implicit_call>() || op.is<slice_literal>();
@@ -2440,6 +2474,11 @@ class analyzer {
                                       const operand&    lhs,
                                       const operand&    rhs,
                                       const source&     src) -> result<operand>;
+    [[nodiscard]] auto untyped_division(syntax::builtin_t which,
+                                        const big_int&    lhs,
+                                        const big_int&    rhs,
+                                        gs::type&         type,
+                                        const source&     src) -> result<operand>;
     [[nodiscard]] auto float_math_of(syntax::builtin_t which, const operand& arg, const source& src)
         -> result<operand>;
     [[nodiscard]] auto mul_add_of(gs::type& type, gsl::span<const operand> values, const source& src)
@@ -2489,6 +2528,10 @@ class analyzer {
     [[nodiscard]] auto runtime_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
     [[nodiscard]] auto builtin_trap(const source& src) -> result<operand>;
+    // `@cVaStart`, `@cVaArg`, `@cVaCopy` and `@cVaEnd` on caller-provided `va_list` storage
+    [[nodiscard]] auto builtin_c_va(syntax::builtin_t    which,
+                                    gsl::span<const ref> args,
+                                    const source&        src) -> result<operand>;
     [[nodiscard]] auto builtin_as(inst_id inst, gsl::span<const ref> args, const source& src)
         -> result<operand>;
     // `@as(T, x)` with its target known
@@ -2598,6 +2641,7 @@ class analyzer {
     compilation&                                   comp_;
     const unit&                                    u_;
     stdx::option<decl_id>                          declaring_;
+    stdx::option<decl_id>                          statement_;
     stdx::option<instance&>                        fn_;
     stdx::option<gir::function&>                   gir_fn_;
     gir::builder                                   builder_;
@@ -2708,6 +2752,10 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 
 // `value` as a `type` constant, at the narrowest integer width that holds it
 [[nodiscard]] auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index;
+// An integer of any width as the nearest `format` float, rounded once
+[[nodiscard]] auto float_of_int(const big_int& value, float_format format) -> f128;
+// The low `bits` of an integer's two's complement pattern, read as signed or unsigned
+[[nodiscard]] auto wrap_int(const big_int& value, u64 bits, bool is_signed) -> big_int;
 
 // What an array or slice holds
 [[nodiscard]] auto element_type_of(gs::type& t) -> stdx::option<gs::type&>;

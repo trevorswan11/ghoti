@@ -117,6 +117,13 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
     -> result<operand> {
     const auto& src{src_of(cast.inst)};
     if (mod().tag_of(cast.inst) != tag::builtin) {
+        // A shifted untyped value with no type to take is an `i32`
+        const auto t{mod().tag_of(cast.inst)};
+        if (!target &&
+            (t == tag::shl || t == tag::shl_wrap || t == tag::shl_sat || t == tag::shr)) {
+            return binary_as(cast.inst, comp_.ctx().get_int(32, true), src);
+        }
+
         if (!target) {
             return comp_.report(
                 u_,
@@ -812,17 +819,8 @@ auto analyzer::fold_cast(builtin_t       which,
         }
         return intern_int(pool, *exact, target);
     case builtin_t::TRUNCATE: {
-        const auto bits{low_bits(*exact)};
-        if (!bits || !folds_exactly(target)) {
-            return comp_.unsupported(u_, src, "a `@truncate` wider than 128 bits");
-        }
-
         const auto domain{domain_of(target)};
-        const auto kept{gir::semantics::truncate_int(domain, *bits)};
-        return intern_int(pool,
-                          domain.is_signed ? big_int{gir::semantics::signed_value(kept, domain)}
-                                           : big_int{gir::semantics::unsigned_value(kept, domain)},
-                          target);
+        return intern_int(pool, wrap_int(*exact, domain.bits, domain.is_signed), target);
     }
     case builtin_t::INT_FROM_BOOL: {
         const bool b{*v.data.as_opt<bool>()};
@@ -877,6 +875,12 @@ auto analyzer::fold_cast(builtin_t       which,
             bits = number->encode(format_of(source_type));
         }
 
+        // An integer keeps its pattern at any width
+        if (exact && gs::is_integer(target.get_kind())) {
+            const auto domain{domain_of(target)};
+            return intern_int(pool, wrap_int(*exact, domain.bits, domain.is_signed), target);
+        }
+
         if (!bits || (gs::is_integer(target.get_kind()) && !folds_exactly(target))) {
             return comp_.unsupported(u_, src, "a `@bitCast` of this value at compile time");
         }
@@ -917,18 +921,13 @@ auto analyzer::fold_cast(builtin_t       which,
         return intern_int(pool, *whole, target);
     }
     case builtin_t::FLOAT_FROM_INT: {
-        const auto small{exact ? exact->to_i128() : stdx::none};
-        if (!small) { return comp_.unsupported(u_, src, "a wide integer converted to a float"); }
-        const auto as_float{f128::from_int(*small, format_of(target))};
+        if (!exact) { return comp_.unsupported(u_, src, "a `@floatFromInt` of this value"); }
+        const auto as_float{float_of_int(*exact, format_of(target))};
         return gir::value::constant(pool, as_float, target).constant_index();
     }
     case builtin_t::FLOAT_CAST: {
         if (exact) {
-            const auto small{exact->to_i128()};
-            if (!small) {
-                return comp_.unsupported(u_, src, "a wide integer converted to a float");
-            }
-            return gir::value::constant(pool, f128::from_int(*small, format_of(target)), target)
+            return gir::value::constant(pool, float_of_int(*exact, format_of(target)), target)
                 .constant_index();
         }
 

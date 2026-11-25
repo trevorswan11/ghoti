@@ -176,6 +176,7 @@ auto compilation::analyze_roots() -> void {
                 const auto body{u.uir->body(d.value_body)};
                 analyzer   block{*this, u};
                 if (!u.source->ast.get_as_opt<ast::block_stmt>(*d.node)) {
+                    block.checking_statement(decl);
                     DISCARD(block.analyze_unemitted(body));
                     break;
                 }
@@ -326,12 +327,21 @@ auto compilation::infer_peer_return(instance& fn) -> result<void> {
 auto compilation::analyze_body(instance& fn) -> result<void> {
     PROFILE_FUNCTION();
     fn.analyzed = true;
+    // A comptime parameter bound to an untyped value may be what a `return` hands back
+    const auto binds_untyped{std::ranges::any_of(fn.bindings, [&](const param_binding& b) {
+        if (!b.value || constants().is_type(*b.value)) { return false; }
+        const auto type{constants().value_at(*b.value).type};
+        return type && gs::is_comptime_numeric(type->get_kind());
+    })};
     if (fn.infers_return && fn.return_type->get_kind() == gs::type_kind::AUTO &&
-        returns_untyped(*fn.owner->uir, fn.func)) {
+        (binds_untyped || returns_untyped(*fn.owner->uir, fn.func))) {
         TRY(infer_peer_return(fn));
     }
 
-    auto& gir_fn{gir_.add_function(fn.symbol, *fn.type, false, false, false, fn.linkage)};
+    const auto variadic{fn.type->get_data().as_opt<gs::types::function>().transform(
+        [](const gs::types::function& sig) { return sig.is_variadic; })};
+    auto&      gir_fn{
+        gir_.add_function(fn.symbol, *fn.type, false, false, variadic.value_or(false), fn.linkage)};
     if (const auto sig{fn.type->get_data().as_opt<gs::types::function>()}) {
         gir_fn.set_calling_conv(sig->conv);
     }

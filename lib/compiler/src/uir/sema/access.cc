@@ -158,11 +158,7 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
     const bool binding{inst && is_binding(mod().tag_of(*inst))};
     const bool to_entry{binding && (op.is<ip::index>() || mod().tag_of(*inst) == tag::param)};
 
-    if (const auto kind{type_of(op).get_kind()};
-        kind == gs::type_kind::COMPTIME_INT || kind == gs::type_kind::COMPTIME_FLOAT) {
-        return comp_.unsupported(u_, src, "the address of an untyped constant");
-    }
-
+    // An untyped constant is spilled at the type it defaults to
     const auto value{TRY([&] -> result<gir::value> {
         if (const auto built{to_entry ? entry_strings_.find(*inst) : entry_strings_.end()};
             built != entry_strings_.end()) {
@@ -886,6 +882,22 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
 
     auto& target_type{type_of(target)};
     if (target_type.is_poison()) { return stdx::err{stop::POISON}; }
+    // `^r` of a reference is the address it already holds
+    if (target_type.get_kind() == gs::type_kind::REFERENCE && is_pointer) {
+        const auto& ref{target_type.get_data().as<gs::types::reference>()};
+        if (is_mut && target_type.get_key().get_mut() != gs::types::mut::MUTABLE) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ASSIGNMENT_TO_CONST,
+                                std::string{messages::MUTABLE_ADDRESS_OF_IMMUTABLE});
+        }
+
+        const auto field{target.as_opt<place>()};
+        const auto held{field ? TRY(read(*field, src)) : TRY(as_runtime(target, src))};
+        auto&      pointer_type{ctx.get_pointer(mut, ref.underlying)};
+        return gir::value{held.data, pointer_type};
+    }
+
     if (target.is<function_ref>() || target_type.get_kind() == gs::type_kind::REFERENCE) {
         return comp_.unsupported(u_, src, "the address of a function or reference");
     }
@@ -1015,8 +1027,10 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
         return deref_slice(d.un.operand, ptr, as_place, src);
     }
 
+    // `*p` of a `^fn` is the callable it holds, which a call goes through
     if (gs::is_fat_callable(type)) {
-        return comp_.unsupported(u_, src, "dereferencing a callable");
+        if (as_place) { return comp_.unsupported(u_, src, "dereferencing a callable as a place"); }
+        return ptr;
     }
 
     const auto target{TRY(pointer_place(ptr, src))};

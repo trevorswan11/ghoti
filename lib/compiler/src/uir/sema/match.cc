@@ -144,6 +144,7 @@ auto analyzer::pattern_value(gsl::span<const inst_id> body, gs::type& type, cons
     }
 
     const auto typed{TRY(coerce_to(known, type, src, {.what = use_site::kind::STORE}))};
+    if (const auto literal{typed.as_opt<enum_literal>()}) { return literal_value(*literal); }
     return require_comptime(typed, src);
 }
 
@@ -760,8 +761,10 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
 
     // A type or an untyped number is only matched at compile time, by each pattern's value
     const bool by_value{type.get_kind() == gs::type_kind::TYPE ||
+                        type.get_kind() == gs::type_kind::ENUM_LITERAL ||
                         gs::is_comptime_numeric(type.get_kind())};
-    if (by_value && (comptime_match || is_comptime() || comptime_value(scrutinee))) {
+    if (by_value && (comptime_match || is_comptime() || comptime_value(scrutinee) ||
+                     scrutinee.is<enum_literal>())) {
         if (type.get_kind() == gs::type_kind::TYPE) { TRY(check_type_match(catch_all, src)); }
         return match_by_value(arms, catch_all, scrutinee, type, src);
     }
@@ -907,7 +910,8 @@ auto analyzer::match_by_value(const std::vector<match_arm>& arms,
                               const operand&                scrutinee,
                               gs::type&                     type,
                               const source&                 src) -> result<operand> {
-    const auto value{TRY(require_comptime(scrutinee, src))};
+    const auto literal{scrutinee.as_opt<enum_literal>()};
+    const auto value{literal ? literal_value(*literal) : TRY(require_comptime(scrutinee, src))};
     auto&      pool{comp_.constants()};
     const auto same{[&](ip::index pattern) {
         if (pattern == value) { return true; }

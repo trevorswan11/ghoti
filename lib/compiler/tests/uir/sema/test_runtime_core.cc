@@ -86,7 +86,7 @@ TEST_CASE("Operands without a common type are reported") {
 
 TEST_CASE("A construct this phase doesn't analyze stops the analysis") {
     const auto run{
-        helpers::run_uir_sema("pub const f = fn(): u256 { const x: u256 = 1; return x << 200; };")};
+        helpers::run_uir_sema("pub const f = fn(): usize { return @embed(\"data.bin\").len; };")};
     REQUIRE(run->out->stopped_at);
     CHECK_FALSE(run->out->succeeded());
 }

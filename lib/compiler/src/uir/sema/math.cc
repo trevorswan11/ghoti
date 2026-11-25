@@ -65,8 +65,16 @@ auto analyzer::bit_count_of(syntax::builtin_t which, const operand& arg, const s
     auto&      type{type_of(arg)};
     auto&      ctx{comp_.ctx()};
     const auto kind{type.get_kind()};
-    if (gs::is_comptime_numeric(kind)) {
-        return comp_.unsupported(u_, src, fmt::format("`{}` of an untyped value", name));
+    // An untyped integer counts within an `i32`
+    if (kind == gs::type_kind::COMPTIME_INT) {
+        auto&      i32_type{ctx.get_int(32, true)};
+        const auto known{comptime_value(arg)};
+        const auto value{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
+        if (!value || !value->fits(32, true)) {
+            return comp_.unsupported(u_, src, fmt::format("`{}` of an untyped value", name));
+        }
+        return bit_count_of(
+            which, TRY(coerce_to(arg, i32_type, src, {.what = use_site::kind::STORE})), src);
     }
 
     if (!gs::is_integer(kind)) {
@@ -85,8 +93,10 @@ auto analyzer::bit_count_of(syntax::builtin_t which, const operand& arg, const s
                                                     : semantics::int_unary_op::POPCOUNT};
     if (const auto known{comptime_value(arg)}) {
         const auto value{int_of(comp_.constants().value_at(*known))};
-        if (!value || !folds_exactly(type)) {
-            return comp_.unsupported(u_, src, fmt::format("`{}` of this value", name));
+        if (!value) { return comp_.unsupported(u_, src, fmt::format("`{}` of this value", name)); }
+        if (!folds_exactly(type)) {
+            return operand{intern_int(
+                comp_.constants(), *semantics::fold_wide_unary(op, domain, *value), result_type)};
         }
 
         const auto count{semantics::fold_int_unary(op, domain, domain_bits(*value, domain))};
@@ -132,17 +142,25 @@ auto analyzer::abs_of(const operand& arg, const source& src) -> result<operand> 
             return operand{intern_int(pool, i->abs(), type)};
         }
 
-        if (!folds_exactly(type)) { return comp_.unsupported(u_, src, "`@abs` past 128 bits"); }
         const auto domain{domain_of(type)};
-        const auto folded{semantics::fold_int_unary(
-            semantics::int_unary_op::ABS, domain, domain_bits(*i, domain))};
-        if (folded) { return operand{intern_int(pool, from_domain(*folded, domain), type)}; }
+        if (!folds_exactly(type)) {
+            if (const auto wide{
+                    semantics::fold_wide_unary(semantics::int_unary_op::ABS, domain, *i)}) {
+                return operand{intern_int(pool, *wide, type)};
+            }
+        } else if (const auto folded{semantics::fold_int_unary(
+                       semantics::int_unary_op::ABS, domain, domain_bits(*i, domain))}) {
+            return operand{intern_int(pool, from_domain(*folded, domain), type)};
+        }
+
+        // `@abs` only faults on the minimum
         if (is_comptime()) {
-            return comp_.report(
-                u_,
-                src,
-                gs::error::COMPTIME_EVALUATION_FAILED,
-                semantics::describe(folded.error(), domain, comp_.ctx().type_display_name(type)));
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_EVALUATION_FAILED,
+                                semantics::describe(semantics::int_fault::OVERFLOW_,
+                                                    domain,
+                                                    comp_.ctx().type_display_name(type)));
         }
     }
 
@@ -237,9 +255,7 @@ auto analyzer::binary_math_of(syntax::builtin_t which,
             return comp_.unsupported(u_, src, fmt::format("`{}` of these values", name));
         }
         if (work.get_kind() == gs::type_kind::COMPTIME_INT) {
-            if (!floats_ok) {
-                return comp_.unsupported(u_, src, fmt::format("`{}` of untyped integers", name));
-            }
+            if (!floats_ok) { return untyped_division(which, *li, *ri, work, src); }
 
             const bool less{*li < *ri};
             const bool pick_left{which == syntax::builtin_t::MIN ? less : !less};
@@ -247,14 +263,17 @@ auto analyzer::binary_math_of(syntax::builtin_t which,
         }
 
         const auto op{semantics::int_op_of(which)};
-        if (!op || !folds_exactly(work)) {
-            return comp_.unsupported(u_, src, fmt::format("`{}` of these values", name));
-        }
+        if (!op) { return comp_.unsupported(u_, src, fmt::format("`{}` of these values", name)); }
 
         const auto domain{domain_of(work)};
-        const auto folded{
-            semantics::fold_int(*op, domain, domain_bits(*li, domain), domain_bits(*ri, domain))};
-        if (folded) { return operand{intern_int(pool, from_domain(*folded, domain), work)}; }
+        const auto folded{[&] -> semantics::int_result<big_int> {
+            if (!folds_exactly(work)) { return semantics::fold_wide_int(*op, domain, *li, *ri); }
+            const auto bits{semantics::fold_int(
+                *op, domain, domain_bits(*li, domain), domain_bits(*ri, domain))};
+            if (!bits) { return stdx::err{bits.error()}; }
+            return from_domain(*bits, domain);
+        }()};
+        if (folded) { return operand{intern_int(pool, *folded, work)}; }
         if (is_comptime()) {
             return comp_.report(
                 u_,
@@ -277,6 +296,48 @@ auto analyzer::binary_math_of(syntax::builtin_t which,
     const auto result{builder_.emit_builtin_call(
         name, std::move(call_args), work, stdx::none, stdx::none, stdx::none, checked)};
     return operand{gir::value{*result, work}};
+}
+
+auto analyzer::untyped_division(syntax::builtin_t which,
+                                const big_int&    lhs,
+                                const big_int&    rhs,
+                                gs::type&         type,
+                                const source&     src) -> result<operand> {
+    const auto fail{[&](std::string_view why) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            fmt::format("{} in compile-time constant expression", why));
+    }};
+    if (rhs.is_zero()) {
+        const bool is_rem{which == syntax::builtin_t::REM || which == syntax::builtin_t::MOD};
+        return fail(is_rem ? "Modulo by zero" : "Division by zero");
+    }
+
+    const auto quotient{lhs / rhs};
+    const auto remainder{lhs % rhs};
+    const bool rounds_down{!remainder.is_zero() && lhs.is_negative() != rhs.is_negative()};
+    const auto value{[&] -> stdx::option<big_int> {
+        switch (which) {
+        case syntax::builtin_t::DIV_TRUNC: return quotient;
+        case syntax::builtin_t::DIV_FLOOR:
+            return rounds_down ? quotient - big_int{i128{1}} : quotient;
+        case syntax::builtin_t::DIV_EXACT:
+            if (!remainder.is_zero()) { return stdx::none; }
+            return quotient;
+        case syntax::builtin_t::REM: return remainder;
+        case syntax::builtin_t::MOD: return rounds_down ? remainder + rhs : remainder;
+        default:                     return stdx::none;
+        }
+    }()};
+    if (!value && which == syntax::builtin_t::DIV_EXACT) {
+        return fail("Exact division produced a remainder");
+    }
+    if (!value) {
+        return comp_.unsupported(
+            u_, src, fmt::format("`{}` of untyped integers", syntax::builtin_name(which)));
+    }
+    return operand{intern_int(comp_.constants(), *value, type)};
 }
 
 auto analyzer::builtin_float_math(syntax::builtin_t    which,

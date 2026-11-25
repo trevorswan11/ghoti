@@ -1128,6 +1128,12 @@ auto astgen::lower_node(ast::node_id id, const ast::unwrap_expr& node) -> ref {
                           .body_field({}),
                       id);
     }
+    if (in_function() && functions_.back().in_defer) {
+        report(location_of(id),
+               sema::error::DEFER_BODY_JUMP,
+               "cannot use '?' operator inside a 'defer' body");
+    }
+
     std::vector<inst_id> failure;
     {
         const body_guard guard{*this, failure};

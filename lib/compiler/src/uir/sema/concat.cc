@@ -69,8 +69,13 @@ auto analyzer::analyze_concat(inst_id inst) -> result<operand> {
                         ctx.type_display_name(rhs_shape->elem)));
     }
 
-    const auto lhs_known{comptime_value(lhs)};
-    const auto rhs_known{comptime_value(rhs)};
+    // A module-level aggregate `const` is known though runtime code reads its global
+    const auto known_of{[&](const operand& op) -> stdx::option<ip::index> {
+        if (const auto g{op.as_opt<global_const>()}) { return g->value; }
+        return comptime_value(op);
+    }};
+    const auto lhs_known{known_of(lhs)};
+    const auto rhs_known{known_of(rhs)};
     if (!lhs_known || !rhs_known) {
         const auto unknown{as_inst(!lhs_known ? d.bin.lhs : d.bin.rhs)};
         return comp_.report(u_,

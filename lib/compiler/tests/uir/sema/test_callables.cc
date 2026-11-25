@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <fmt/format.h>
 #include <stdx/option.hh>
 
 #include "compiler/ip/pool.hh"
@@ -315,6 +316,123 @@ TEST_CASE("A method's defaults reach calls through a value and through its type"
     )")};
     INFO(diff.detail);
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`^r` of a reference is the address the reference holds", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Holder = struct { r: &i32 };
+        pub const main = fn(): i32 {
+            let mut x: i32 = 40;
+            let r: &i32 = &x;
+            let p: ^i32 = ^r;
+            let h = Holder{ .r = &x };
+            let q: ^i32 = ^(h.r);
+            let rm: &mut i32 = &mut x;
+            let pm = ^mut rm;
+            *pm = 1;
+            return *p + *q;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("Generics, closures and references to them become erased `fn`s", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Op = struct { f: fn(n: i32): i32 };
+        const apply = fn(g: fn(n: i32): i32, v: i32): i32 { return g(v); };
+        const apply_ptr = fn(g: ^fn(n: i32): i32, v: i32): i32 { return g(v); };
+        const fixed = fn(comptime g: fn(n: i32): i32, v: i32): i32 { return g(v); };
+        const twice = fn(x: auto): @TypeOf(x) { return x * 2; };
+        pub const main = fn(): i32 {
+            let off: i32 = 2;
+            let g = fn(x: auto): i32 { return @as(i32, @intCast(x)) + off; };
+            let c = fn(x: i32): i32 { return x + off; };
+            let mut h: fn(n: i32): i32 = g;
+            h = twice;
+            let p: ^fn(n: u8): i32 = g;
+            let op: Op = .{ .f = g };
+            return h(2) + p(@as(u8, 3)) + op.f(4) + apply(&c, 1) + apply(&g, 2) +
+                   apply_ptr(twice, 8) + fixed(twice, 21);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("`.name` as a function names the member of the type it returns", "[uir]") {
+    const auto diff{diff_source(R"(
+        const T = struct {
+            x: i32,
+            const init = fn(): T { return T{ .x = 42 }; };
+        };
+        pub const main = fn(): i32 {
+            let f: fn(): T = .init;
+            return f().x;
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A null `^fn` is zeroed, and `*p` calls what it holds", "[uir]") {
+    const auto diff{diff_source(R"(
+        const inc = fn(n: i32): i32 { return n + 1; };
+        pub const main = fn(): i32 {
+            let mut p: ^fn(n: i32): i32 = nullptr;
+            let mut score: i32 = 0;
+            if (p == nullptr) { score += 1; }
+            p = inc;
+            let q: ^fn(n: i32): i32 = ^inc;
+            return score + p(4) + (*p)(5) + (*q)(6);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A C-variadic function reads its extra arguments through `va_list` storage", "[uir]") {
+    const auto diff{diff_source(R"(
+        const sum = fn(n: i32, ...): i32 {
+            let mut storage: [4]mut usize = undefined;
+            let ap = @ptrCast(^mut opaque, ^mut storage);
+            @cVaStart(ap);
+            let mut total: i32 = 0;
+            let mut i: i32 = 0;
+            while (i < n) : (i += 1) { total += @cVaArg(ap, i32); }
+            @cVaEnd(ap);
+            return total;
+        };
+        pub const main = fn(): i32 { return sum(3, 1, 2, 4); };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+
+    const auto outside{helpers::uir_rejected(R"(
+        pub const f = fn(n: i32): i32 {
+            let mut storage: [4]mut usize = undefined;
+            @cVaStart(@ptrCast(^mut opaque, ^mut storage));
+            return n;
+        };
+    )")};
+    CHECK_THAT(fmt::format("{}", outside.out().diagnostics),
+               Catch::Matchers::ContainsSubstring("can only be used inside a C-variadic"));
+}
+
+TEST_CASE("A function literal a top-level statement discards is still checked", "[uir]") {
+    const auto diff{diff_source(R"(
+        const ap = fn(g: auto, v: i32): i32 { return g(v); };
+        _ = fn(): i32 {
+            let k: i32 = 5;
+            return ap(fn(n: i32): i32 { return n + k; }, 1);
+        };
+        pub const main = fn(): i32 { return 3; };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+
+    const auto bad{helpers::uir_rejected("_ = fn(): i32 { return true; };")};
+    CHECK_FALSE(bad.out().diagnostics.empty());
 }
 
 } // namespace ghoti::tests
