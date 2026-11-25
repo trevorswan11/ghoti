@@ -707,7 +707,7 @@ auto type_resolver::bind_ctor_member_params(const generic_function_info& fn_info
         if (!s) { continue; }
         const auto p{s->get_data().as_opt<symbols::parameter>()};
         if (!p) { continue; }
-        restores.retype(*fn_info.module, ast::node_id{p->name}, *vt);
+        restores.retype(*fn_info.module, p->name, *vt);
         restores.bind_value_symbol(ctx_, table_idx, pname);
     }
 }

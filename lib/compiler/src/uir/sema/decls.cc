@@ -678,8 +678,8 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         return analyze_global(decl, *erased, declared, attrs, src);
     }
 
-    // An `auto` declaration takes its value's type, a number its default one
-    if (infers && gs::is_comptime_numeric(type_of(*value).get_kind())) {
+    const bool needs_concrete{infers || (!d.type_body && d.has(decl_flags::MUT))};
+    if (needs_concrete && gs::is_comptime_numeric(type_of(*value).get_kind())) {
         declared.emplace(comp_.ctx().default_concrete(type_of(*value)));
     }
 
@@ -805,10 +805,13 @@ auto analyzer::analyze_global(decl_id                        decl,
     global.visibility      = attrs.visibility;
     global.alignment       = attrs.alignment;
     comp_.note_storage(u_, decl);
-    // A string array is read where the global stores it
-    if (!is_mutable && !is_aggregate && !text_array) { return stored; }
+    // A string array is read where the global stores it, a volatile one at each read
+    const bool is_volatile{type.is_volatile()};
+    if (!is_mutable && !is_aggregate && !text_array && !is_volatile) { return stored; }
     const auto symbol{comp_.lasting_name(global.name)};
-    if (!is_mutable) { return global_const{.symbol = symbol, .type = &type, .value = index}; }
+    if (!is_mutable && !is_volatile) {
+        return global_const{.symbol = symbol, .type = &type, .value = index};
+    }
     return global_ref{symbol, &type};
 }
 

@@ -1216,7 +1216,7 @@ auto formatter::visit(node_id id, const call_expr& node) -> syntax::doc_id {
 
     const auto arg_line{[&](usize i, bool end) -> usize {
         if (i < lead) {
-            const node_id lead_id{i == 0 ? node_id{*node.modifier} : node_id{node.function}};
+            const node_id lead_id{i == 0 ? node_id{*node.modifier} : node.function};
             return end ? ast_.end_location_of(lead_id).line : ast_.location_of(lead_id).line;
         }
         return node.arguments[i - lead].visit(

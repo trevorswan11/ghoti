@@ -199,7 +199,7 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
     }
     // An array's `.len` and `.ptr` are read-only (a `let mut` slice's are assignable)
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(assign.lhs)};
-        dot && structural_members_.contains(ast::node_id{dot->member}.get_index())) {
+        dot && structural_members_.contains(dot->member.get_index())) {
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
@@ -1144,10 +1144,6 @@ namespace {
     return is_vector(ref ? ref->underlying : *obj_t);
 }
 
-} // namespace
-
-namespace {
-
 // `&.a` / `^.a` with nothing naming the enum: the literal only exists at compile time
 [[nodiscard]] auto enum_literal_has_no_address(source_location loc) -> diagnostic {
     return diagnostic{"an enum literal has no address; give it its enum type first, as in "
@@ -1739,9 +1735,7 @@ auto type_resolver::lhs_decides_logical_op(syntax::token_type_t op, ast::expr_ha
 auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_nature_t {
     const auto t{resolving_.get_sema_type_opt(expr)};
     if (!t || t->is_poison()) { return operand_nature_t::UNKNOWN; }
-    if (ast::node_id{expr}.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
-        return operand_nature_t::TYPE;
-    }
+    if (expr.get_token_type() == syntax::token_type_t::TYPE_TYPE) { return operand_nature_t::TYPE; }
     // A template placeholder or unfolded `[n]T` is `type`-kinded until instantiated
     if (t->get_kind() == type_kind::TYPE && !t->get_data().is<types::meta_type>()) {
         return operand_nature_t::UNKNOWN;

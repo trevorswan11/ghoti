@@ -1774,10 +1774,6 @@ namespace {
     return block_handle{parser.add_stmt<block_stmt>(tok, std::move(statements), false)};
 }
 
-} // namespace
-
-namespace {
-
 // `|v|`, `|&mut v|`, or `|_|`, with the current token on the opening `|`
 auto parse_capture_body(syntax::parser& parser) -> stdx::result<capture_t, syntax::diagnostic> {
     if (starts_destructure_pattern(parser)) {

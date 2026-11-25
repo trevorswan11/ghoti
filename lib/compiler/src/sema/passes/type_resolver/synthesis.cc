@@ -94,7 +94,7 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
                                             usize                 written_args) -> bool {
     auto&      ast{resolving_.ast};
     const auto dot{ast.get_as_opt<ast::dot_expr>(call.function)};
-    const auto named{dot ? ast::node_id{dot->member} : ast::node_id{call.function}};
+    const auto named{dot ? ast::node_id{dot->member} : call.function};
     if (!ast.get_as_opt<ast::identifier_expr>(named)) { return false; }
 
     // Only a call naming the declaration sees its defaults, through `const` aliases. A function

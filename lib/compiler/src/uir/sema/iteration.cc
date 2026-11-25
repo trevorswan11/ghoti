@@ -284,11 +284,12 @@ auto analyzer::counter_type(const range_operands& r) -> gs::type& {
     return comp_.ctx().default_concrete(*elem);
 }
 
-auto analyzer::run_for(inst_id                                   inst,
-                       gsl::span<const ref>                      iterables,
-                       const std::vector<stdx::option<inst_id>>& binds,
-                       gsl::span<const inst_id>                  body,
-                       gsl::span<const inst_id>                  else_body) -> result<operand> {
+auto analyzer::run_for(inst_id                  inst,
+                       gsl::span<const ref>     iterables,
+                       const for_captures&      captures,
+                       gsl::span<const inst_id> body,
+                       gsl::span<const inst_id> else_body) -> result<operand> {
+    const auto& binds{captures.binds};
     const auto& src{src_of(inst)};
     auto&       pool{comp_.constants()};
     auto        loop_rec{record(inst)};
@@ -308,7 +309,12 @@ auto analyzer::run_for(inst_id                                   inst,
     const auto known_int{[&](const operand& op) -> result<big_int> {
         return *int_of(pool.value_at(TRY(require_comptime(op, src))));
     }};
+    const auto aliased{[&](usize at) {
+        const auto modifier{captures.modifiers[at]};
+        return binds[at] && (modifier.is_ref() || modifier.is_ptr());
+    }};
     for (const auto iterable_ref : iterables) {
+        const auto at{sources.size()};
         const auto iterable_inst{as_inst(iterable_ref)};
         if (iterable_inst && mod().tag_of(*iterable_inst) == tag::range) {
             const auto     bounds{bounds_of(mod(), *iterable_inst)};
@@ -327,7 +333,11 @@ auto analyzer::run_for(inst_id                                   inst,
             auto&      elem{unrolled && untyped(r.lo) && untyped(r.hi)
                                 ? comp_.ctx().default_concrete(builtin(gs::type_kind::COMPTIME_INT))
                                 : counter_type(r)};
-            const auto start{r.lo ? TRY(known_int(*r.lo)) : big_int{i128{0}}};
+            if (aliased(at)) {
+                DISCARD(TRY(for_capture_type(src, at, captures.modifiers[at], elem, true, false)));
+            }
+
+            const auto    start{r.lo ? TRY(known_int(*r.lo)) : big_int{i128{0}}};
             source_values values{
                 .start = start, .descending = false, .elem = &elem, .elements = {}};
             if (r.hi) {
@@ -338,6 +348,40 @@ auto analyzer::run_for(inst_id                                   inst,
                 bound_by(static_cast<usize>(*span.to_u128()));
             }
 
+            sources.emplace_back(std::move(values));
+            continue;
+        }
+
+        // A `&v` or `^v` capture reaches each element where it lives in compile-time memory
+        if (aliased(at)) {
+            const bool reads{iterable_inst && mod().tag_of(*iterable_inst) == tag::load};
+            const auto held{
+                TRY(resolve(reads ? mod().data_of(*iterable_inst).un.operand : iterable_ref, src))};
+            const auto view{view_of(held)};
+            const auto elem{view ? stdx::option<gs::type&>{*view->elem}
+                                 : element_type_of(type_of(held))};
+            if (!elem) { return comp_.unsupported(u_, src, "a comptime `for` over this value"); }
+            auto& alias{*TRY(for_capture_type(src,
+                                              at,
+                                              captures.modifiers[at],
+                                              *elem,
+                                              !view || !view->is_mutable,
+                                              type_of(held).is_poly()))};
+            if (!view) {
+                return comp_.unsupported(
+                    u_, src, "a compile-time `for` capture by reference of this value");
+            }
+
+            source_values values{
+                .start = stdx::none, .descending = false, .elem = &alias, .elements = {}};
+            for (u64 i{0}; i < view->len; ++i) {
+                auto element{view->array};
+                element.path.emplace_back<comptime_step>(
+                    {.index = static_cast<u32>(view->offset + i), .type = view->elem});
+                values.elements.emplace_back<operand>({memory_address(element, alias)});
+            }
+
+            bound_by(values.elements.size());
             sources.emplace_back(std::move(values));
             continue;
         }
@@ -444,6 +488,27 @@ auto analyzer::run_for(inst_id                                   inst,
     return run_block(inst, else_body);
 }
 
+auto analyzer::for_capture_type(const source&      src,
+                                usize              at,
+                                ast::type_modifier modifier,
+                                gs::type&          elem,
+                                bool               is_const,
+                                bool               is_poly) -> result<gsl::not_null<gs::type*>> {
+    const auto node{src.as_opt<ast::node_id>()};
+    if (!node) { return comp_.unsupported(u_, src, "a `for` capture by reference"); }
+
+    // Only a named place, field, element or pointee has storage to alias
+    const auto& loop{u_.source->ast.get_as<ast::for_loop_expr>(*node)};
+    const auto  iterable{loop.iterables[at]};
+    const bool  named{iterable.is<ast::identifier_expr>() || iterable.is<ast::dot_expr>() ||
+                      iterable.is<ast::index_expr>() || iterable.is<ast::dereference_expr>()};
+    return alias_type(modifier,
+                      *comp_.ctx().pool.with_const(elem, false),
+                      {.is_const = is_const, .is_addressable = named, .is_poly = is_poly},
+                      "array or slice",
+                      loop.captures[at].payload);
+}
+
 auto analyzer::jumped_to(inst_id loop) const -> bool {
     // A loop's body is lowered after it, so every jump to it follows it
     for (u32 i{std::to_underlying(loop) + 1}; i < mod().instruction_count(); ++i) {
@@ -472,23 +537,37 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
 
     // The names the body binds, by the iterable each comes from
     std::vector<stdx::option<inst_id>> binds(iterables.size());
+    std::vector<ast::type_modifier>    modifiers(iterables.size());
     for (const auto i : body) {
         if (mod().tag_of(i) != tag::bind) { continue; }
         record_reader b{record(i)};
 
         // `|_|` binds nothing
         if (b.str_field() == "_") { continue; }
-        const auto slot{b.u32_field()};
-        if (b.u32_field() != 0) {
-            return comp_.unsupported(u_, src, "a `for` capture by reference");
-        }
-
-        if (slot < binds.size()) { binds[slot] = i; }
+        const auto               slot{b.u32_field()};
+        const ast::type_modifier modifier{u64{b.u32_field()}};
+        if (slot >= binds.size()) { continue; }
+        binds[slot]     = i;
+        modifiers[slot] = modifier;
     }
 
     // An unrolled loop runs its body once per element where it stands, at runtime too
-    if (is_comptime() || unrolled) { return run_for(inst, iterables, binds, body, else_body); }
+    if (is_comptime() || unrolled) {
+        return run_for(inst, iterables, {.binds = binds, .modifiers = modifiers}, body, else_body);
+    }
+
     const auto branch{runtime_branch()};
+
+    // A `&v` or `^v` capture's type, checked against where its element lives
+    std::vector<stdx::option<gs::type&>> alias_types(iterables.size());
+    const auto                           check_alias{
+        [&](usize at, gs::type& elem, bool is_const, bool is_poly) -> result<void> {
+            const auto modifier{modifiers[at]};
+            if (!binds[at] || (!modifier.is_ref() && !modifier.is_ptr())) { return {}; }
+            alias_types[at].emplace(
+                *TRY(for_capture_type(src, at, modifier, elem, is_const, is_poly)));
+            return {};
+        }};
 
     auto&                 usize_type{builtin(gs::type_kind::USIZE)};
     auto&                 bool_type{builtin(gs::type_kind::BOOL)};
@@ -510,7 +589,8 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
-            auto&      elem{counter_type(r)};
+            auto& elem{counter_type(r)};
+            TRY(check_alias(infos.size(), elem, true, false));
             const auto convert{[&](const operand& bound) -> result<gir::value> {
                 const auto coerced{
                     TRY(coerce_to(bound, elem, src, {.what = use_site::kind::STORE}))};
@@ -585,6 +665,9 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
         } else {
             return comp_.unsupported(u_, src, "a `for` over this type");
         }
+
+        auto& elem{*infos.back().elem};
+        TRY(check_alias(infos.size() - 1, elem, elem.is_constant(), container_type.is_poly()));
     }
 
     // An open range alongside an array takes no more values than the array has
@@ -662,6 +745,16 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
 
         const auto at{
             builder_.emit_get_element_ptr(base, {gir::value{index, usize_type}}, read_only)};
+
+        // An alias holds the element's address, a value capture reads where it lives
+        if (const auto alias{alias_types[i]}) {
+            const auto slot{builder_.emit_alloca(*alias)};
+            builder_.emit_store(slot, gir::value{at, *alias}).is_initializer = true;
+            values_.insert_or_assign(
+                *binds[i], slot_value{.address = gir::value{slot, *alias}, .type = alias.get()});
+            continue;
+        }
+
         values_.insert_or_assign(
             *binds[i], slot_value{.address = gir::value{at, read_only}, .type = &read_only});
     }

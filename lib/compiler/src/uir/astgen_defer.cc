@@ -79,7 +79,7 @@ auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) ->
             const u32 bits{how.is_mutable_ref() || how.is_mutable_ptr() ? flags::MUT : 0U};
             value = add_pl(how.is_ref() ? tag::ref_of : tag::address_of,
                            writer().ref_field(value).u32_field(bits),
-                           ast::node_id{**errdefer.capture});
+                           **errdefer.capture);
         }
 
         DISCARD(declare(ast_.get_as<ast::identifier_expr>(**errdefer.capture).name,

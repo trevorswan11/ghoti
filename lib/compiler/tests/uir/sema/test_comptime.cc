@@ -452,7 +452,8 @@ TEST_CASE("Builtin const eval @This", "[uir]") {
 }
 
 TEST_CASE("Volatile variables refuse constant folding in const eval", "[uir]") {
-    check_later_phase("const v: volatile i32 = 42; const read_v = v;", "volatile");
+    const auto run{rejected("const v: volatile i32 = 42; const read_v = v;")};
+    CHECK(run.codes() == std::vector{error::COMPTIME_EVALUATION_FAILED});
 }
 
 TEST_CASE("Const eval string concatenation and comparison folding", "[uir]") {

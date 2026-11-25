@@ -4,6 +4,8 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <fmt/format.h>
 
 #include "compiler/module/memory_loader.hh"
 #include "compiler/sema/error.hh"
@@ -246,6 +248,54 @@ TEST_CASE("A typed local `const` takes a `.name(args)` call's value", "[uir]") {
     INFO(diff.detail);
     // The old emitter makes the call at runtime, which UIR folds
     CHECK(diff.status == helpers::uir_diff_status::FOLD_PLACEMENT);
+}
+
+TEST_CASE("`@Struct` and `@Union` build packed and enum-tagged types", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Bits = @Struct(.{
+            .fields = [2]builtin.StructFieldInfo{
+                .{ .name = "lo", .@"type" = u3, .is_pub = true },
+                .{ .name = "hi", .@"type" = u5, .is_pub = true },
+            },
+            .is_extern = false,
+            .is_packed = true,
+            .backing_bits = 8,
+        });
+        const K = enum { a, b };
+        const U = @Union(.{
+            .fields = [2]builtin.UnionFieldInfo{
+                .{ .name = "b", .@"type" = u8 },
+                .{ .name = "a", .@"type" = i32 },
+            },
+            .is_extern = false,
+            .is_packed = false,
+            .tagged = true,
+            .tag_type = K,
+        });
+        pub const hi = fn(b: Bits): u5 { return b.hi; };
+        pub const tag = fn(u: U): K { let k: K = u; return k; };
+    )")};
+    INFO(diff.detail);
+    CHECK(diff.status == helpers::uir_diff_status::MATCH);
+}
+
+TEST_CASE("`@Union` checks the enum its tag comes from", "[uir]") {
+    const auto field{GENERATE(std::string_view{".{ .name = \"c\", .@\"type\" = u8 }"},
+                              std::string_view{".{ .name = \"a\", .@\"type\" = u8 }"})};
+    INFO(field);
+    const auto run{helpers::uir_rejected(fmt::format(R"(
+        const K = enum {{ a, b }};
+        const U = @Union(.{{
+            .fields = [1]builtin.UnionFieldInfo{{ {} }},
+            .is_extern = false,
+            .is_packed = false,
+            .tagged = true,
+            .tag_type = K,
+        }});
+        pub const f = fn(u: U): void {{ _ = u; }};
+    )",
+                                                     field))};
+    CHECK(run.codes() == std::vector{error::COMPTIME_EVALUATION_FAILED});
 }
 
 } // namespace ghoti::tests

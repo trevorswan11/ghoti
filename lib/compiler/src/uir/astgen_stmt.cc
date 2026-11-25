@@ -152,7 +152,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
             const auto       initializer{*decl.value};
             ref              result{};
             if (const auto fn{ast_.get_as_opt<ast::function_expr>(initializer)}) {
-                result = lower_function(ast::node_id{initializer}, *fn, decl);
+                result = lower_function(initializer, *fn, decl);
             } else {
                 if (initializer.any<ast::struct_expr,
                                     ast::union_expr,
@@ -163,7 +163,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 result             = expr(initializer);
                 pending_type_name_ = {};
             }
-            yields(result, ast::node_id{initializer});
+            yields(result, initializer);
         }
         b = {.kind  = binding_kind::VALUE,
              .value = add_pl(
@@ -265,10 +265,6 @@ auto astgen::return_stmt(ast::node_id id, const ast::return_stmt& node) -> void 
     emit_return(id, value);
 }
 
-} // namespace ghoti::uir::detail
-
-namespace ghoti::uir::detail {
-
 namespace {
 
 [[nodiscard]] auto is_statement_form(const ast::AST& tree, ast::expr_handle expr) -> bool {
@@ -276,7 +272,7 @@ namespace {
         return is_statement_form(tree, cx->rhs);
     }
 
-    switch (ast::node_id{expr}.get_kind()) {
+    switch (expr.get_kind()) {
     case ast::node_kind::ASSIGNMENT_EXPRESSION:
     case ast::node_kind::IF_EXPRESSION:
     case ast::node_kind::MATCH_EXPRESSION:
@@ -307,7 +303,7 @@ auto astgen::statement_expr(ast::expr_handle expression, ast::node_id at) -> voi
     ast::node_id called{id};
     if (const auto cx{ast_.get_as_opt<ast::comptime_expr>(called)}) { called = *cx->rhs; }
     const auto call{ast_.get_as_opt<ast::call_expr>(called)};
-    if (call && ast::node_id{call->function}.get_builtin()) { return; }
+    if (call && call->function.get_builtin()) { return; }
     DISCARD(add_un(tag::unused, value, call ? 1U : 0U, at));
 }
 

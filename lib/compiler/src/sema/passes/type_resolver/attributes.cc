@@ -61,7 +61,7 @@ namespace {
     if (const auto cx{tree.get_as_opt<ast::comptime_expr>(expr)}) {
         return is_statement_form(tree, cx->rhs);
     }
-    switch (ast::node_id{expr}.get_kind()) {
+    switch (expr.get_kind()) {
     case ast::node_kind::ASSIGNMENT_EXPRESSION:
     case ast::node_kind::IF_EXPRESSION:
     case ast::node_kind::MATCH_EXPRESSION:
@@ -216,7 +216,7 @@ auto type_resolver::check_testing_use(ID id, const mod::module_t& owner, const s
     // A type position can't name a function to call
     if constexpr (!std::same_as<ID, ast::node_id>) { return; }
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
-    if (!node || !declares_testing_fn(owner, ast::node_id{*node})) { return; }
+    if (!node || !declares_testing_fn(owner, *node)) { return; }
     const auto loc{resolving_.ast.location_of(id)};
     if (!direct_callee_ || *direct_callee_ != id.get_index()) {
         ctx_.diags.emplace_back(

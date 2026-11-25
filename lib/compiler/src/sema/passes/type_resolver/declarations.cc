@@ -47,9 +47,7 @@ namespace {
     const ast::node_id id{value};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return stdx::none; }
     const auto& call{ast.get_as<ast::call_expr>(id)};
-    if (ast::node_id{call.function}.get_builtin() != syntax::builtin_t::COMPILE_ERROR) {
-        return stdx::none;
-    }
+    if (call.function.get_builtin() != syntax::builtin_t::COMPILE_ERROR) { return stdx::none; }
     if (call.arguments.size() != 1) { return stdx::none; }
     const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
     if (!arg) { return stdx::none; }
@@ -565,7 +563,7 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
         return true;
     }
     if (is_type_denoting_expr(ctx_, resolving_, value, &table_stack_)) { return true; }
-    if (type_valued_results_.contains(ast::node_id{value}.get_index())) { return true; }
+    if (type_valued_results_.contains(value.get_index())) { return true; }
 
     // `Ctor(T)` / `@Int(...)`: a call to anything whose declared result is `type`
     if (const auto call{resolving_.ast.get_as_opt<ast::call_expr>(value)}) {
@@ -893,7 +891,7 @@ auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& exp
     // A bare `type` (or a generic template's placeholder) can't say whether it names a type yet,
     // but the `type` keyword itself always does
     if (value_type->get_kind() == type_kind::TYPE &&
-        ast::node_id{value}.get_token_type() != syntax::token_type_t::TYPE_TYPE &&
+        value.get_token_type() != syntax::token_type_t::TYPE_TYPE &&
         !value_type->get_data().is<types::meta_type>() &&
         !value_type->get_data().is<types::deferred_call>()) {
         return false;
@@ -1451,8 +1449,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
         // `const E = A || B` names the merged enum the same way
-        if (decl.value &&
-            ast::node_id{*decl.value}.get_token_type() == syntax::token_type_t::PIPE_PIPE) {
+        if (decl.value && decl.value->get_token_type() == syntax::token_type_t::PIPE_PIPE) {
             if (const auto value_type{resolving_.get_sema_type_opt(*decl.value)};
                 value_type && !value_type->is_poison()) {
                 const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
@@ -1483,7 +1480,7 @@ auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     // An `if`/`match` branch statement yields the branch's value, which is only discarded when
     // the `if`/`match` itself is
     const bool is_unused{!in_expr_branch_ || arm_of_unused_};
-    if (is_unused) { unused_value_nodes_.insert(ast::node_id{expr.expression}.get_index()); }
+    if (is_unused) { unused_value_nodes_.insert(expr.expression.get_index()); }
     const mutating_context_guard operand_g{arm_of_unused_, false};
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());

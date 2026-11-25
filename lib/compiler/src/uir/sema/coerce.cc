@@ -178,6 +178,12 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     auto& pool{comp_.constants()};
     auto& ctx{comp_.ctx()};
 
+    // A union tagged by an enum reads as the variant its active field names
+    if (const auto ut{from.get_data().as_opt<gs::types::union_t>()};
+        ut && ut->tag_enum && gs::is_same_unqualified(*ut->tag_enum, target)) {
+        return operand{TRY(union_tag_as_enum(op, from, target, src))};
+    }
+
     // A range capture converts to any integer that holds every value it takes
     if (const auto slot{op.as_opt<slot_value>()};
         slot && slot->range && gs::is_integer(target.get_kind()) &&
@@ -291,6 +297,12 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }
 
         return stdx::none;
+    }
+
+    // A captured slot's number is read before it widens
+    if (op.is<slot_value>() && gs::is_numeric(from.get_kind()) &&
+        gs::is_numeric(target.get_kind()) && gs::is_implicit_widenable(from, target)) {
+        return coerce(operand{TRY(as_runtime(op, src))}, target, src);
     }
 
     if (const auto value{op.as_opt<gir::value>()}) {
@@ -707,6 +719,51 @@ auto analyzer::materialize_merge(merge_ref m, gs::type& type, const source& src)
     auto& done{merges_[m.index]};
     if (builder_.get_segment()->get_id() == done.seg) { done.materialized.emplace(loaded); }
     return loaded;
+}
+
+auto analyzer::union_tag_as_enum(const operand& op,
+                                 gs::type&      union_type,
+                                 gs::type&      enum_type,
+                                 const source&  src) -> result<operand> {
+    const auto& ut{union_type.get_data().as<gs::types::union_t>()};
+    auto&       pool{comp_.constants()};
+    const auto  slot{op.as_opt<slot_value>()};
+    if (const auto known{slot && slot->known ? slot->known : comptime_value(op)}) {
+        const auto un{pool.value_at(*known).data.as_opt<ip::union_value>()};
+        if (!un) { return comp_.unsupported(u_, src, "a union's tag of this value"); }
+        return enum_constant(enum_type, std::string{un->active_field}, src);
+    }
+
+    TRY(require_runtime(src));
+    const auto base{TRY(operand_address(op, src))};
+    auto&      i32_type{comp_.ctx().get_int(32, true)};
+    auto&      bool_type{builtin(gs::type_kind::BOOL)};
+    const auto tag_at{
+        builder_.emit_get_element_ptr(base.address, {usize_constant(UNION_TAG_FIELD)}, i32_type)};
+    const gir::value tag{builder_.emit_load(gir::value{tag_at, i32_type}, i32_type), i32_type};
+
+    // The fields need not list the variants in order, so each tag index maps to its variant
+    const gir::value result{builder_.emit_alloca(enum_type), enum_type};
+    const auto       merge{new_segment()};
+    for (usize i{0}; i < ut.field_names.size(); ++i) {
+        const auto hit{new_segment()};
+        const auto miss{new_segment()};
+        const auto is_field{
+            builder_.emit_binary(gir::instruction_kind::EQ,
+                                 tag,
+                                 constant(pool.intern(static_cast<i64>(i), i32_type), i32_type),
+                                 bool_type)};
+        builder_.emit_cond_goto(gir::value{is_field, bool_type}, hit, miss);
+        switch_to(hit);
+        const auto variant{TRY(enum_constant(enum_type, ut.field_names[i], src))};
+        builder_.emit_store(result, TRY(as_runtime(variant, src)));
+        emit_goto(merge);
+        switch_to(miss);
+    }
+
+    builder_.emit_unreachable();
+    switch_to(merge);
+    return operand{gir::value{builder_.emit_load(result, enum_type), enum_type}};
 }
 
 } // namespace ghoti::uir::sema

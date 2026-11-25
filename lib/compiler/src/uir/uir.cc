@@ -412,6 +412,15 @@ auto module_t::add_namespace(namespace_info info) -> void {
     namespaces_.insert_or_assign(owner, std::move(info));
 }
 
+auto module_t::field_arms_of(inst_id owner) const -> gsl::span<const stdx::option<u32>> {
+    if (const auto it{field_arms_.find(owner)}; it != field_arms_.end()) { return it->second; }
+    return {};
+}
+
+auto module_t::set_field_arms(inst_id owner, std::vector<stdx::option<u32>> arms) -> void {
+    field_arms_.insert_or_assign(owner, std::move(arms));
+}
+
 auto record_reader::str_field() noexcept -> std::string_view {
     const string_ref s{word(), word()};
     return mod_.string(s);

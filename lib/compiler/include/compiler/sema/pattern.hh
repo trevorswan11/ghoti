@@ -27,6 +27,10 @@ struct context;
 
 namespace pattern {
 
+// A string pattern on a slice tests its bytes as a field past `len` and `ptr`
+constexpr usize            SLICE_BYTES_FIELD_INDEX{2};
+constexpr std::string_view SLICE_BYTES_FIELD_NAME{"bytes"};
+
 enum class node_kind : u8 {
     WILDCARD,
     VARIANT,    // a tagged union's field, with one child unless the field is void

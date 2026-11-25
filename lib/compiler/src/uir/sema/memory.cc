@@ -195,7 +195,7 @@ auto analyzer::memory_place(const operand& op) -> stdx::option<comptime_place> {
     const auto memory{pool.value_at(*index).data.as_opt<ip::memory_value>()};
     if (!memory) { return stdx::none; }
 
-    // Each step's type, from the array or struct holding it
+    // Each step's type, from the array, struct or union holding it
     comptime_place p{.alloc = memory->alloc, .path = {}, .borrowed = true};
     auto           type{comp_.alloc_at(p).type};
     for (const auto i : memory->path) {
@@ -206,6 +206,9 @@ auto analyzer::memory_place(const operand& op) -> stdx::option<comptime_place> {
         } else if (const auto st{type->get_data().as_opt<gs::types::struct_t>()};
                    st && i < st->fields.size()) {
             next = st->fields[i];
+        } else if (const auto ut{type->get_data().as_opt<gs::types::union_t>()};
+                   ut && i < ut->field_names.size()) {
+            next.emplace(ut->type_at(i));
         }
 
         if (!next) { return stdx::none; }
@@ -765,9 +768,9 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     }
 
     if (!destination.address.type) {
-        // An untyped `let mut` takes its initializer's concrete type
+        // An untyped `let mut` takes its initializer's concrete type, never volatile
         const auto typed{TRY(concrete(value, src))};
-        auto&      type{type_of(typed)};
+        auto&      type{*comp_.ctx().pool.strip_volatile(type_of(typed))};
         destination.address = gir::value{builder_.emit_alloca(type), type};
         destination.pointee = &type;
         values_.insert_or_assign(*as_inst(d.bin.lhs), operand{destination});
@@ -779,7 +782,12 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     // Storing `undefined` leaves the slot as it is, so nothing is emitted
     const auto known{comptime_value(value)};
     if (!known || !comp_.constants().value_at(*known).data.is<ip::undefined_value>()) {
-        builder_.emit_store(destination.address, TRY(as_runtime(stored, src)));
+        const auto runtime{TRY(as_runtime(stored, src))};
+        if (destination.packed) {
+            packed_store(destination, runtime);
+        } else {
+            builder_.emit_store(destination.address, runtime);
+        }
     }
 
     return void_value();
@@ -864,7 +872,9 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
 
     if (is_comptime()) {
         // A runtime body folding a condition keeps a `let mut` global's read at runtime
-        if (gir_fn_ && !as_place) { return comp_.needs_runtime(u_, src); }
+        // as does any read of a volatile one
+        const bool is_volatile{global->type->is_volatile()};
+        if ((gir_fn_ || is_volatile) && !as_place) { return comp_.needs_runtime(u_, src); }
 
         // A global's initializer may take another global's address
         if (!gir_fn_ && as_place) { return value; }

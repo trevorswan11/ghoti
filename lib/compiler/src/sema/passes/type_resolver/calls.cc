@@ -917,7 +917,7 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_
         if (denoted.get_kind() != type_kind::TYPE) { return denoted; }
         if constexpr (std::convertible_to<decltype(arg_id), ast::node_id>) {
             gir::const_eval evaluator{ctx_, resolving_};
-            if (const auto cv{evaluator.try_eval(ast::node_id{arg_id})};
+            if (const auto cv{evaluator.try_eval(arg_id)};
                 cv && cv->template is<stdx::option<sema::type&>>()) {
                 if (const stdx::option<sema::type&> t{cv->template as<stdx::option<sema::type&>>()};
                     t && t->is_resolved()) {
@@ -930,9 +930,7 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_
     if (keeps_comptime && is_comptime_numeric(arg_type->get_kind())) { return *arg_type; }
     if constexpr (std::convertible_to<decltype(arg_id), ast::node_id>) {
         if (arg_type->get_kind() == type_kind::COMPTIME_INT) {
-            if (const auto fitted{fitted_comptime_int_type(ast::node_id{arg_id})}) {
-                return *fitted;
-            }
+            if (const auto fitted{fitted_comptime_int_type(arg_id)}) { return *fitted; }
         }
     }
     // Literals materialize and deferred `[n]T` locals fold before binding a generic
@@ -1235,7 +1233,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
                     !bound_idx && arg_h && i < fn_params.size() &&
                     param_type->get_kind() != type_kind::AUTO &&
-                    is_contextual_literal(resolving_.ast, ast::node_id{*arg_h}) &&
+                    is_contextual_literal(resolving_.ast, *arg_h) &&
                     mentions_earlier_comptime_param(fn_ast, fn_params, i)) {
                     arg_slots[i] = *param_type;
                     instance_typed_args.emplace_back(i);

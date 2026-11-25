@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string_view>
 #include <vector>
 
 #include <stdx/assert.hh>
@@ -8,6 +9,8 @@
 
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
 
@@ -42,7 +45,16 @@ template <node_kind... AllowedKinds> class handle {
 
     [[nodiscard]] constexpr auto get_kind() const noexcept -> node_kind { return id_.get_kind(); }
     [[nodiscard]] constexpr auto get_index() const noexcept -> usize { return id_.get_index(); }
-    [[nodiscard]] constexpr      operator node_id() const noexcept { return id_; } // NOLINT
+    [[nodiscard]] constexpr auto get_token_type() const noexcept -> syntax::token_type_t {
+        return id_.get_token_type();
+    }
+    [[nodiscard]] constexpr auto get_builtin() const noexcept -> stdx::option<syntax::builtin_t> {
+        return id_.get_builtin();
+    }
+    [[nodiscard]] auto display_name() const noexcept -> std::string_view {
+        return id_.display_name();
+    }
+    [[nodiscard]] constexpr operator node_id() const noexcept { return id_; } // NOLINT
 
     template <NodeData N> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return id_.is<N>();

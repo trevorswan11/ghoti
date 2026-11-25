@@ -171,6 +171,34 @@ using syntax::token_type_t;
     }
 }
 
+// Whether a pattern captures by reference or pointer anywhere inside it
+[[nodiscard]] auto pattern_aliases(const ast::AST& tree, ast::node_id id) -> bool {
+    const auto aliasing{
+        [](const ast::capture_t& c) { return c.modifier.is_ref() || c.modifier.is_ptr(); }};
+    if (const auto capture{tree.get_as_opt<ast::capture_pattern_expr>(id)}) {
+        return aliasing(capture->capture);
+    }
+
+    if (const auto bound{tree.get_as_opt<ast::bound_pattern_expr>(id)}) {
+        return aliasing(bound->capture) || pattern_aliases(tree, bound->pattern);
+    }
+
+    if (const auto init{tree.get_as_opt<ast::initializer_expr>(id)}) {
+        return std::ranges::any_of(init->initializers, [&](const auto& entry) {
+            return pattern_aliases(tree, entry.value);
+        });
+    }
+
+    if (const auto call{tree.get_as_opt<ast::call_expr>(id)}) {
+        return std::ranges::any_of(call->arguments, [&](const auto& arg) {
+            const auto value{arg.template as_opt<ast::expr_handle>()};
+            return value && pattern_aliases(tree, *value);
+        });
+    }
+
+    return false;
+}
+
 } // namespace
 
 // By spelling, since no user name can be spelled like a primitive type and some positions hand
@@ -512,7 +540,7 @@ auto astgen::builtin_call(source                src,
                                         [this](ast::explicit_type_id t) { return type(t); })};
             const bool   buffer{i == 0 || (i == 1 && copies)};
             const source at{
-                node.arguments[i].visit([](ast::expr_handle e) { return source{ast::node_id{e}}; },
+                node.arguments[i].visit([](ast::expr_handle e) { return source{e}; },
                                         [](ast::explicit_type_id t) { return source{t}; })};
             const u32 is_dest{i == 0 ? 1U : 0U};
             viewed.emplace_back(buffer ? add_un(tag::mem_view, arg, is_dest, at) : arg);
@@ -534,7 +562,7 @@ auto astgen::type_of(source src, const ast::call_expr& node) -> ref {
     for (const auto& argument : node.arguments) {
         auto&            body{operands.emplace_back()};
         const body_guard guard{*this, body};
-        argument.visit([this](ast::expr_handle e) { yields(expr(e), ast::node_id{e}); },
+        argument.visit([this](ast::expr_handle e) { yields(expr(e), e); },
                        [this](ast::explicit_type_id t) { yields(type(t), t); });
     }
 
@@ -565,9 +593,7 @@ auto astgen::lower_node(ast::node_id id, const ast::index_expr& node) -> ref {
         const auto lo{optional_expr(range->lhs)};
         const auto hi{optional_expr(range->rhs)};
         u32        bits{object.is_place ? flags::PLACE : 0U};
-        if (ast::node_id{node.index}.get_token_type() == token_type_t::DOT_DOT_EQ) {
-            bits |= flags::INCLUSIVE;
-        }
+        if (node.index.get_token_type() == token_type_t::DOT_DOT_EQ) { bits |= flags::INCLUSIVE; }
         return add_pl(tag::slice,
                       writer().ref_field(object.value).ref_field(lo).ref_field(hi).u32_field(bits),
                       id);
@@ -645,7 +671,7 @@ auto astgen::lower_node(ast::node_id id, const ast::array_expr& node) -> ref {
 auto astgen::value_body(ast::expr_handle h) -> std::vector<inst_id> {
     std::vector<inst_id> body;
     const body_guard     guard{*this, body};
-    yields(expr(h), ast::node_id{h});
+    yields(expr(h), h);
     return body;
 }
 
@@ -793,7 +819,7 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
             const auto name{
                 entry.member ? name_of(ast_.get_as<ast::implicit_access_expr>(*entry.member).member)
                              : std::string_view{}};
-            entries.emplace_back(name, pattern(ast::node_id{entry.value}, slots));
+            entries.emplace_back(name, pattern(entry.value, slots));
         }
         auto record{writer()};
         record.body_field(type_body_insts).count(entries.size());
@@ -801,8 +827,8 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
         return add_pl(tag::pat_init, record, id);
     }
     if (const auto ref_pattern{ast_.get_as_opt<ast::reference_expr>(id)};
-        ref_pattern && is_structural_pattern(ast::node_id{ref_pattern->rhs})) {
-        return add_un(tag::pat_deref, pattern(ast::node_id{ref_pattern->rhs}, slots), 0, id);
+        ref_pattern && is_structural_pattern(ref_pattern->rhs)) {
+        return add_un(tag::pat_deref, pattern(ref_pattern->rhs, slots), 0, id);
     }
     if (const auto call_pattern{ast_.get_as_opt<ast::call_expr>(id)};
         call_pattern && call_pattern->function.any<ast::implicit_access_expr, ast::dot_expr>()) {
@@ -827,15 +853,19 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
 auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
     const bool statement{std::exchange(statement_arms_, false)};
     // A capture by reference aliases a field, element or pointee where it lives
-    const bool         aliases{std::ranges::any_of(node.arms, [](const auto& arm) {
-        return arm.capture && (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr());
+    const bool         aliases{std::ranges::any_of(node.arms, [&](const auto& arm) {
+        return (arm.capture &&
+                (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr())) ||
+               std::ranges::any_of(arm.patterns,
+                                   [&](ast::node_id p) { return pattern_aliases(ast_, p); });
     })};
     const ast::node_id matcher{node.matcher};
-    const bool in_place{aliases && (matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
-                                    matcher.is<ast::dereference_expr>())};
+    // A field, element or pointee is matched where it lives, so it isn't copied first
+    const bool in_place{matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
+                        matcher.is<ast::dereference_expr>()};
     const auto operand{[&] {
         if (!in_place) { return expr(node.matcher); }
-        const auto target{place(node.matcher, use::MUTATE)};
+        const auto target{place(node.matcher, aliases ? use::MUTATE : use::PLACE)};
         return target.is_place ? add_un(tag::load, target.value, 0, id) : target.value;
     }()};
     u32        bits{0};
@@ -863,7 +893,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
             const body_guard guard{*this, record.pattern_body};
             for (const auto alternative : arm.patterns) {
                 slots.alternative.clear();
-                record.roots.emplace_back(pattern(ast::node_id{alternative}, slots));
+                record.roots.emplace_back(pattern(alternative, slots));
             }
             // One binding per name, shared by every alternative that binds it
             for (u32 slot{0}; slot < slots.order.size(); ++slot) {
@@ -1153,7 +1183,7 @@ auto astgen::lower_node(ast::node_id id, const ast::cfg_value_expr& node) -> ref
     if (!chosen) { return to_ref(well_known::undefined); }
     // A selected `@compileError` already fired when the guard was evaluated
     if (const auto call{ast_.get_as_opt<ast::call_expr>(*chosen)};
-        call && ast::node_id{call->function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
+        call && call->function.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
         return add(tag::unreachable, {}, id);
     }
     return expr(*chosen);

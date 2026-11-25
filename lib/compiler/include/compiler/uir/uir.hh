@@ -16,7 +16,9 @@
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 
 namespace ghoti::uir {
 
@@ -187,8 +189,14 @@ union data {
 };
 static_assert(sizeof(data) == 8);
 
-// What an instruction was lowered from
-using source = stdx::variant<ast::node_id, ast::explicit_type_id>;
+// What an instruction was lowered from, built from an id or straight from a handle
+struct source : stdx::variant<ast::node_id, ast::explicit_type_id> {
+    using variant::variant;
+
+    template <ast::node_kind... Kinds>
+    constexpr source(ast::handle<Kinds...> handle) noexcept // NOLINT
+        : variant{ast::node_id{handle}} {}
+};
 
 // The kinds of field an `extra` record holds, in the order its schema lists them
 enum class field_kind : u8 {
@@ -402,6 +410,10 @@ class module_t {
     auto add_namespace(namespace_info info) -> void;
     auto root_namespace_mut() noexcept -> namespace_info& { return root_; }
 
+    // The arm each `@cfg` group of an aggregate's fields selected, none where none was
+    [[nodiscard]] auto field_arms_of(inst_id owner) const -> gsl::span<const stdx::option<u32>>;
+    auto               set_field_arms(inst_id owner, std::vector<stdx::option<u32>> arms) -> void;
+
   private:
     std::vector<tag>    tags_;
     std::vector<data>   datas_;
@@ -410,11 +422,12 @@ class module_t {
     std::string         strings_;
     ankerl::unordered_dense::
         map<std::string, string_ref, stdx::string_transparent_hash, stdx::string_transparent_eq>
-                                                          string_lut_;
-    std::vector<decl>                                     decls_;
-    std::vector<import_info>                              imports_;
-    namespace_info                                        root_;
-    ankerl::unordered_dense::map<inst_id, namespace_info> namespaces_;
+                                                                          string_lut_;
+    std::vector<decl>                                                     decls_;
+    std::vector<import_info>                                              imports_;
+    namespace_info                                                        root_;
+    ankerl::unordered_dense::map<inst_id, namespace_info>                 namespaces_;
+    ankerl::unordered_dense::map<inst_id, std::vector<stdx::option<u32>>> field_arms_;
 };
 
 // Reads an `extra` record field by field, in schema order

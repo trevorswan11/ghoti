@@ -288,7 +288,7 @@ auto cfg_evaluator::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_
     ast::node_id                  at{dot};
     while (const auto access{module_.ast.get_as_opt<ast::dot_expr>(at)}) {
         path.emplace_back(module_.ast.get_as<ast::identifier_expr>(access->member).name);
-        at = ast::node_id{access->object};
+        at = access->object;
     }
     const auto root{module_.ast.get_as_opt<ast::identifier_expr>(at)};
     if (!root) {
@@ -354,7 +354,7 @@ auto cfg_evaluator::is_compile_error_call(ast::expr_handle h) -> bool {
     const ast::node_id id{h};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-    return ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
+    return call.function.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
 }
 
 // Every guard arm (and the `_ =>` fallback) must yield the same `comptime` type
@@ -507,7 +507,7 @@ auto cfg_evaluator::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return stdx::none;
     case ast::node_kind::CALL_EXPRESSION: {
         const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-        if (ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
+        if (call.function.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
             fire_compile_error(id, call);
             return cfg_value{cfgval::diverges{}};
         }
@@ -763,9 +763,8 @@ auto cfg_evaluator::fire_eager_compile_errors(const std::vector<ast::stmt_handle
         const auto expr_stmt{module_.ast.get_as_opt<ast::expr_stmt>(item)};
         if (!expr_stmt) { continue; }
         const auto call{module_.ast.get_as_opt<ast::call_expr>(expr_stmt->expression)};
-        if (call &&
-            ast::node_id{call->function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
-            fire_compile_error(ast::node_id{expr_stmt->expression}, *call);
+        if (call && call->function.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
+            fire_compile_error(expr_stmt->expression, *call);
         }
     }
 }

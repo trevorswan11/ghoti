@@ -39,9 +39,7 @@ namespace ghoti::sema::pattern {
 
 namespace {
 
-constexpr usize            MAX_DECISION_NODES{200'000};
-constexpr usize            SLICE_BYTES_FIELD_INDEX{2};
-constexpr std::string_view SLICE_BYTES_FIELD_NAME{"bytes"};
+constexpr usize MAX_DECISION_NODES{200'000};
 
 [[nodiscard]] auto make_node(node_kind kind, stdx::option<ast::node_id> source, type& value_type)
     -> node_ptr {

@@ -231,9 +231,12 @@ class astgen {
     // Statements with each `@cfg` chain replaced by its selected items
     [[nodiscard]] auto spliced(const std::vector<ast::stmt_handle>& items)
         -> std::vector<ast::stmt_handle>;
+    // `fields_of` keeps the arm each group selected, which Sema splices the AST's fields by
     template <typename Group, typename Item>
     [[nodiscard]] auto spliced_group(const std::vector<Item>&  items,
-                                     const std::vector<Group>& groups) -> std::vector<Item>;
+                                     const std::vector<Group>& groups,
+                                     stdx::option<inst_id>     fields_of = stdx::none)
+        -> std::vector<Item>;
     auto               lower_attributes(const stdx::option<ast::attribute_list>& attributes,
                                         stdx::option<bool>                       routed,
                                         std::vector<inst_id>&                    into) -> void;

@@ -393,6 +393,10 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"A compile-time slice used at runtime is backed by a stack array"},
     // An interface default method's parameter of an associated type is typed `type`
     std::string_view{"A `dyn` of an interface with a defaulted associated type"},
+    // A guarded match whose arms are all untyped keeps its result in a `comptime_int` slot
+    std::string_view{"Guards decide between arms at runtime"},
+    // A module alias named after the primitive it names is listed as a global of that type
+    std::string_view{"A folded const named after a primitive can read the primitive"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
@@ -429,7 +433,11 @@ constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
                 message == "Cannot take a mutable address of an element of a non-mutable array "
                            "or slice") ||
                (d.get_error() == sema::error::ASSIGNMENT_TO_CONST &&
-                message == "Cannot capture an immutable value by mutable reference");
+                message == "Cannot capture an immutable value by mutable reference") ||
+               // The old resolver lets a type, like an enum, be matched against variant patterns
+               (d.get_error() == sema::error::ILLEGAL_MATCH_PATTERN &&
+                (message == "A 'match' on a type requires a catch-all '_' arm" ||
+                 message == "A 'match' on a type expects every arm pattern to be a type"));
     });
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -91,6 +92,15 @@ struct union_field {
     std::string_view name;
 };
 
+// Where a bit-packed field sits in its aggregate's `n`-bit backing integer
+struct packed_bits {
+    u32 n;
+    u32 offset;
+    u32 fbits;
+    // A field of a packed field, which reads and writes go through, else the backing's address
+    stdx::option<u32> parent{};
+};
+
 // An addressable slot that loads read and stores write
 struct place {
     gir::value                address;
@@ -99,7 +109,24 @@ struct place {
     stdx::option<union_field> pending{};
     // A by-value parameter's own copy, whose array fields read with mutable elements
     bool owned_copy{false};
+    // A bit-packed field, read and written as bits of its aggregate
+    stdx::option<packed_bits> packed{};
 };
+
+// The index of the field `name` among `names`, none when there is no such field
+[[nodiscard]] inline auto index_of(gsl::span<const std::string_view> names, std::string_view name)
+    -> stdx::option<usize> {
+    const auto found{std::ranges::find(names, name)};
+    if (found == names.end()) { return stdx::none; }
+    return static_cast<usize>(found - names.begin());
+}
+
+// A `packed struct` or `packed union` laid out as one backing integer, not a C one
+[[nodiscard]] inline auto is_bit_packed(const gs::type& t) -> bool {
+    if (const auto st{t.get_data().as_opt<gs::types::struct_t>()}) { return st->is_bit_packed(); }
+    if (const auto ut{t.get_data().as_opt<gs::types::union_t>()}) { return ut->is_bit_packed(); }
+    return false;
+}
 
 // The values a `for` range's counter takes, which let it convert to any integer holding them all
 struct value_range {
@@ -520,6 +547,15 @@ struct synthetic_field {
     stdx::option<ip::index> default_value{};
 };
 
+// How a `@Union` descriptor lays its union out
+struct synthetic_union {
+    bool tagged;
+    bool is_extern;
+    bool is_packed;
+    // The enum a union tagged by its own enum takes its tag from
+    stdx::option<gs::type&> tag_enum;
+};
+
 // Where a struct field's default comes from: a body its declaration gives, or a known value
 struct default_source {
     gsl::span<const inst_id> body{};
@@ -653,6 +689,12 @@ class compilation {
     [[nodiscard]] auto constants() noexcept -> ip::pool& { return ctx_.pool.intern(); }
     [[nodiscard]] auto gir() noexcept -> gir::module_t& { return gir_; }
     [[nodiscard]] auto ptr_bits() const noexcept -> u32 { return ptr_bits_; }
+
+    // Keeps an aggregate's AST items with its `@cfg` groups spliced in, for the type viewing them
+    template <typename Item>
+    [[nodiscard]] auto keep_items(std::vector<Item> items) -> gsl::span<const Item> {
+        return *arena_.make<std::vector<Item>>(std::move(items));
+    }
 
     // The declaration's value, analyzing it on first use.
     // A use during its own analysis is a cycle reported at `use`
@@ -883,12 +925,12 @@ class compilation {
     // An `extern` function's declaration, called by its link name
     [[nodiscard]] auto declare_extern(const unit& u, decl_id decl, gs::type& type)
         -> result<operand>;
-    auto synthesize_struct(nominal& n, gsl::span<const synthetic_field> fields, bool is_extern)
+    auto synthesize_struct(nominal&                         n,
+                           gsl::span<const synthetic_field> fields,
+                           bool                             is_extern,
+                           bool                             is_packed) -> void;
+    auto synthesize_union(nominal& n, gsl::span<const synthetic_field> fields, synthetic_union shape)
         -> void;
-    auto synthesize_union(nominal&                         n,
-                          gsl::span<const synthetic_field> fields,
-                          bool                             tagged,
-                          bool                             is_extern) -> void;
     // `A || B`, one enum per pair of enums however many merges name it
     [[nodiscard]] auto merged_enum(const merge_key& key) -> stdx::option<gs::type&>;
     auto               remember_merge(const merge_key& key, gs::type& merged) -> void;
@@ -1217,7 +1259,9 @@ class analyzer {
 
     // One `match` arm as UIR lists it
     struct match_arm {
-        gsl::span<const ref>     patterns;
+        gsl::span<const ref> patterns;
+        // Holds the `bind` of each name the patterns capture, then the arm's own capture
+        gsl::span<const inst_id> pattern_body;
         stdx::option<ref>        capture;
         gsl::span<const inst_id> guard;
         gsl::span<const inst_id> body;
@@ -1233,14 +1277,31 @@ class analyzer {
         bool is_alias;
     };
 
-    // Where a runtime `match` takes its scrutinee apart
-    struct match_root {
-        gir::value address;
-        bool       is_const;
+    // Where a `&v` or `^v` capture's value is reached
+    struct capture_access {
+        bool is_const;
         // A temporary's copy can't be captured by mutable reference
         bool is_addressable;
         // Reached through a `mut?` reference
         bool is_poly;
+    };
+
+    // Where a runtime `match` takes its scrutinee apart
+    struct match_root {
+        gir::value     address;
+        capture_access access;
+    };
+
+    // Compile-time memory a pattern takes apart, which its `&v` and `^v` captures alias
+    struct comptime_alias {
+        comptime_place place;
+        capture_access access;
+    };
+
+    // The names a `for` body binds and how, by the iterable each comes from
+    struct for_captures {
+        gsl::span<const stdx::option<inst_id>> binds;
+        gsl::span<const ast::type_modifier>    modifiers;
     };
 
     // What a type's `builtin.Unwrappable` impl gives `?` and `!`
@@ -1277,6 +1338,7 @@ class analyzer {
     // A runtime `match` while its decision tree is emitted
     struct match_lowering {
         const gs::pattern::decision_tree&      tree;
+        const std::vector<match_arm>&          arms;
         gir::value                             root;
         std::vector<gir::segment_id>           bodies;
         std::vector<std::vector<capture_slot>> slots;
@@ -1512,6 +1574,49 @@ class analyzer {
     [[nodiscard]] auto immutable_view(gs::type& field) -> gs::type&;
     [[nodiscard]] auto field_place(const place& object, std::string_view name, const source& src)
         -> result<place>;
+
+    // Bit-packed aggregates (packed.cc)
+    // Rejects a field a bit-packed `kind` can't hold
+    [[nodiscard]] auto check_packed_field(gs::type&        field,
+                                          std::string_view name,
+                                          std::string_view kind,
+                                          const source&    src) -> result<void>;
+    [[nodiscard]] auto
+    reject_packed_alignment(std::string_view name, std::string_view kind, const source& src)
+        -> result<void>;
+    [[nodiscard]] auto check_packed_width(u64 bits, std::string_view kind, const source& src)
+        -> result<void>;
+    // The layout of field `index` of the bit-packed `type`
+    [[nodiscard]] auto packed_layout(gs::type& type, usize index, gs::type& field) -> packed_bits;
+    [[nodiscard]] static auto field_type_at(gs::type& type, usize index) -> gs::type&;
+    // Field `index` of a bit-packed aggregate's place, which has no address of its own
+    [[nodiscard]] auto packed_place(const place& base, usize index, gs::type& field) -> place;
+    // Field `index` read out of a bit-packed aggregate value
+    [[nodiscard]] auto
+    packed_extract(const gir::value& object, gs::type& type, usize index, gs::type& field)
+        -> gir::value;
+    [[nodiscard]] auto packed_read(const place& p) -> gir::value;
+    void               packed_store(const place& p, const gir::value& value);
+    // The `fbits` bits at `offset` of `backing` as `field`
+    [[nodiscard]] auto
+    bits_extract(const gir::value& backing, const packed_bits& at, gs::type& field) -> gir::value;
+    // `old` with the bits at `at` replaced by `value`, a `field`
+    [[nodiscard]] auto bits_merge(const gir::value&  old,
+                                  const packed_bits& at,
+                                  gs::type&          field,
+                                  const gir::value&  value) -> gir::value;
+    [[nodiscard]] auto backing_int(u32 bits) -> gs::type&;
+    // A union's active field as the variant of its tag enum it names
+    [[nodiscard]] auto union_tag_as_enum(const operand& op,
+                                         gs::type&      union_type,
+                                         gs::type&      enum_type,
+                                         const source&  src) -> result<operand>;
+    // Stores a zero `bits`-wide backing integer to start a bit-packed initializer
+    void zero_backing(const place& whole, u32 bits);
+    // A known bit-packed value built field by field, each field's bits already known
+    [[nodiscard]] auto materialize_packed(const ip::value& value, gs::type& type, const source& src)
+        -> result<gir::value>;
+
     [[nodiscard]] auto index_operand(ref index_ref, const source& src) -> result<gir::value>;
     [[nodiscard]] auto
     bounds_check(const gir::value& index, const gir::value& bound, bool sentinel, const source& src)
@@ -1542,47 +1647,103 @@ class analyzer {
     // Every value a range takes, when both its bounds are known
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
-    // A `for` at compile time, binding each iteration's values as constants
     // Whether a `break` or `continue` names `loop`
     [[nodiscard]] auto jumped_to(inst_id loop) const -> bool;
-    [[nodiscard]] auto run_for(inst_id                                   inst,
-                               gsl::span<const ref>                      iterables,
-                               const std::vector<stdx::option<inst_id>>& binds,
-                               gsl::span<const inst_id>                  body,
+    // A `for` capture's type, a `&v` or `^v` one's checked against the iterable it reaches into
+    [[nodiscard]] auto for_capture_type(const source&      src,
+                                        usize              at,
+                                        ast::type_modifier modifier,
+                                        gs::type&          elem,
+                                        bool               is_const,
+                                        bool               is_poly)
+        -> result<gsl::not_null<gs::type*>>;
+    // A `for` at compile time, binding each iteration's values as constants
+    [[nodiscard]] auto run_for(inst_id                  inst,
+                               gsl::span<const ref>     iterables,
+                               const for_captures&      captures,
+                               gsl::span<const inst_id> body,
                                gsl::span<const inst_id> else_body) -> result<operand>;
 
     // `match` (match.cc)
     [[nodiscard]] auto analyze_match(inst_id inst) -> result<operand>;
     [[nodiscard]] auto match_arms(inst_id inst) -> std::vector<match_arm>;
     [[nodiscard]] auto capture_name(const ast::capture_t& capture) const -> std::string_view;
+    // A pattern's value as written, which must be known at compile time
+    [[nodiscard]] auto pattern_operand(gsl::span<const inst_id> body, const source& src)
+        -> result<operand>;
+    // A match on a type takes no guard or capture, and needs a catch-all arm
+    [[nodiscard]] auto check_type_match(stdx::option<u32> catch_all, const source& src)
+        -> result<void>;
     // A pattern's value, which must be known at compile time
     [[nodiscard]] auto pattern_value(gsl::span<const inst_id> body,
                                      gs::type&                type,
                                      const source&            src) -> result<ip::index>;
-    [[nodiscard]] auto pattern_node(inst_id pat, gs::type& type) -> result<gs::pattern::node_ptr>;
+    // A nested pattern, unlike a whole one, must be known at compile time
+    [[nodiscard]] auto pattern_node(inst_id   pat,
+                                    gs::type& type,
+                                    bool      place_is_const = false,
+                                    bool      top_level      = true) -> result<gs::pattern::node_ptr>;
+    // A pattern's value when it is known at compile time, none when it is only known at runtime
+    [[nodiscard]] auto known_pattern(gsl::span<const inst_id> body,
+                                     gs::type&                type,
+                                     const source&            src) -> result<stdx::option<ip::index>>;
+    // A pattern compared whole at runtime, tested in source order
+    [[nodiscard]] auto opaque_pattern(inst_id pat, gs::type& type, bool top_level)
+        -> result<gs::pattern::node_ptr>;
+    // `"ab"` against bytes: a slice's length and bytes, or an array's bytes
+    [[nodiscard]] auto string_pattern(inst_id pat, ip::index text, gs::type& type)
+        -> result<gs::pattern::node_ptr>;
+    // Whether the known `value` passes an opaque pattern, known at compile time too
+    [[nodiscard]] auto known_opaque(const gs::pattern::node& node,
+                                    ip::index                value,
+                                    const source&            src) -> result<bool>;
+    // Whether `subject` passes the opaque pattern `pat`
+    [[nodiscard]] auto opaque_test(const gir::value& subject, inst_id pat) -> result<gir::value>;
+    // The `|x|` a `pat_capture` was written as
+    [[nodiscard]] auto pattern_capture(inst_id pat) const -> const ast::capture_t&;
+    // `.{ ... }` against an array, a struct or a slice
+    [[nodiscard]] auto aggregate_pattern(inst_id pat, gs::type& type, bool place_is_const)
+        -> result<gs::pattern::node_ptr>;
+    // `.name(p)` against a tagged union, the payload matched by `p`
+    [[nodiscard]] auto variant_pattern(inst_id pat, gs::type& type, bool place_is_const)
+        -> result<gs::pattern::node_ptr>;
+    // Whether the known `value` matches `node`, collecting the values its captures bind
+    [[nodiscard]] auto
+    known_match(const gs::pattern::node&                            node,
+                ip::index                                           value,
+                std::vector<std::pair<std::string_view, ip::index>>& bound,
+                const source&                                        src,
+                const stdx::option<comptime_alias>&                  at = stdx::none)
+        -> result<bool>;
+    // Binds each name an arm's patterns capture to what `lookup` gives for it
+    template <typename Lookup> void bind_arm_names(const match_arm& arm, Lookup&& lookup);
     // The value of a runtime match that runs entirely at compile time to a number or `bool`
     [[nodiscard]] auto fold_match(const std::vector<match_arm>&              arms,
                                   const std::vector<gs::pattern::row_input>& rows,
                                   ref                                        operand_ref,
                                   const source& src) -> result<stdx::option<operand>>;
-    // A `match` at compile time, which analyzes only the arm it takes
     // A compile-time `match` on a type or untyped number, comparing each pattern's value
     [[nodiscard]] auto match_by_value(const std::vector<match_arm>& arms,
                                       stdx::option<u32>             catch_all,
                                       const operand&                scrutinee,
                                       gs::type&                     type,
                                       const source&                 src) -> result<operand>;
+    // A `match` at compile time, which analyzes only the arm it takes
     [[nodiscard]] auto run_match(const std::vector<match_arm>&              arms,
                                  const std::vector<gs::pattern::row_input>& rows,
                                  const operand&                             scrutinee,
-                                 const source&                              src) -> result<operand>;
+                                 const source&                              src,
+                                 bool                                       binding = false,
+                                 const stdx::option<comptime_alias>& root = stdx::none)
+        -> result<operand>;
     [[nodiscard]] auto emit_match(const std::vector<match_arm>&              arms,
                                   const std::vector<gs::pattern::row_input>& rows,
                                   const gs::pattern::decision_tree&          tree,
                                   ref                                        operand_ref,
                                   const operand&                             scrutinee,
                                   gs::type&                                  type,
-                                  const source& src) -> result<operand>;
+                                  const source&                              src,
+                                  stdx::option<u32> binding_else) -> result<operand>;
     [[nodiscard]] auto scrutinee_address(ref            operand_ref,
                                          const operand& scrutinee,
                                          gs::type&      type,
@@ -1590,10 +1751,25 @@ class analyzer {
                                          bool           aliased,
                                          const source&  src) -> result<match_root>;
     // A capture's slot type, a `&v` or `^v` capture's checked against where it's reached
-    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, const match_root& root)
+    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, capture_access root)
         -> result<gsl::not_null<gs::type*>>;
+    // Where a compile-time `match` takes its scrutinee apart, when a capture aliases it
+    [[nodiscard]] auto comptime_scrutinee(ref            operand_ref,
+                                          const operand& scrutinee,
+                                          const source&  src) -> result<stdx::option<comptime_alias>>;
+    // Whether `r` names a `mut?` parameter, whose argument has its caller's mutability
+    [[nodiscard]] auto names_poly_param(ref r, const source& src) -> result<bool>;
+    // A capture's type under its modifier, `what` naming the value in its errors
+    [[nodiscard]] auto alias_type(ast::type_modifier modifier,
+                                  gs::type&          value_type,
+                                  capture_access     access,
+                                  std::string_view   what,
+                                  const source&      src) -> result<gsl::not_null<gs::type*>>;
     [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
+    [[nodiscard]] auto slot_operand(const capture_slot& slot) -> operand;
+    // Binds the names an arm's patterns capture to the arm's slots
+    void bind_slots(const match_lowering& m, usize arm);
 
     // Types with no declaration (synthesized.cc)
     [[nodiscard]] auto analyze_merge_enums(inst_id inst) -> result<operand>;
@@ -2253,6 +2429,10 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, dyn_entry> dyn_entries_;
     // The reference each binary operator read its left side through
     ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
+    // The packed fields a nested packed field's place is reached through
+    std::vector<place> packed_parents_;
+    // The pattern each opaque pattern node was built from, by its AST node
+    ankerl::unordered_dense::map<usize, inst_id> opaque_patterns_;
     // Nonzero inside a comptime body of a runtime function, where nothing may emit GIR
     usize comptime_depth_{0};
     // Inside a signature's `@TypeOf`, which reads a runtime parameter's type only

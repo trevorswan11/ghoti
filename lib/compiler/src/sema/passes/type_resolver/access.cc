@@ -361,11 +361,11 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         auto&       underlying{slice_type ? slice_type->underlying : array_type->underlying};
         if (member_ident.name == "ptr") {
-            if (array_type) { structural_members_.insert(ast::node_id{member}.get_index()); }
+            if (array_type) { structural_members_.insert(member.get_index()); }
             return &ctx_.get_pointer(target_type->get_key().get_mut(), underlying);
         }
         if (member_ident.name == "len") {
-            if (array_type) { structural_members_.insert(ast::node_id{member}.get_index()); }
+            if (array_type) { structural_members_.insert(member.get_index()); }
             return &ctx_.get_builtin_resolved_type(type_kind::USIZE);
         }
         return make_sema_err(fmt::format("Type '{}' has no field named '{}'",
