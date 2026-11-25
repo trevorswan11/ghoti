@@ -420,8 +420,7 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
 auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
     const auto op{id.get_token_type()};
     if (op == token_type_t::BOOLEAN_AND || op == token_type_t::BOOLEAN_OR) {
-        // The first instruction the left side adds to this body, offset by one so zero means none.
-        // A nested right side's instructions come first but live in a body of their own
+        // The first instruction the left side adds to this body, offset by one so zero means none
         const auto before{body_->size()};
         const auto lhs{expr(node.lhs)};
         const u32  lhs_start{body_->size() > before ? std::to_underlying((*body_)[before]) + 1 : 0};

@@ -191,7 +191,7 @@ auto analyzer::coerce_vector(const operand&  op,
             return stdx::option<operand>{operand{pool.intern(data, target)}};
         }
 
-        // A known value is still repacked at runtime, as the old emitter does
+        // A known value is still repacked at runtime
         TRY(require_runtime(src));
         const auto       built{built_value(op)};
         const auto       value{TRY(as_runtime(op, src))};

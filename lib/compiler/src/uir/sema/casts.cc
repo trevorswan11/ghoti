@@ -132,7 +132,7 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
     const auto which{static_cast<builtin_t>(rec.u32_field())};
     const auto operand_ref{rec.refs_field().front()};
 
-    // Only `@intFromBool` has a target of its own to fall back on, a `u1` for each lane
+    // Only `@intFromBool` has a target of its own to fall back on (u1)
     if (!target && which == builtin_t::INT_FROM_BOOL) {
         auto&      bit{comp_.ctx().get_int(1, false)};
         const auto from{TRY(resolve_value(operand_ref, src))};
@@ -846,11 +846,11 @@ auto analyzer::fold_cast(builtin_t       which,
         return pool.intern(static_cast<i64>(*small), target);
     }
     case builtin_t::BIT_CAST: {
-        // An array or vector reinterprets its elements' bits end to end, as little-endian memory
-        // holds them
+        // An array or vector reinterprets its elements' bits end to end
         const auto lined{[](const gs::type& t) {
             return t.get_kind() == gs::type_kind::ARRAY || t.get_kind() == gs::type_kind::VECTOR;
         }};
+
         // The old evaluator leaves a vector's bits to runtime, which its mirrored folds keep
         if (comp_.speculating() && (gs::is_vector(from) || gs::is_vector(target))) {
             return comp_.needs_runtime(u_, src);

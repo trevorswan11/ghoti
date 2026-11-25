@@ -252,7 +252,7 @@ auto compilation::test_units() const -> std::vector<bool> {
         for (const auto decl : u.uir->root_namespace().decls) {
             const auto& d{u.uir->decl_at(decl)};
             if (d.kind != decl_kind::TEST || !d.node) { continue; }
-            // An import under a `@cfg` counts when AstGen lowered it, as only a chosen arm's are
+            // An import under a `@cfg` counts when AstGen lowered it
             const auto& test{ast.get_as<ast::test_stmt>(*d.node)};
             auto        stmts{ast.get_as<ast::block_stmt>(test.block).statements};
             while (!stmts.empty()) {

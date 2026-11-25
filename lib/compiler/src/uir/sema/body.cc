@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gsl/pointers>
@@ -14,6 +15,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/index.hh"
@@ -151,7 +153,7 @@ auto analyzer::analyze_function() -> result<void> {
         if (binding && binding->pack_size) {
             std::vector<operand> elements;
             for (usize k{0}; k < *binding->pack_size; ++k) {
-                // A slice arrives in a slot of its own, as any slice parameter does
+                // A slice arrives in a slot of its own
                 auto&            type{*fn_->params[slot++]};
                 const auto&      added{gir_fn_->add_param(fmt::format("{}#{}", name, k), type)};
                 const gir::value value{added.id, type};

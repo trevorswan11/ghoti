@@ -202,8 +202,7 @@ auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
     const auto conv{static_cast<ast::calling_convention>(rec.u32_field())};
     const auto bits{rec.u32_field()};
     const bool is_extern{(bits & flags::EXTERN_FN) != 0};
-    // `dyn Fn(...)` is an erased `fn(...)`, and an `impl Fn(...)` bound is a pattern a call's
-    // callable matches, whose `auto` slots take anything
+    // `dyn Fn(...)` is an erased `fn(...)` and an `impl Fn(...)` bound is a copmtime contract
     const bool is_pattern{(bits & flags::IMPL_FN) != 0};
 
     if (!is_extern && (bits & flags::EXPLICIT_CONV) != 0) {

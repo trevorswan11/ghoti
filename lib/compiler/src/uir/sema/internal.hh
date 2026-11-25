@@ -780,7 +780,6 @@ class compilation {
     // `signature` taking an environment of `env_type` by `&mut` first
     [[nodiscard]] auto with_environment(gs::type& signature, gs::type& env_type) -> gs::type&;
 
-    // Analyzes a body whose return type is inferred now, since a caller needs that type
     // An untyped math result's function and input, which a concrete float computes again
     auto note_math_origin(ip::index value, math_origin origin) -> void {
         math_origins_.insert_or_assign(std::to_underlying(value), origin);
@@ -793,6 +792,7 @@ class compilation {
 
     // An inferred return type that an untyped `return` leaves to the peer of every `return`
     [[nodiscard]] auto infer_peer_return(instance& fn) -> result<void>;
+    // Analyzes a body whose return type is inferred now, since a caller needs that type
     [[nodiscard]] auto infer_return(instance& fn, const unit& caller, const source& use)
         -> result<void>;
     // The function type a bodyless literal written as a value spells
@@ -1460,7 +1460,7 @@ class analyzer {
     [[nodiscard]] auto local_closure(inst_id inst) -> result<operand>;
     // The value a capture slot the body reads elsewhere holds in `captures`
     [[nodiscard]] auto capture_placeholder() -> ip::index;
-    // A closure's environment built from what it stores, as a value of its binding's type
+    // A closure's environment built from what it stores
     [[nodiscard]] auto build_environment(const closure_env& env, gsl::span<const gir::value> stored)
         -> gir::value;
     // Reads a closure body's captures from its environment parameter
@@ -2055,7 +2055,7 @@ class analyzer {
     [[nodiscard]] auto load_comptime(const comptime_place& p) -> operand;
     // A runtime slot holding a copy of what comptime memory holds
     [[nodiscard]] auto comptime_copy(const comptime_place& p, const source& src) -> result<place>;
-    // The compile-time address of a place in comptime memory, as a value of `type`
+    // The compile-time address of a place in comptime memory as a value of `type`
     [[nodiscard]] auto memory_address(const comptime_place& p, gs::type& type) -> ip::index;
     // The place a compile-time address names
     [[nodiscard]] auto memory_place(const operand& op) -> stdx::option<comptime_place>;
@@ -2070,7 +2070,7 @@ class analyzer {
     // The element a compile-time slice or element pointer reaches at an index
     [[nodiscard]] auto memory_element(const operand& object, ref index_ref, const source& src)
         -> result<stdx::option<comptime_place>>;
-    // What a known pointer or slice holds, as `*p` reads it at compile time
+    // What a known pointer or slice holds
     [[nodiscard]] auto comptime_deref(const operand& ptr) -> stdx::option<operand>;
     // `.ptr` or `.len` of comptime memory or a compile-time slice
     [[nodiscard]] auto memory_field(const operand& object, std::string_view name)
@@ -2083,7 +2083,7 @@ class analyzer {
                                     gsl::span<const comptime_step> path,
                                     ip::index                      value,
                                     const source&                  src) -> result<ip::index>;
-    // An element or field of comptime memory, as a place within the same allocation
+    // An element or field of comptime memory
     [[nodiscard]] auto comptime_elem_place(const comptime_place& p,
                                            ref                   index_ref,
                                            const source&         src) -> result<operand>;

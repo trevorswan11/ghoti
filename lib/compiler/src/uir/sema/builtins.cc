@@ -590,7 +590,7 @@ auto analyzer::layout_ready(gs::type& type, const source& src) -> result<void> {
 
 auto analyzer::builtin_as(inst_id inst, gsl::span<const ref> args, const source& src)
     -> result<operand> {
-    // `@as(x)` converts to the type it is used as, once it is
+    // `@as(x)` converts to the type it is used as
     if (args.size() == 1) { return cast_ref{inst}; }
     if (args.size() != 2) { return comp_.unsupported(u_, src, "an `@as` of this arity"); }
     return as_to(*TRY(resolve_type(args[0], src)), args[1], src);
@@ -888,7 +888,7 @@ auto analyzer::builtin_field_parent_ptr(gsl::span<const ref> args, const source&
                                         display(ptr_type)));
     }
 
-    // The parent's address is the field's, less the field's offset
+    // The parent's address is the field's minus its offset
     TRY(require_runtime(src));
     auto&                   result_type{ctx.get_pointer(
         ptr_type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE, parent)};

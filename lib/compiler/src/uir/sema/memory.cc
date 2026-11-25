@@ -702,7 +702,7 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         yielded = TRY(coerce_to(yielded, type, init_src, {.what = use_site::kind::STORE}));
     }
 
-    // A known vector in a runtime body is built where it is declared, as the old emitter does
+    // A known vector in a runtime body is built where it is declared
     const auto vector_value{comptime_value(yielded)};
     if (vector_value && gir_fn_ && !is_comptime() && gs::is_vector(type_of(yielded)) &&
         !comp_.constants().value_at(*vector_value).data.is<ip::undefined_value>()) {
@@ -780,8 +780,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
         const auto known{reference_reads_.find(rhs)};
         if (known == reference_reads_.end()) { return stdx::option<gir::value>{}; }
 
-        // `a += b` lowers its operator at the assignment, `a = a + b` at the `+`. A `let mut`'s
-        // left side is a load of the slot the store writes
+        // `a += b` lowers its operator at the assignment
         const auto operand_ref{mod().data_of(rhs).bin.lhs};
         const auto operand_inst{as_inst(operand_ref)};
         const bool reads_target{operand_ref == d.bin.lhs ||
@@ -801,7 +800,7 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
 
     auto destination{TRY(store_destination(through, src))};
 
-    // A `let mut` holding a reference has value semantics, so an assignment writes its referent
+    // A `let mut` holding a reference has value semantics
     const auto lhs_inst{as_inst(d.bin.lhs)};
     const bool initializes{lhs_inst && mod().tag_of(*lhs_inst) == tag::alloc_mut &&
                            same_node(src_of(*lhs_inst), src)};

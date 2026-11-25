@@ -17,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -533,8 +534,7 @@ auto analyzer::vector_math(syntax::builtin_t       which,
         widened.emplace_back(TRY(vector_operand(v, lane, vec.len, src)));
     }
 
-    // Known lanes fold one at a time, as the old emitter's evaluator does, else the whole call
-    // runs at runtime
+    // Known lanes fold one at a time, otherwise the whole call runs at runtime
     std::vector<std::vector<ip::index>> known;
     for (const auto& w : widened) {
         if (const auto lanes{lanes_of(w, vec.len)}) { known.emplace_back(*lanes); }

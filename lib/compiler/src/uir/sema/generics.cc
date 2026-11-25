@@ -154,8 +154,7 @@ auto compilation::declare_generic(const unit&           u,
     auto       name{unprefixed ? std::string{u.uir->string(d.name)}
                                : TRY(member_symbol(u, decl, func, member))};
 
-    // An `impl` block's generic member is named after the type it implements, any other member
-    // after the type declaring it
+    // An `impl` block's generic member is named after the type it implements
     const bool in_impl{d.owner && u.uir->tag_of(*d.owner) == tag::impl_decl && member.self_type};
     const auto enclosing{in_instance    ? stdx::option<gs::type&>{*member.scope->type}
                          : in_impl      ? stdx::option<gs::type&>{*member.self_type}
@@ -382,8 +381,7 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
         const auto type_body{p.body_field()};
-        // A default is computed by the wrapper a short call is sent to, not by the function
-        p.skip_body();
+        p.skip_body(); // A default is computed by the wrapper a short call is sent to
         const auto  param_flags{p.u32_field()};
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};
@@ -513,7 +511,7 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 fmt::format("a parameter of a comptime-only type like `{}`", type.to_string()));
         }
 
-        // A later type may ask a runtime parameter's type, as `@TypeOf(x)`, but never its value
+        // A later type may ask a runtime parameter's type but never its value
         sig.bind(param, operand{gir::value{gir::local_id{}, type}});
         binding.key.args.emplace_back(interned_type(type));
         binding.bindings.emplace_back<param_binding>({.value = stdx::none, .has_slot = true});
@@ -719,8 +717,7 @@ auto analyzer::pack_element_type(const operand& arg) -> gs::type& {
     const auto exact{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
     if (type.get_kind() != gs::type_kind::COMPTIME_INT || !exact) { return type; }
 
-    // An untyped integer takes the first of these that holds it. The old resolver gives a wider
-    // one `i32`, which its value doesn't fit, so that stays comptime-only here
+    // An untyped integer takes the first of these that holds it
     auto& ctx{comp_.ctx()};
     for (const auto [bits, is_signed] : {std::pair{32U, true},
                                          std::pair{64U, true},

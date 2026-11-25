@@ -128,8 +128,7 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     std::erase_if(values, [&](const operand& v) { return is_untyped_literal(v); });
     auto& peer{*TRY(peer_type(values, src))};
 
-    // A runtime array arm meets a slice where it is stored, which its value no longer names. A
-    // known one, like a string, is built in its arm
+    // A runtime array arm meets a slice where it is stored
     if (peer.get_kind() == gs::type_kind::SLICE &&
         std::ranges::any_of(values, [&](const operand& v) {
             return type_of(v).get_kind() == gs::type_kind::ARRAY && !comptime_value(v);

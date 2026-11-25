@@ -266,8 +266,7 @@ auto compilation::infer_return(instance& fn, const unit& caller, const source& u
 
 namespace {
 
-// Whether a function's own instructions return an untyped literal, which only the peer of every
-// `return` types. A function's instructions come before it
+// Whether a function's own instructions return an untyped literal
 [[nodiscard]] auto returns_untyped(const module_t& m, inst_id func) -> bool {
     record_reader     rec{m, m.data_of(func).pl.extra};
     const auto        params{rec.body_field()};

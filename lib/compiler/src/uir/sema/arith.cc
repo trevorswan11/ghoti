@@ -353,8 +353,6 @@ auto analyzer::compare_out_of_range(const binary_info& info, const operand& lhs,
     -> stdx::option<bool> {
     if (info.cls != op_class::EQUALITY && info.cls != op_class::ORDERING) { return stdx::none; }
 
-    // An untyped number no value of the other side's integer type reaches compares the same way
-    // with every value, above all of them when it's positive
     const auto outside{[&](const operand& typed, const operand& untyped) -> stdx::option<bool> {
         auto&      type{type_of(typed)};
         const auto known{comptime_value(untyped)};

@@ -88,7 +88,6 @@ TEST_CASE("Unary operators, `and` and `or` apply lane by lane", "[uir]") {
 }
 
 TEST_CASE("Bitwise operators on known bool lanes fold as bitwise operators", "[uir]") {
-    // The old evaluator doesn't fold these, so only UIR's result is checked
     const auto run{helpers::uir_accepted(R"(
         const a: @Vector(2, bool) = .{ true, false };
         const t: @Vector(2, bool) = .{ true, true };

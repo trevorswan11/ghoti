@@ -33,7 +33,7 @@ using syntax::builtin_t;
            name == "seq_cst";
 }
 
-// A total order over `MemoryOrder`, as C++11 ranks them
+// A total order over `MemoryOrder` (C++11 ranking)
 [[nodiscard]] auto order_rank(std::string_view name) noexcept -> i32 {
     if (name == "relaxed") { return 0; }
     if (name == "acquire" || name == "release") { return 1; }

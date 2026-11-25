@@ -30,8 +30,7 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// The declaration flags this phase gives a meaning to. A synthesized one, such as a default's
-// wrapper or a destructured binding, is analyzed like any other
+// The declaration flags this phase gives a meaning to
 constexpr auto HANDLED_FLAGS{decl_flags::PUBLIC | decl_flags::CONSTANT | decl_flags::LET |
                              decl_flags::MUT | decl_flags::COMPTIME | decl_flags::WEAK |
                              decl_flags::SYNTHESIZED};
@@ -425,8 +424,7 @@ auto compilation::declare_function(const unit&           u,
         record_reader p{m, m.data_of(param).pl.extra};
         p.skip_str();
         const auto type_body{p.body_field()};
-        // A default is computed by the wrapper a short call is sent to, not by the function
-        p.skip_body();
+        p.skip_body(); // A default is computed by the wrapper a short call is sent to
         const auto  param_flags{p.u32_field()};
         const auto  modifier{p.u32_field()};
         const auto& param_src{m.src_of(param)};

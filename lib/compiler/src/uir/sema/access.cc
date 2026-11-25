@@ -629,8 +629,7 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src,
         return index;
     }};
 
-    // A lane is read from and written into the vector loaded after its index, a read loading it
-    // before the bounds check and a write after it
+    // A lane is read from and written into the vector loaded after its index
     if (const auto vec{gs::vector_of(type)}) {
         auto&                    usize_type{builtin(gs::type_kind::USIZE)};
         stdx::option<gir::value> loaded;
