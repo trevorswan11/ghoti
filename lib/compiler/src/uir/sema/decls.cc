@@ -678,8 +678,6 @@ auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
         return analyze_global(decl, *erased, declared, attrs, src);
     }
 
-    // An `auto` declaration takes its value's type, a number its default one, as does a `let mut`
-    // with no type, which needs storage of a concrete one
     const bool needs_concrete{infers || (!d.type_body && d.has(decl_flags::MUT))};
     if (needs_concrete && gs::is_comptime_numeric(type_of(*value).get_kind())) {
         declared.emplace(comp_.ctx().default_concrete(type_of(*value)));

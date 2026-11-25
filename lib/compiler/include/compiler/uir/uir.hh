@@ -18,6 +18,7 @@
 
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 
 namespace ghoti::uir {
 

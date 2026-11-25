@@ -376,9 +376,9 @@ auto analyzer::run_for(inst_id                  inst,
                 .start = stdx::none, .descending = false, .elem = &alias, .elements = {}};
             for (u64 i{0}; i < view->len; ++i) {
                 auto element{view->array};
-                element.path.emplace_back(
-                    comptime_step{.index = static_cast<u32>(view->offset + i), .type = view->elem});
-                values.elements.emplace_back(operand{memory_address(element, alias)});
+                element.path.emplace_back<comptime_step>(
+                    {.index = static_cast<u32>(view->offset + i), .type = view->elem});
+                values.elements.emplace_back<operand>({memory_address(element, alias)});
             }
 
             bound_by(values.elements.size());

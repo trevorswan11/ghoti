@@ -1728,8 +1728,7 @@ class analyzer {
                                       const operand&                scrutinee,
                                       gs::type&                     type,
                                       const source&                 src) -> result<operand>;
-    // A `match` at compile time, which analyzes only the arm it takes. A destructuring's check
-    // reports a value that doesn't fit as such
+    // A `match` at compile time, which analyzes only the arm it takes
     [[nodiscard]] auto run_match(const std::vector<match_arm>&              arms,
                                  const std::vector<gs::pattern::row_input>& rows,
                                  const operand&                             scrutinee,

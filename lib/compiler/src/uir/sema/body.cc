@@ -28,32 +28,32 @@ namespace ghoti::uir::sema {
 
 namespace {
 
-// `c_int` and the rest are the prelude's own types, sized as the target's C ABI says
-[[nodiscard]] auto c_type(gs::context& ctx, std::string_view name) -> stdx::option<gs::type&> {
-    if (!ctx.prelude_index) { return stdx::none; }
-    const auto symbol{ctx.registry.get(*ctx.prelude_index).get_opt(name)};
-    if (!symbol) { return stdx::none; }
-    const auto builtin{symbol->get_data().as_opt<gs::symbols::builtin>()};
-    if (!builtin) { return stdx::none; }
-    return builtin->get_type();
-}
-
 // The type a well-known type operand denotes, none for one this phase doesn't handle
 [[nodiscard]] auto well_known_type(gs::context& ctx, well_known w) -> stdx::option<gs::type&> {
+    const auto c_type{[&](std::string_view name) -> stdx::option<gs::type&> {
+        if (!ctx.prelude_index) { return stdx::none; }
+        const auto symbol{ctx.registry.get(*ctx.prelude_index).get_opt(name)};
+        if (!symbol) { return stdx::none; }
+        const auto builtin{symbol->get_data().as_opt<gs::symbols::builtin>()};
+        if (!builtin) { return stdx::none; }
+        return builtin->get_type();
+    }};
+
     const auto builtin{[&](gs::type_kind kind) -> stdx::option<gs::type&> {
         return ctx.get_builtin_resolved_type(kind);
     }};
+
     switch (w) {
-    case well_known::c_char_type:         return c_type(ctx, "c_char");
-    case well_known::c_short_type:        return c_type(ctx, "c_short");
-    case well_known::c_ushort_type:       return c_type(ctx, "c_ushort");
-    case well_known::c_int_type:          return c_type(ctx, "c_int");
-    case well_known::c_uint_type:         return c_type(ctx, "c_uint");
-    case well_known::c_long_type:         return c_type(ctx, "c_long");
-    case well_known::c_ulong_type:        return c_type(ctx, "c_ulong");
-    case well_known::c_longlong_type:     return c_type(ctx, "c_longlong");
-    case well_known::c_ulonglong_type:    return c_type(ctx, "c_ulonglong");
-    case well_known::c_longdouble_type:   return c_type(ctx, "c_longdouble");
+    case well_known::c_char_type:         return c_type("c_char");
+    case well_known::c_short_type:        return c_type("c_short");
+    case well_known::c_ushort_type:       return c_type("c_ushort");
+    case well_known::c_int_type:          return c_type("c_int");
+    case well_known::c_uint_type:         return c_type("c_uint");
+    case well_known::c_long_type:         return c_type("c_long");
+    case well_known::c_ulong_type:        return c_type("c_ulong");
+    case well_known::c_longlong_type:     return c_type("c_longlong");
+    case well_known::c_ulonglong_type:    return c_type("c_ulonglong");
+    case well_known::c_longdouble_type:   return c_type("c_longdouble");
     case well_known::u8_type:             return ctx.get_int(8, false);
     case well_known::i8_type:             return ctx.get_int(8, true);
     case well_known::u16_type:            return ctx.get_int(16, false);

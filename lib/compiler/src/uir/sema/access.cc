@@ -316,10 +316,11 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
         };
     }
 
-    // Through a `mut?` pointer an array field's elements read as immutable, and a volatile
-    // struct's fields are volatile too
-    auto&      declared{*comp_.ctx().pool.with_volatile(
+    // A volatile struct's fields are volatile too
+    auto& declared{*comp_.ctx().pool.with_volatile(
         type.get_data().as<gs::types::struct_t>().type_at(index), type.is_volatile())};
+
+    // Through a `mut?` pointer an array field's elements read as immutable
     auto&      field_type{object.pointee->is_poly()
                               ? immutable_view(declared)
                               : mutable_view(declared, base.is_mutable || base.owned_copy)};
