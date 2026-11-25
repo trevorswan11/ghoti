@@ -69,7 +69,8 @@ struct field_spans {
 
 auto compilation::synthesize_struct(nominal&                         n,
                                     gsl::span<const synthetic_field> fields,
-                                    bool                             is_extern) -> void {
+                                    bool                             is_extern,
+                                    bool                             is_packed) -> void {
     if (n.state == nominal_state::RESOLVED) { return; }
     auto field_types{ctx_.pool.get_many_pending(fields.size())};
     auto alignments{ctx_.arena.make_span<u64>(fields.size())};
@@ -88,7 +89,7 @@ auto compilation::synthesize_struct(nominal&                         n,
                                          ctx_.pool.get_many_pending(0),
                                          *n.owner->source,
                                          is_extern,
-                                         false,
+                                         is_packed,
                                          alignments,
                                          gsl::span<const std::string_view>{names},
                                          gsl::span<const bool>{publics});
@@ -98,8 +99,7 @@ auto compilation::synthesize_struct(nominal&                         n,
 
 auto compilation::synthesize_union(nominal&                         n,
                                    gsl::span<const synthetic_field> fields,
-                                   bool                             tagged,
-                                   bool                             is_extern) -> void {
+                                   synthetic_union                  shape) -> void {
     if (n.state == nominal_state::RESOLVED) { return; }
     auto field_types{ctx_.pool.get_many_pending(fields.size())};
     auto names{make_uninit_span<std::string_view>(ctx_.arena, fields.size())};
@@ -112,10 +112,10 @@ auto compilation::synthesize_union(nominal&                         n,
                                         gsl::span<const ast::union_expr::field>{},
                                         ctx_.pool.get_many_pending(0),
                                         *n.owner->source,
-                                        !tagged,
-                                        is_extern,
-                                        false,
-                                        stdx::option<gs::type&>{},
+                                        !shape.tagged,
+                                        shape.is_extern,
+                                        shape.is_packed,
+                                        shape.tag_enum,
                                         gsl::span<const std::string_view>{names});
     n.state       = nominal_state::RESOLVED;
     n.synthesized = true;
@@ -454,11 +454,9 @@ auto analyzer::builtin_struct(inst_id inst, gsl::span<const ref> args, const sou
                                         is_extern ? "is_packed" : "is_extern"));
     }
 
-    const bool extern_struct{*is_extern};
-    if (*is_packed) { return comp_.unsupported(u_, src, "a packed struct"); }
     const auto fields{TRY(descriptor_fields(desc, "@Struct", true, src))};
     auto&      n{comp_.declare_nominal(u_, inst, gs::type_kind::STRUCT, {desc})};
-    comp_.synthesize_struct(n, fields, extern_struct);
+    comp_.synthesize_struct(n, fields, *is_extern, *is_packed);
     return interned_type(*n.type);
 }
 
@@ -485,16 +483,55 @@ auto analyzer::builtin_union(inst_id inst, gsl::span<const ref> args, const sour
         }
     }
 
-    if (*is_packed) { return comp_.unsupported(u_, src, "a packed union"); }
-    const auto tag_index{TRY(known_field(desc, "tag_type", src))};
+    const auto failed{[&](std::string what) -> result<operand> {
+        return comp_.report(
+            u_, src, gs::error::COMPTIME_EVALUATION_FAILED, fmt::format("'@Union': {}", what));
+    }};
+
+    // `tag_type` defaults to `void`, so a descriptor without it is a `union(enum)`
+    stdx::option<gs::type&> tag_enum;
+    const auto              tag_index{TRY(known_field(desc, "tag_type", src))};
     if (tag_index && pool.is_type(*tag_index) &&
         pool.type_at(*tag_index).get_kind() != gs::type_kind::VOID_) {
-        return comp_.unsupported(u_, src, "a union tagged by its own enum");
+        auto& tag{pool.type_at(*tag_index)};
+        if (tag.get_kind() != gs::type_kind::ENUM) {
+            return failed(fmt::format("'tag_type' must be an enum or void, found '{}'",
+                                      comp_.ctx().type_display_name(tag)));
+        }
+
+        if (!*tagged || *is_extern || *is_packed) {
+            return failed("only a tagged Ghoti union can name a 'tag_type'");
+        }
+
+        tag_enum.emplace(tag);
     }
 
     const auto fields{TRY(descriptor_fields(desc, "@Union", false, src))};
-    auto&      n{comp_.declare_nominal(u_, inst, gs::type_kind::UNION, {desc})};
-    comp_.synthesize_union(n, fields, *tagged, *is_extern);
+
+    // Every field names a variant of the tag enum, and every variant has a field
+    if (tag_enum) {
+        const auto& variants{tag_enum->get_data().as<gs::types::enum_t>().variant_names};
+        for (const auto& field : fields) {
+            if (!std::ranges::contains(variants, field.name)) {
+                return failed(fmt::format("field '{}' is not a variant of '{}'",
+                                          field.name,
+                                          comp_.ctx().type_display_name(*tag_enum)));
+            }
+        }
+
+        if (variants.size() != fields.size()) {
+            return failed(fmt::format("every variant of '{}' needs a field",
+                                      comp_.ctx().type_display_name(*tag_enum)));
+        }
+    }
+
+    auto& n{comp_.declare_nominal(u_, inst, gs::type_kind::UNION, {desc})};
+    comp_.synthesize_union(n,
+                           fields,
+                           {.tagged    = *tagged,
+                            .is_extern = *is_extern,
+                            .is_packed = *is_packed,
+                            .tag_enum  = tag_enum});
     return interned_type(*n.type);
 }
 

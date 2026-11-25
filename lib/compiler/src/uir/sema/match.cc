@@ -40,6 +40,16 @@ namespace {
     });
 }
 
+// Whether a capture may write through what it aliases
+[[nodiscard]] auto holds_mutable_alias(const std::vector<pattern::row_input>& rows) -> bool {
+    return std::ranges::any_of(rows, [](const pattern::row_input& row) {
+        return std::ranges::any_of(pattern::captures_of(*row.root), [](const auto& site) {
+            const auto modifier{site.capture.modifier};
+            return modifier.is_mutable_ref() || modifier.is_mutable_ptr() || modifier.is_poly();
+        });
+    });
+}
+
 // Everything a bit-packed field's sub-pattern binds lives in bit-packed storage
 auto mark_bit_packed(pattern::node& n) -> void {
     for (auto& site : n.captures) { site.place_is_bit_packed = true; }
@@ -737,6 +747,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     }
 
     // A reference is matched on what it refers to, a compile-time one by the value it holds
+    const auto given{scrutinee};
     if (const auto referent{comptime_referent(scrutinee)}) { scrutinee = operand{*referent}; }
 
     auto&      matched_type{type_of(scrutinee)};
@@ -790,7 +801,11 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
 
     if (catch_all) { add_arm(*catch_all); }
 
-    if (comptime_match || is_comptime()) { return run_match(arms, rows, scrutinee, src, binding); }
+    if (comptime_match || is_comptime()) {
+        const auto root{holds_alias(rows) ? TRY(comptime_scrutinee(operand_ref, given, src))
+                                          : stdx::none};
+        return run_match(arms, rows, scrutinee, src, binding, root);
+    }
 
     const auto tree{pattern::compile(rows, type, comp_.ptr_bits())};
     if (!tree.missing.empty() && binding) {
@@ -810,8 +825,8 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
                                         fmt::join(tree.missing, ", ")));
     }
 
-    // A capture that aliases the scrutinee keeps the match at runtime
-    if (!through_ref && !holds_alias(rows)) {
+    // A capture that may write through the scrutinee keeps the match at runtime
+    if (!through_ref && !holds_mutable_alias(rows)) {
         if (const auto folded{TRY(fold_match(arms, rows, operand_ref, src))}) { return *folded; }
     }
 
@@ -834,7 +849,9 @@ auto analyzer::fold_match(const std::vector<match_arm>&              arms,
     const auto folded{[&] -> result<operand> {
         const auto scope{comptime_scope()};
         const auto scrutinee{TRY(reevaluate(operand_ref, src))};
-        return run_match(arms, rows, scrutinee, src);
+        const auto root{holds_alias(rows) ? TRY(comptime_scrutinee(operand_ref, scrutinee, src))
+                                          : stdx::none};
+        return run_match(arms, rows, scrutinee, src, false, root);
     }()};
     const bool unsupported{!folded && folded.error() == stop::UNSUPPORTED};
     comp_.abandon(before, unsupported);
@@ -978,8 +995,35 @@ template <typename Lookup> void analyzer::bind_arm_names(const match_arm& arm, L
 auto analyzer::known_match(const pattern::node&                                 node,
                            ip::index                                            value,
                            std::vector<std::pair<std::string_view, ip::index>>& bound,
-                           const source& src) -> result<bool> {
+                           const source&                                        src,
+                           const stdx::option<comptime_alias>& at) -> result<bool> {
     auto& pool{comp_.constants()};
+
+    // A `&v` or `^v` capture binds the address of where its value lives
+    const auto bind_captures{[&] -> result<void> {
+        for (const auto& site : node.captures) {
+            if (!site.capture.modifier.is_ref() && !site.capture.modifier.is_ptr()) {
+                bound.emplace_back(capture_name(site.capture), value);
+                continue;
+            }
+
+            if (!at) {
+                return comp_.unsupported(
+                    u_, src, "a capture by reference of a value with no compile-time storage");
+            }
+
+            auto& alias{*TRY(capture_type(site, at->access))};
+            bound.emplace_back(capture_name(site.capture), memory_address(at->place, alias));
+        }
+
+        return {};
+    }};
+    const auto child_at{[&](usize index, gs::type& type) -> stdx::option<comptime_alias> {
+        if (!at) { return stdx::none; }
+        auto inner{*at};
+        inner.place.path.emplace_back(comptime_step{static_cast<u32>(index), &type});
+        return inner;
+    }};
 
     // A type is only taken whole, by a wildcard or a capture
     if (pool.is_type(value)) {
@@ -991,10 +1035,7 @@ auto analyzer::known_match(const pattern::node&                                 
             return comp_.unsupported(u_, src, "a pattern on a type at compile time");
         }
 
-        for (const auto& site : node.captures) {
-            bound.emplace_back(capture_name(site.capture), value);
-        }
-
+        TRY(bind_captures());
         return true;
     }
 
@@ -1059,7 +1100,12 @@ auto analyzer::known_match(const pattern::node&                                 
         for (usize i{0}; i < node.children.size(); ++i) {
             const auto child{i < values.size() ? values[i] : stdx::none};
             if (!child) { return comp_.unsupported(u_, src, "an undefined part of a pattern"); }
-            if (!TRY(known_match(*node.children[i].pattern, *child, bound, src))) { return false; }
+            const auto& c{node.children[i]};
+            const auto  inner{node.kind == pattern::node_kind::VARIANT
+                                  ? child_at(node.index, *c.pattern->value_type)
+                              : data.is<std::string>() ? stdx::none
+                                                       : child_at(c.index, *c.pattern->value_type)};
+            if (!TRY(known_match(*c.pattern, *child, bound, src, inner))) { return false; }
         }
     } else if (node.kind == pattern::node_kind::OPAQUE) {
         if (!TRY(known_opaque(node, value, src))) { return false; }
@@ -1067,10 +1113,7 @@ auto analyzer::known_match(const pattern::node&                                 
         return false;
     }
 
-    for (const auto& site : node.captures) {
-        bound.emplace_back(capture_name(site.capture), value);
-    }
-
+    TRY(bind_captures());
     return true;
 }
 
@@ -1078,16 +1121,13 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
                          const std::vector<pattern::row_input>& rows,
                          const operand&                         scrutinee,
                          const source&                          src,
-                         bool                                   binding) -> result<operand> {
+                         bool                                   binding,
+                         const stdx::option<comptime_alias>&    root) -> result<operand> {
     const auto value{TRY(require_comptime(scrutinee, src))};
     auto&      pool{comp_.constants()};
-    if (holds_alias(rows)) {
-        return comp_.unsupported(u_, src, "a capture by reference at compile time");
-    }
-
     for (const auto& row : rows) {
         std::vector<std::pair<std::string_view, ip::index>> bound_names;
-        if (!TRY(known_match(*row.root, value, bound_names, src))) { continue; }
+        if (!TRY(known_match(*row.root, value, bound_names, src, root))) { continue; }
         const auto& arm{arms[row.arm]};
         bind_arm_names(arm, [&](std::string_view name) -> stdx::option<operand> {
             const auto found{std::ranges::find_if(
@@ -1113,6 +1153,17 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
             if (payload) {
                 bound = un->payload.empty() ? void_value() : operand{un->payload.front()};
             }
+
+            // A `&v` or `^v` capture is the address its pattern bound under its name
+            record_reader capture{record(*as_inst(*arm.capture))};
+            const auto    name{capture.str_field()};
+            DISCARD(capture.u32_field());
+            const ast::type_modifier modifier{u64{capture.u32_field()}};
+            const auto               alias{std::ranges::find_if(
+                bound_names, [&](const auto& entry) { return entry.first == name; })};
+            if ((modifier.is_ref() || modifier.is_ptr()) && alias != bound_names.end()) {
+                bound = operand{alias->second};
+            }
             values_.insert_or_assign(*as_inst(*arm.capture), bound);
         }
 
@@ -1128,6 +1179,52 @@ auto analyzer::run_match(const std::vector<match_arm>&          arms,
                                 : "No match arm matched the value");
 }
 
+auto analyzer::comptime_scrutinee(ref operand_ref, const operand& scrutinee, const source& src)
+    -> result<stdx::option<comptime_alias>> {
+    // A reference is taken apart in the memory it refers to
+    auto& type{type_of(scrutinee)};
+    if (type.get_kind() == gs::type_kind::REFERENCE) {
+        const auto memory{memory_place(scrutinee)};
+        if (!memory) { return stdx::none; }
+        const bool is_poly{type.is_poly() || TRY(names_poly_param(operand_ref, src))};
+        return comptime_alias{
+            .place  = *memory,
+            .access = {.is_const = type.is_constant(), .is_addressable = true, .is_poly = is_poly}};
+    }
+
+    // A named one is taken apart where it lives
+    const auto inst{as_inst(operand_ref)};
+    const bool reads{inst && mod().tag_of(*inst) == tag::load};
+    const auto held{TRY(resolve(reads ? mod().data_of(*inst).un.operand : operand_ref, src))};
+    if (const auto p{held.as_opt<comptime_place>()}) {
+        // A `let mut` is read through a load, a `let` array of `mut` elements is held itself
+        return comptime_alias{.place  = *p,
+                              .access = {.is_const       = !reads && type_of(held).is_constant(),
+                                         .is_addressable = true,
+                                         .is_poly        = false}};
+    }
+
+    // Anything else is taken apart in a copy, which only read-only captures may alias
+    const auto value{comptime_value(scrutinee)};
+    if (!value) { return stdx::none; }
+    return comptime_alias{.place  = comp_.new_alloc({.type                = type,
+                                                     .value               = *value,
+                                                     .frame               = frame_,
+                                                     .runtime_depth       = runtime_depth_,
+                                                     .keeps_comptime_type = false}),
+                          .access = {.is_const = true, .is_addressable = false, .is_poly = false}};
+}
+
+auto analyzer::names_poly_param(ref r, const source& src) -> result<bool> {
+    const auto inst{as_inst(r)};
+    if (!inst || mod().tag_of(*inst) != tag::param) { return false; }
+    auto rec{record(*inst)};
+    rec.skip_str();
+    const auto type_body{rec.body_field()};
+    if (type_body.empty()) { return false; }
+    return TRY(eval_type(type_body, src))->is_poly();
+}
+
 auto analyzer::scrutinee_address(ref            operand_ref,
                                  const operand& scrutinee,
                                  gs::type&      type,
@@ -1138,10 +1235,10 @@ auto analyzer::scrutinee_address(ref            operand_ref,
     auto& scrutinee_type{type_of(scrutinee)};
     if (scrutinee_type.get_kind() == gs::type_kind::REFERENCE) {
         const auto ref_value{TRY(as_runtime(scrutinee, src))};
-        return match_root{.address        = gir::value{ref_value.data, type},
-                          .is_const       = scrutinee_type.is_constant(),
-                          .is_addressable = true,
-                          .is_poly        = scrutinee_type.is_poly()};
+        return match_root{.address = gir::value{ref_value.data, type},
+                          .access  = {.is_const       = scrutinee_type.is_constant(),
+                                      .is_addressable = true,
+                                      .is_poly        = scrutinee_type.is_poly()}};
     }
 
     // A named aggregate is taken apart where it lives, anything else from a copy
@@ -1157,10 +1254,9 @@ auto analyzer::scrutinee_address(ref            operand_ref,
         }
     }()};
     const auto in_place{[](const place& p) {
-        return match_root{.address        = p.address,
-                          .is_const       = !p.is_mutable,
-                          .is_addressable = true,
-                          .is_poly        = false};
+        return match_root{
+            .address = p.address,
+            .access  = {.is_const = !p.is_mutable, .is_addressable = true, .is_poly = false}};
     }};
     // A named scalar is matched in place when a capture aliases it
     const bool reads_storage{inst && mod().tag_of(*inst) == tag::load};
@@ -1183,51 +1279,67 @@ auto analyzer::scrutinee_address(ref            operand_ref,
     // A value with no storage, an aggregate one included, is matched in a copy
 
     const auto value{TRY(as_runtime(scrutinee, src))};
-    return match_root{.address        = spill(value, *value.type, false).address,
-                      .is_const       = true,
-                      .is_addressable = false,
-                      .is_poly        = false};
+    return match_root{.address = spill(value, *value.type, false).address,
+                      .access  = {.is_const = true, .is_addressable = false, .is_poly = false}};
 }
 
-auto analyzer::capture_type(const pattern::capture_site& site, const match_root& root)
+auto analyzer::capture_type(const pattern::capture_site& site, capture_access root)
     -> result<gsl::not_null<gs::type*>> {
     const auto modifier{site.capture.modifier};
     if (!modifier.is_ref() && !modifier.is_ptr()) { return &site.value_type; }
 
-    const source src{*site.capture.payload};
-
+    // A temporary's read-only views stay valid since its value is spilled once
     const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
-    if (wants_mutable && !root.is_addressable) {
+    return alias_type(modifier,
+                      site.value_type,
+                      {.is_const       = root.is_const || site.place_is_const,
+                       .is_addressable = root.is_addressable || !wants_mutable,
+                       .is_poly        = root.is_poly},
+                      "value",
+                      *site.capture.payload);
+}
+
+auto analyzer::alias_type(ast::type_modifier modifier,
+                          gs::type&          value_type,
+                          capture_access     access,
+                          std::string_view   what,
+                          const source&      src) -> result<gsl::not_null<gs::type*>> {
+    if (!modifier.is_ref() && !modifier.is_ptr()) { return &value_type; }
+    if (!access.is_addressable) {
         return comp_.report(u_,
                             src,
                             gs::error::ILLEGAL_RVALUE_CAPTURE,
-                            fmt::format("Cannot capture a temporary value by {}; only a plain "
+                            fmt::format("Cannot capture a temporary {} by {}; only a plain "
                                         "value capture is allowed here since it has no storage "
                                         "of its own",
+                                        what,
                                         modifier.is_ptr() ? "pointer" : "reference"));
     }
 
-    if (wants_mutable && (root.is_const || site.place_is_const)) {
+    const bool wants_mutable{modifier.is_mutable_ref() || modifier.is_mutable_ptr()};
+    if (wants_mutable && access.is_const) {
         return comp_.report(u_,
                             src,
                             gs::error::ASSIGNMENT_TO_CONST,
-                            fmt::format("Cannot capture an immutable value by mutable {}",
+                            fmt::format("Cannot capture an immutable {} by mutable {}",
+                                        what,
                                         modifier.is_mutable_ref() ? "reference" : "pointer"));
     }
 
-    if (modifier.is_poly() && !root.is_poly) {
+    if (modifier.is_poly() && !access.is_poly) {
         return comp_.report(
             u_,
             src,
             gs::error::ILLEGAL_POLY_MUTABILITY,
-            fmt::format("A `{}` capture needs its value reached through a `mut?` parameter",
-                        modifier.is_poly_ref() ? "&mut?" : "^mut?"));
+            fmt::format("A `{}` capture needs its {} reached through a `mut?` parameter",
+                        modifier.is_poly_ref() ? "&mut?" : "^mut?",
+                        what));
     }
 
     auto&      ctx{comp_.ctx()};
     const auto mut{*gs::types::mut::from_type_modifier(modifier)};
-    return modifier.is_ref() ? &ctx.get_reference(mut, site.value_type)
-                             : &ctx.get_pointer(mut, site.value_type);
+    return modifier.is_ref() ? &ctx.get_reference(mut, value_type)
+                             : &ctx.get_pointer(mut, value_type);
 }
 
 auto analyzer::occurrence_address(const match_lowering& m, usize occ) -> gir::value {
@@ -1438,7 +1550,7 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
                 continue;
             }
 
-            auto&      cap_type{*TRY(capture_type(site, root))};
+            auto&      cap_type{*TRY(capture_type(site, root.access))};
             const bool is_alias{site.capture.modifier.is_ref() || site.capture.modifier.is_ptr()};
             const bool is_void{cap_type.get_kind() == gs::type_kind::VOID_};
             const auto slot{is_void ? gir::value{}

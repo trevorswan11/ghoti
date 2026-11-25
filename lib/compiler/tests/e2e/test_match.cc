@@ -199,7 +199,7 @@ TEST_CASE("Match arm capture mutates a struct field matcher (dot_expr) in place"
 TEST_CASE("Match arm capture mutates an array element matcher (index_expr) in place") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
-            let mut arr = [3]i32{1, 2, 3};
+            let mut arr = [3]mut i32{1, 2, 3};
             match (arr[1]) {
                 2 => |&mut v| { v = v + 10; },
                 _ => {},

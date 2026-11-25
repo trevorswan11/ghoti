@@ -112,6 +112,14 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
         if (const auto p{target.as_opt<place>()}; p && p->address.type) { return *p; }
     }
 
+    // A `let mut` global is addressed where it lives, not through its read value
+    if (const auto inst{as_inst(r)};
+        inst && mod().tag_of(*inst) == tag::decl_val &&
+        mod().decl_at(decl_id{mod().data_of(*inst).un.aux}).has(decl_flags::MUT)) {
+        const auto use{TRY(analyze_decl_val(*inst, true))};
+        if (const auto p{use.as_opt<place>()}) { return *p; }
+    }
+
     const auto op{TRY(resolve(r, src))};
     if (const auto p{op.as_opt<place>()}) {
         if (!p->pending && !p->address.type) {

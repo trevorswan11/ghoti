@@ -195,7 +195,7 @@ auto analyzer::memory_place(const operand& op) -> stdx::option<comptime_place> {
     const auto memory{pool.value_at(*index).data.as_opt<ip::memory_value>()};
     if (!memory) { return stdx::none; }
 
-    // Each step's type, from the array or struct holding it
+    // Each step's type, from the array, struct or union holding it
     comptime_place p{.alloc = memory->alloc, .path = {}, .borrowed = true};
     auto           type{comp_.alloc_at(p).type};
     for (const auto i : memory->path) {
@@ -206,6 +206,9 @@ auto analyzer::memory_place(const operand& op) -> stdx::option<comptime_place> {
         } else if (const auto st{type->get_data().as_opt<gs::types::struct_t>()};
                    st && i < st->fields.size()) {
             next = st->fields[i];
+        } else if (const auto ut{type->get_data().as_opt<gs::types::union_t>()};
+                   ut && i < ut->field_names.size()) {
+            next.emplace(ut->type_at(i));
         }
 
         if (!next) { return stdx::none; }

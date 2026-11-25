@@ -229,7 +229,7 @@ TEST_CASE("A destructured capture can alias its place") {
     SECTION("a pointer into an array") {
         CHECK(helpers::compile_and_run(R"(
             pub const main = fn(): i32 {
-                let mut a = [2]i32{ 1, 2 };
+                let mut a = [2]mut i32{ 1, 2 };
                 let .{ _, |^mut second| } = a;
                 *second = 9;
                 return a[1];

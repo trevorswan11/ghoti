@@ -298,9 +298,8 @@ auto analyzer::payload_capture(const ast::capture_t& capture,
     auto&                           output{*shape.output};
     const gs::pattern::capture_site site{
         .capture = capture, .value_type = output, .place_is_const = flow.is_const};
-    const match_root root{
-        .address = {}, .is_const = flow.is_const, .is_addressable = true, .is_poly = flow.is_poly};
-    auto& cap_type{*TRY(capture_type(site, root))};
+    auto& cap_type{*TRY(capture_type(
+        site, {.is_const = flow.is_const, .is_addressable = true, .is_poly = flow.is_poly}))};
 
     // The `continue` payload is a reference to the output inside the operand
     auto&      out_ref{comp_.ctx().get_reference(gs::types::mut::POLY, output)};

@@ -547,6 +547,15 @@ struct synthetic_field {
     stdx::option<ip::index> default_value{};
 };
 
+// How a `@Union` descriptor lays its union out
+struct synthetic_union {
+    bool tagged;
+    bool is_extern;
+    bool is_packed;
+    // The enum a union tagged by its own enum takes its tag from
+    stdx::option<gs::type&> tag_enum;
+};
+
 // Where a struct field's default comes from: a body its declaration gives, or a known value
 struct default_source {
     gsl::span<const inst_id> body{};
@@ -916,12 +925,12 @@ class compilation {
     // An `extern` function's declaration, called by its link name
     [[nodiscard]] auto declare_extern(const unit& u, decl_id decl, gs::type& type)
         -> result<operand>;
-    auto synthesize_struct(nominal& n, gsl::span<const synthetic_field> fields, bool is_extern)
+    auto synthesize_struct(nominal&                         n,
+                           gsl::span<const synthetic_field> fields,
+                           bool                             is_extern,
+                           bool                             is_packed) -> void;
+    auto synthesize_union(nominal& n, gsl::span<const synthetic_field> fields, synthetic_union shape)
         -> void;
-    auto synthesize_union(nominal&                         n,
-                          gsl::span<const synthetic_field> fields,
-                          bool                             tagged,
-                          bool                             is_extern) -> void;
     // `A || B`, one enum per pair of enums however many merges name it
     [[nodiscard]] auto merged_enum(const merge_key& key) -> stdx::option<gs::type&>;
     auto               remember_merge(const merge_key& key, gs::type& merged) -> void;
@@ -1268,14 +1277,31 @@ class analyzer {
         bool is_alias;
     };
 
-    // Where a runtime `match` takes its scrutinee apart
-    struct match_root {
-        gir::value address;
-        bool       is_const;
+    // Where a `&v` or `^v` capture's value is reached
+    struct capture_access {
+        bool is_const;
         // A temporary's copy can't be captured by mutable reference
         bool is_addressable;
         // Reached through a `mut?` reference
         bool is_poly;
+    };
+
+    // Where a runtime `match` takes its scrutinee apart
+    struct match_root {
+        gir::value     address;
+        capture_access access;
+    };
+
+    // Compile-time memory a pattern takes apart, which its `&v` and `^v` captures alias
+    struct comptime_alias {
+        comptime_place place;
+        capture_access access;
+    };
+
+    // The names a `for` body binds and how, by the iterable each comes from
+    struct for_captures {
+        gsl::span<const stdx::option<inst_id>> binds;
+        gsl::span<const ast::type_modifier>    modifiers;
     };
 
     // What a type's `builtin.Unwrappable` impl gives `?` and `!`
@@ -1621,13 +1647,21 @@ class analyzer {
     // Every value a range takes, when both its bounds are known
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
-    // A `for` at compile time, binding each iteration's values as constants
     // Whether a `break` or `continue` names `loop`
     [[nodiscard]] auto jumped_to(inst_id loop) const -> bool;
-    [[nodiscard]] auto run_for(inst_id                                   inst,
-                               gsl::span<const ref>                      iterables,
-                               const std::vector<stdx::option<inst_id>>& binds,
-                               gsl::span<const inst_id>                  body,
+    // A `for` capture's type, a `&v` or `^v` one's checked against the iterable it reaches into
+    [[nodiscard]] auto for_capture_type(const source&      src,
+                                        usize              at,
+                                        ast::type_modifier modifier,
+                                        gs::type&          elem,
+                                        bool               is_const,
+                                        bool               is_poly)
+        -> result<gsl::not_null<gs::type*>>;
+    // A `for` at compile time, binding each iteration's values as constants
+    [[nodiscard]] auto run_for(inst_id                  inst,
+                               gsl::span<const ref>     iterables,
+                               const for_captures&      captures,
+                               gsl::span<const inst_id> body,
                                gsl::span<const inst_id> else_body) -> result<operand>;
 
     // `match` (match.cc)
@@ -1678,7 +1712,9 @@ class analyzer {
     known_match(const gs::pattern::node&                            node,
                 ip::index                                           value,
                 std::vector<std::pair<std::string_view, ip::index>>& bound,
-                const source&                                        src) -> result<bool>;
+                const source&                                        src,
+                const stdx::option<comptime_alias>&                  at = stdx::none)
+        -> result<bool>;
     // Binds each name an arm's patterns capture to what `lookup` gives for it
     template <typename Lookup> void bind_arm_names(const match_arm& arm, Lookup&& lookup);
     // The value of a runtime match that runs entirely at compile time to a number or `bool`
@@ -1686,19 +1722,21 @@ class analyzer {
                                   const std::vector<gs::pattern::row_input>& rows,
                                   ref                                        operand_ref,
                                   const source& src) -> result<stdx::option<operand>>;
-    // A `match` at compile time, which analyzes only the arm it takes
     // A compile-time `match` on a type or untyped number, comparing each pattern's value
     [[nodiscard]] auto match_by_value(const std::vector<match_arm>& arms,
                                       stdx::option<u32>             catch_all,
                                       const operand&                scrutinee,
                                       gs::type&                     type,
                                       const source&                 src) -> result<operand>;
-    // A destructuring's check reports a value that doesn't fit as such
+    // A `match` at compile time, which analyzes only the arm it takes. A destructuring's check
+    // reports a value that doesn't fit as such
     [[nodiscard]] auto run_match(const std::vector<match_arm>&              arms,
                                  const std::vector<gs::pattern::row_input>& rows,
                                  const operand&                             scrutinee,
                                  const source&                              src,
-                                 bool binding = false) -> result<operand>;
+                                 bool                                       binding = false,
+                                 const stdx::option<comptime_alias>& root = stdx::none)
+        -> result<operand>;
     [[nodiscard]] auto emit_match(const std::vector<match_arm>&              arms,
                                   const std::vector<gs::pattern::row_input>& rows,
                                   const gs::pattern::decision_tree&          tree,
@@ -1714,8 +1752,20 @@ class analyzer {
                                          bool           aliased,
                                          const source&  src) -> result<match_root>;
     // A capture's slot type, a `&v` or `^v` capture's checked against where it's reached
-    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, const match_root& root)
+    [[nodiscard]] auto capture_type(const gs::pattern::capture_site& site, capture_access root)
         -> result<gsl::not_null<gs::type*>>;
+    // Where a compile-time `match` takes its scrutinee apart, when a capture aliases it
+    [[nodiscard]] auto comptime_scrutinee(ref            operand_ref,
+                                          const operand& scrutinee,
+                                          const source&  src) -> result<stdx::option<comptime_alias>>;
+    // Whether `r` names a `mut?` parameter, whose argument has its caller's mutability
+    [[nodiscard]] auto names_poly_param(ref r, const source& src) -> result<bool>;
+    // A capture's type under its modifier, `what` naming the value in its errors
+    [[nodiscard]] auto alias_type(ast::type_modifier modifier,
+                                  gs::type&          value_type,
+                                  capture_access     access,
+                                  std::string_view   what,
+                                  const source&      src) -> result<gsl::not_null<gs::type*>>;
     [[nodiscard]] auto occurrence_address(const match_lowering& m, usize occ) -> gir::value;
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
     [[nodiscard]] auto slot_operand(const capture_slot& slot) -> operand;

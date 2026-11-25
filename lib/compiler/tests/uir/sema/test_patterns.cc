@@ -126,4 +126,78 @@ TEST_CASE("A union tagged by an enum converts to that enum", "[uir]") {
     CHECK(only(run, sema::error::ILLEGAL_UNION_TAG));
 }
 
+TEST_CASE("A `for` capture by reference aliases the element it reaches", "[uir]") {
+    const auto body{GENERATE(std::string_view{"for (arr) |&mut e| { e *= 2; }"},
+                             std::string_view{"for (arr) |^mut e| { *e += 1; }"},
+                             std::string_view{"for (s, 0..) |&mut e, i| { if (i > 0) { e = 7; } }"},
+                             std::string_view{"for (arr) |&e| { total += e; }"})};
+    INFO(body);
+    const auto diff{diff_source(fmt::format(R"(
+        pub const f = fn(s: []mut i32): i32 {{
+            let mut arr = [3]mut i32{{1, 2, 3}};
+            let mut total: i32 = 0;
+            {}
+            return total + arr[0] + arr[2];
+        }};
+    )",
+                                            body))};
+    INFO(helpers::uir_diff_status_name(diff.status));
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A capture by reference writes compile-time memory", "[uir]") {
+    const auto body{GENERATE(
+        std::string_view{"let a = [_]mut i32{1, 2, 3}; for (a) |&mut e| { e *= 2; } "
+                         "return a[0] + a[2];"},
+        std::string_view{"let mut a = [_]mut i32{1, 2, 3}; for (a) |^mut e| { *e += 1; } "
+                         "return a[2];"},
+        std::string_view{"let mut u: U = .{ .a = 4 }; match (u) { .a => |&mut x| { x = 9; }, "
+                         ".b => {} } return match (u) { .a => |x| x, .b => 0 };"},
+        std::string_view{"let mut p: P = .{ .x = 1, .y = 2 }; match (p) { .{ .y = |&mut y| } "
+                         "=> { y = 5; } } return p.y;"},
+        std::string_view{"const v: i32 = 3; return match (v) { 3 => |&x| x + 1, _ => 0 };"})};
+    INFO(body);
+    const auto diff{diff_source(fmt::format(R"(
+        const U = union(enum) {{ a: i32, b: void }};
+        const P = struct {{ x: i32, y: i32 }};
+        const t = fn(): i32 {{ {} }};
+        const r = t();
+        pub const f = fn(): i32 {{ return r; }};
+    )",
+                                            body))};
+    INFO(helpers::uir_diff_status_name(diff.status));
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A `for` capture by reference needs storage it may alias", "[uir]") {
+    SECTION("a temporary") {
+        const auto iterable{GENERATE(std::string_view{"0..3"}, std::string_view{"[_]i32{1, 2}"})};
+        INFO(iterable);
+        const auto run{helpers::uir_rejected(
+            fmt::format("pub const f = fn(): void {{ for ({}) |&e| {{ _ = e; }} }};", iterable))};
+        CHECK(only(run, sema::error::ILLEGAL_RVALUE_CAPTURE));
+    }
+
+    SECTION("an immutable array") {
+        const auto run{helpers::uir_rejected("pub const f = fn(): void { let arr = [_]i32{1, 2}; "
+                                             "for (arr) |^mut e| { _ = e; } };")};
+        CHECK(only(run, sema::error::ASSIGNMENT_TO_CONST));
+    }
+
+    SECTION("a `mut?` capture of a plain slice") {
+        const auto run{helpers::uir_rejected(
+            "pub const f = fn(s: []i32): void { for (s) |&mut? e| { _ = e; } };")};
+        CHECK(only(run, sema::error::ILLEGAL_POLY_MUTABILITY));
+    }
+
+    SECTION("a match capture of an immutable element") {
+        const auto run{
+            helpers::uir_rejected("pub const f = fn(): void { let mut arr = [3]i32{1, 2, 3}; "
+                                  "match (arr[1]) { 2 => |&mut v| { v = 3; }, _ => {} } };")};
+        CHECK(only(run, sema::error::ASSIGNMENT_TO_CONST));
+    }
+}
+
 } // namespace ghoti::tests
