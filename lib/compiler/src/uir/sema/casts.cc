@@ -299,7 +299,7 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
     case builtin_t::FROM_BACKING_INT: {
         const auto backing{comp_.ctx().backing_int_type(target, comp_.ptr_bits())};
         const auto un{target.get_data().as_opt<gs::types::union_t>()};
-        if (!backing || un) {
+        if (!backing || (un && !un->is_bit_packed())) {
             return mismatch(fmt::format("`@fromBackingInt` target must be an enum or a packed "
                                         "struct or union; found '{}'",
                                         display(target)));
@@ -442,6 +442,39 @@ auto analyzer::check_bit_cast(const gs::type& from, const gs::type& target, cons
     const auto& source_type{
         from.get_kind() == gs::type_kind::COMPTIME_FLOAT ? builtin(gs::type_kind::F64) : from};
     if (from.get_kind() == gs::type_kind::COMPTIME_INT) { return {}; }
+
+    // An aggregate only has a bit pattern to reinterpret when it is bit-packed
+    const auto is_aggregate{[](const gs::type& t) {
+        return t.get_kind() == gs::type_kind::STRUCT || t.get_kind() == gs::type_kind::UNION;
+    }};
+    if (!gs::is_vector(source_type) && !gs::is_vector(target) &&
+        (is_aggregate(source_type) || is_aggregate(target))) {
+        const auto from_bits{bit_width(source_type)};
+        const auto to_bits{bit_width(target)};
+        if (!from_bits || !to_bits) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("`@bitCast` needs types with a defined bit layout; "
+                                            "'{}' is not a packed struct or union",
+                                            display(from_bits ? target : source_type)));
+        }
+
+        if (*from_bits != *to_bits) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("`@bitCast` requires equally sized types; '{}' is {} "
+                                            "bit(s) but '{}' is {} bit(s)",
+                                            display(source_type),
+                                            *from_bits,
+                                            display(target),
+                                            *to_bits));
+        }
+
+        return {};
+    }
+
     const auto from_bits{bit_width(source_type)};
     const auto to_bits{bit_width(target)};
     if (!from_bits || !to_bits) {
@@ -480,6 +513,18 @@ auto analyzer::bit_width(const gs::type& t) const -> stdx::option<u64> {
         return *elem * arr->len;
     }
 
+    // A bit-packed aggregate is its backing integer
+    const auto ptr_bits{comp_.ptr_bits()};
+    if (const auto st{t.get_data().as_opt<gs::types::struct_t>()}) {
+        if (!st->is_bit_packed()) { return stdx::none; }
+        return gs::packed_backing_bits(*st, ptr_bits).transform([](u32 b) { return u64{b}; });
+    }
+
+    if (const auto ut{t.get_data().as_opt<gs::types::union_t>()}) {
+        if (!ut->is_bit_packed()) { return stdx::none; }
+        return gs::packed_union_backing_bits(*ut, ptr_bits).transform([](u32 b) { return u64{b}; });
+    }
+
     if (!has_fixed_bit_layout(t)) { return stdx::none; }
     if (const auto format{gs::float_format_of(t)}) { return format_info(*format).storage_bits; }
     if (t.get_kind() == gs::type_kind::BOOL) { return u64{8}; }
@@ -490,6 +535,37 @@ auto analyzer::bit_width(const gs::type& t) const -> stdx::option<u64> {
 auto analyzer::bits_of(ip::index value, const gs::type& type, const source& src) -> result<u128> {
     auto&      pool{comp_.constants()};
     const auto data{pool.value_at(value).data};
+
+    // A bit-packed aggregate's bits are its fields' at their offsets, a union's at offset zero
+    const auto ptr_bits{comp_.ptr_bits()};
+    const auto field_bits{[&](ip::index field, const gs::type& field_type) -> result<u128> {
+        const auto bits{TRY(bits_of(field, field_type, src))};
+        const auto width{gs::packed_field_bits(field_type, ptr_bits).value_or(128)};
+        return width >= 128 ? bits : bits & ((u128{1} << width) - 1);
+    }};
+    if (const auto st{type.get_data().as_opt<gs::types::struct_t>()}; st && st->is_bit_packed()) {
+        const auto agg{data.as_opt<ip::aggregate_value>()};
+        if (!agg) { return comp_.unsupported(u_, src, "the bits of this packed value"); }
+        u128 out{0};
+        for (usize i{0}; i < agg->elements.size(); ++i) {
+            if (!agg->elements[i]) { continue; }
+            out |= TRY(field_bits(*agg->elements[i], st->type_at(i)))
+                   << gs::packed_field_offset(*st, i, ptr_bits);
+        }
+        return out;
+    }
+
+    if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}; ut && ut->is_bit_packed()) {
+        const auto un{data.as_opt<ip::union_value>()};
+        if (!un || un->payload.empty()) {
+            return comp_.unsupported(u_, src, "the bits of this packed value");
+        }
+
+        const auto field{std::ranges::find(ut->field_names, un->active_field)};
+        const auto index{static_cast<usize>(field - ut->field_names.begin())};
+        return field_bits(un->payload.front(), ut->type_at(index));
+    }
+
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         const auto width{*bit_width(arr->underlying)};
         const auto agg{data.as_opt<ip::aggregate_value>()};
@@ -843,7 +919,7 @@ auto analyzer::unary_cast(inst_id inst, builtin_t which, ref operand_ref) -> res
         TRY(require_runtime(src));
 
         // A tagged union's backing integer is its tag, read where the union lies
-        if (from.get_kind() == gs::type_kind::UNION) {
+        if (from.get_kind() == gs::type_kind::UNION && !is_bit_packed(from)) {
             const auto base{TRY(address_of(operand_ref, src))};
             const auto tag_ptr{builder_.emit_get_element_ptr(
                 base.address, {usize_constant(UNION_TAG_FIELD)}, *backing)};

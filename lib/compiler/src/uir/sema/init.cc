@@ -170,6 +170,26 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
     }
 
     const auto slot{builder_.emit_alloca(type)};
+
+    // A bit-packed struct starts as a zeroed backing integer that each field's bits are merged into
+    if (st.is_bit_packed()) {
+        const place whole{.address = gir::value{slot, type}, .pointee = &type, .is_mutable = true};
+        zero_backing(whole, gs::packed_backing_bits(st, comp_.ptr_bits()).value_or(1));
+        for (usize i{0}; i < entries.size(); ++i) {
+            const auto given{TRY(field_value(indices[i], entries[i].value))};
+            packed_store(packed_place(whole, indices[i], st.type_at(indices[i])),
+                         TRY(as_runtime(given, src)));
+        }
+
+        for (usize i{0}; i < st.fields.size(); ++i) {
+            if (seen.contains(st.field_names[i]) || !defaults[i].present()) { continue; }
+            const auto given{TRY(field_default(type, i, defaults[i], src))};
+            packed_store(packed_place(whole, i, st.type_at(i)), TRY(as_runtime(given, src)));
+        }
+
+        return load(place{.address = whole.address, .pointee = &type, .is_mutable = false});
+    }
+
     for (usize i{0}; i < entries.size(); ++i) {
         auto& field_type{st.type_at(indices[i])};
 
@@ -285,6 +305,13 @@ auto analyzer::init_union(inst_id inst, gs::type& type, const source& src) -> re
     }
 
     const auto slot{builder_.emit_alloca(type)};
+    if (ut.is_bit_packed()) {
+        const place whole{.address = gir::value{slot, type}, .pointee = &type, .is_mutable = true};
+        zero_backing(whole, gs::packed_union_backing_bits(ut, comp_.ptr_bits()).value_or(1));
+        packed_store(packed_place(whole, index, field_type), TRY(as_runtime(value, src)));
+        return load(place{.address = whole.address, .pointee = &type, .is_mutable = false});
+    }
+
     if (ut.is_untagged) {
         builder_.emit_store(gir::value{slot, field_type}, TRY(as_runtime(value, src)));
         return gir::value{builder_.emit_load(gir::value{slot, type}, type), type};
@@ -397,6 +424,7 @@ auto analyzer::materialize(ip::index index, const source& src) -> result<gir::va
         return built;
     }
 
+    if (is_bit_packed(type)) { return materialize_packed(value, type, src); }
     if (const auto agg{value.data.as_opt<ip::aggregate_value>()}) {
         const auto slot{builder_.emit_alloca(type)};
         for (usize i{0}; i < agg->elements.size(); ++i) {

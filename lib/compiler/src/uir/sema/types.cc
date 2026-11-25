@@ -164,7 +164,14 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
     const auto& src{src_of(inst)};
     auto&       elem{*TRY(resolve_type(*rec.ref_field(), src))};
     const auto  bits{rec.u32_field()};
-    if ((bits & flags::VOLATILE) != 0) { return comp_.unsupported(u_, src, "a volatile type"); }
+    // `volatile T` is written like a pointer's modifier but names `T` itself, qualified
+    if ((bits & flags::VOLATILE) != 0 && t == tag::ptr_type) {
+        return interned_type(*comp_.ctx().pool.with_volatile(elem, true));
+    }
+
+    if ((bits & flags::VOLATILE) != 0 && t == tag::ref_type) {
+        return comp_.unsupported(u_, src, "a volatile type");
+    }
     if (elem.get_kind() == gs::type_kind::INTERFACE) {
         return comp_.unsupported(u_, src, "a pointer to an interface type");
     }

@@ -119,9 +119,18 @@ struct module_dump {
 [[nodiscard]] auto discriminator_length(std::string_view text, usize at) -> usize {
     if (at >= text.size()) { return 0; }
     usize end{at};
+    // `$Ctor__args_<id>` ends at its instance id, before any parameter mangled after it
     if (text[at] == '$') {
         while (end < text.size() && is_mangle_char(text[end])) { ++end; }
-        return end - at;
+        usize last_id{end};
+        for (usize i{at + 1}; i < end; ++i) {
+            if (text[i] != '_' || i + 1 >= end || !is_digit(text[i + 1])) { continue; }
+            usize digits{i + 1};
+            while (digits < end && is_digit(text[digits])) { ++digits; }
+            if (digits == end || text[digits] == '_') { last_id = digits; }
+        }
+
+        return last_id - at;
     }
 
     while (end < text.size() && is_digit(text[end])) { ++end; }
@@ -278,6 +287,28 @@ struct module_dump {
     }
 
     return out;
+}
+
+// A value is never volatile, only the memory it is read from, so a value instruction's type is
+// spelled without the qualifier the old pipeline sometimes carries over from it
+[[nodiscard]] auto without_value_volatility(std::string inst) -> std::string {
+    const auto assign{inst.find(" = ")};
+    const auto op_start{inst.starts_with('%') && assign != std::string::npos ? assign + 3 : 0};
+    const auto op_end{inst.find(' ', op_start)};
+    if (op_end == std::string::npos) { return inst; }
+    const std::string_view op{stdx::string::substr(inst, op_start, op_end - op_start)};
+    for (const std::string_view memory : {"alloca", "get_element_ptr", "address_of", "load"}) {
+        if (op == memory) { return inst; }
+    }
+
+    for (const std::string_view qualifier : {"mut volatile ", "volatile "}) {
+        if (stdx::string::substr(inst, op_end + 1).starts_with(qualifier)) {
+            inst.erase(op_end + 1, qualifier.size());
+            break;
+        }
+    }
+
+    return inst;
 }
 
 // A call through a function's own symbol as a constant is the direct call it amounts to
@@ -1415,7 +1446,7 @@ auto normalize_gir(std::string_view dump) -> std::string {
     for (auto& fn : mod.functions) {
         for (auto& seg : fn.segments) {
             for (auto& inst : seg.instructions) {
-                inst = as_direct_call(without_address_mutability(inst));
+                inst = without_value_volatility(as_direct_call(without_address_mutability(inst)));
             }
         }
 

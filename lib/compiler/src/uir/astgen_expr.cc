@@ -171,6 +171,34 @@ using syntax::token_type_t;
     }
 }
 
+// Whether a pattern captures by reference or pointer anywhere inside it
+[[nodiscard]] auto pattern_aliases(const ast::AST& tree, ast::node_id id) -> bool {
+    const auto aliasing{
+        [](const ast::capture_t& c) { return c.modifier.is_ref() || c.modifier.is_ptr(); }};
+    if (const auto capture{tree.get_as_opt<ast::capture_pattern_expr>(id)}) {
+        return aliasing(capture->capture);
+    }
+
+    if (const auto bound{tree.get_as_opt<ast::bound_pattern_expr>(id)}) {
+        return aliasing(bound->capture) || pattern_aliases(tree, bound->pattern);
+    }
+
+    if (const auto init{tree.get_as_opt<ast::initializer_expr>(id)}) {
+        return std::ranges::any_of(init->initializers, [&](const auto& entry) {
+            return pattern_aliases(tree, entry.value);
+        });
+    }
+
+    if (const auto call{tree.get_as_opt<ast::call_expr>(id)}) {
+        return std::ranges::any_of(call->arguments, [&](const auto& arg) {
+            const auto value{arg.template as_opt<ast::expr_handle>()};
+            return value && pattern_aliases(tree, *value);
+        });
+    }
+
+    return false;
+}
+
 } // namespace
 
 // By spelling, since no user name can be spelled like a primitive type and some positions hand
@@ -825,15 +853,19 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
 auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
     const bool statement{std::exchange(statement_arms_, false)};
     // A capture by reference aliases a field, element or pointee where it lives
-    const bool         aliases{std::ranges::any_of(node.arms, [](const auto& arm) {
-        return arm.capture && (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr());
+    const bool         aliases{std::ranges::any_of(node.arms, [&](const auto& arm) {
+        return (arm.capture &&
+                (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr())) ||
+               std::ranges::any_of(arm.patterns,
+                                   [&](ast::node_id p) { return pattern_aliases(ast_, p); });
     })};
     const ast::node_id matcher{node.matcher};
-    const bool in_place{aliases && (matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
-                                    matcher.is<ast::dereference_expr>())};
+    // A field, element or pointee is matched where it lives, so it isn't copied first
+    const bool in_place{matcher.is<ast::dot_expr>() || matcher.is<ast::index_expr>() ||
+                        matcher.is<ast::dereference_expr>()};
     const auto operand{[&] {
         if (!in_place) { return expr(node.matcher); }
-        const auto target{place(node.matcher, use::MUTATE)};
+        const auto target{place(node.matcher, aliases ? use::MUTATE : use::PLACE)};
         return target.is_place ? add_un(tag::load, target.value, 0, id) : target.value;
     }()};
     u32        bits{0};

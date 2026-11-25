@@ -169,7 +169,7 @@ auto astgen::finish_aggregate(source src)
 
 auto astgen::struct_decl(source src, const ast::struct_expr& node) -> ref {
     const auto inst{begin_aggregate(src)};
-    const auto fields{spliced_group(node.fields, node.cfg_groups)};
+    const auto fields{spliced_group(node.fields, node.cfg_groups, inst)};
     const auto members{spliced_group(node.members, node.member_cfg_groups)};
     for (const auto& field : fields) {
         DISCARD(declare_member(
@@ -225,7 +225,7 @@ auto astgen::union_decl(source src, const ast::union_expr& node) -> ref {
     if (node.tag_type) { tag_type = type_body(*node.tag_type); }
 
     const auto inst{begin_aggregate(src)};
-    const auto fields{spliced_group(node.fields, node.cfg_groups)};
+    const auto fields{spliced_group(node.fields, node.cfg_groups, inst)};
     const auto members{spliced_group(node.members, node.member_cfg_groups)};
     for (const auto& field : fields) {
         DISCARD(declare_member(
@@ -270,7 +270,7 @@ auto astgen::enum_decl(source src, const ast::enum_expr& node) -> ref {
     if (node.underlying) { underlying = type_body(*node.underlying); }
 
     const auto inst{begin_aggregate(src)};
-    const auto values{spliced_group(node.enumerations, node.cfg_groups)};
+    const auto values{spliced_group(node.enumerations, node.cfg_groups, inst)};
     const auto members{spliced_group(node.members, node.member_cfg_groups)};
     for (const auto& value : values) {
         DISCARD(declare_member(

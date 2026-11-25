@@ -510,32 +510,39 @@ auto astgen::spliced(const std::vector<ast::stmt_handle>& items) -> std::vector<
 }
 
 template <typename Group, typename Item>
-auto astgen::spliced_group(const std::vector<Item>& items, const std::vector<Group>& groups)
-    -> std::vector<Item> {
-    std::vector<Item> out{items};
-    usize             offset{0};
+auto astgen::spliced_group(const std::vector<Item>&  items,
+                           const std::vector<Group>& groups,
+                           stdx::option<inst_id>     fields_of) -> std::vector<Item> {
+    std::vector<Item>              out{items};
+    std::vector<stdx::option<u32>> arms;
+    usize                          offset{0};
     for (const auto& group : groups) {
         const auto arm{cfg_.select_arm_of(group.arms)};
+        arms.emplace_back(arm ? stdx::option<u32>{static_cast<u32>(arm.get() - group.arms.data())}
+                              : stdx::none);
         if (!arm) { continue; }
         const auto at{static_cast<idiff>(group.position + offset)};
         out.insert(out.begin() + at, arm->items.begin(), arm->items.end());
         offset += arm->items.size();
     }
+
+    if (fields_of && !groups.empty()) { out_.set_field_arms(*fields_of, std::move(arms)); }
     return out;
 }
 
 template auto astgen::spliced_group(const std::vector<ast::struct_expr::field>&,
-                                    const std::vector<ast::struct_expr::cfg_group>&)
-    -> std::vector<ast::struct_expr::field>;
+                                    const std::vector<ast::struct_expr::cfg_group>&,
+                                    stdx::option<inst_id>) -> std::vector<ast::struct_expr::field>;
 template auto astgen::spliced_group(const std::vector<ast::union_expr::field>&,
-                                    const std::vector<ast::union_expr::cfg_group>&)
-    -> std::vector<ast::union_expr::field>;
+                                    const std::vector<ast::union_expr::cfg_group>&,
+                                    stdx::option<inst_id>) -> std::vector<ast::union_expr::field>;
 template auto astgen::spliced_group(const std::vector<ast::enum_expr::enumeration>&,
-                                    const std::vector<ast::enum_expr::cfg_group>&)
+                                    const std::vector<ast::enum_expr::cfg_group>&,
+                                    stdx::option<inst_id>)
     -> std::vector<ast::enum_expr::enumeration>;
 template auto astgen::spliced_group(const ast::member_list&,
-                                    const std::vector<ast::struct_expr::member_cfg_group>&)
-    -> ast::member_list;
+                                    const std::vector<ast::struct_expr::member_cfg_group>&,
+                                    stdx::option<inst_id>) -> ast::member_list;
 
 auto astgen::lower_attributes(const stdx::option<ast::attribute_list>& attributes,
                               stdx::option<bool>                       routed,

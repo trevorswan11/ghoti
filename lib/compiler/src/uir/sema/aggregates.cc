@@ -37,6 +37,24 @@ namespace {
 constexpr u64   NOMINAL_MARKER{0x7569725f6e6f6d69};
 constexpr usize NOMINAL_TABLE_BASE{usize{1} << 48};
 
+// The items with each `@cfg` group's selected arm spliced in where AstGen put them
+template <typename Item, typename Group>
+[[nodiscard]] auto spliced_items(const std::vector<Item>&           items,
+                                 const std::vector<Group>&          groups,
+                                 gsl::span<const stdx::option<u32>> arms) -> std::vector<Item> {
+    std::vector<Item> out{items};
+    usize             offset{0};
+    for (usize g{0}; g < groups.size() && g < arms.size(); ++g) {
+        if (!arms[g]) { continue; }
+        const auto& arm{groups[g].arms[*arms[g]]};
+        const auto  at{static_cast<idiff>(groups[g].position + offset)};
+        out.insert(out.begin() + at, arm.items.begin(), arm.items.end());
+        offset += arm.items.size();
+    }
+
+    return out;
+}
+
 [[nodiscard]] auto default_name(gs::type_kind kind) -> std::string_view {
     switch (kind) {
     case gs::type_kind::UNION:     return "union";
@@ -283,16 +301,18 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     auto        rec{record(n.inst)};
     const auto& src{src_of(n.inst)};
     const auto  agg_flags{rec.u32_field()};
-    if ((agg_flags & flags::AGG_PACKED) != 0) {
-        return comp_.unsupported(u_, src, "a packed struct");
-    }
-
+    const bool  is_extern{(agg_flags & flags::AGG_EXTERN) != 0};
+    const bool  is_packed{(agg_flags & flags::AGG_PACKED) != 0};
+    const bool  bit_packed{is_packed && !is_extern};
     DISCARD(skip_captures(rec));
 
     const auto& expr{ast_of<ast::struct_expr>(u_, src)};
 
     // The type's AST lists every gated field, not only the ones the configuration selects
-    if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
+    const gsl::span<const ast::struct_expr::field> fields{
+        expr.cfg_groups.empty() ? gsl::span<const ast::struct_expr::field>{expr.fields}
+                                : comp_.keep_items(spliced_items(
+                                      expr.fields, expr.cfg_groups, mod().field_arms_of(n.inst)))};
 
     auto&      ctx{comp_.ctx()};
     const auto count{rec.count()};
@@ -308,15 +328,27 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         alignments[i]  = resolved.alignment.value_or(0);
         field_types[i] = *TRY(field_type_of(type_body, name, field_src));
+        if (bit_packed) {
+            TRY(check_packed_field(*field_types[i], name, "struct", field_src));
+            if (resolved.alignment) { TRY(reject_packed_alignment(name, "struct", field_src)); }
+        }
     }
 
-    const gsl::span<const ast::struct_expr::field> fields{expr.fields};
+    if (bit_packed) {
+        u64 total{0};
+        for (const auto field : field_types) {
+            total += gs::packed_field_bits(*field, comp_.ptr_bits()).value_or(0);
+        }
+
+        TRY(check_packed_width(total, "struct", src));
+    }
+
     n.type->resolve<gs::types::struct_t>(field_types,
                                          fields,
                                          ctx.pool.get_many_pending(0),
                                          *u_.source,
-                                         (agg_flags & flags::AGG_EXTERN) != 0,
-                                         false,
+                                         is_extern,
+                                         is_packed,
                                          alignments,
                                          gs::declared_names(ctx.arena, *u_.source, fields));
     return {};
@@ -328,10 +360,9 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
     const auto  agg_flags{rec.u32_field()};
     const auto  tag_kind{static_cast<union_tag>(rec.u32_field())};
     const auto  tag_body{rec.body_field()};
-    if ((agg_flags & flags::AGG_PACKED) != 0) {
-        return comp_.unsupported(u_, src, "a packed union");
-    }
-
+    const bool  is_extern{(agg_flags & flags::AGG_EXTERN) != 0};
+    const bool  is_packed{(agg_flags & flags::AGG_PACKED) != 0};
+    const bool  bit_packed{is_packed && !is_extern};
     DISCARD(skip_captures(rec));
 
     stdx::option<gs::type&> tag_enum;
@@ -354,11 +385,13 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         }
     }
 
-    if (tag_enum) { return comp_.unsupported(u_, src, "a union tagged by its own enum"); }
     const auto& expr{ast_of<ast::union_expr>(u_, src)};
 
     // The type's AST lists every gated field, not only the ones the configuration selects
-    if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
+    const gsl::span<const ast::union_expr::field> fields{
+        expr.cfg_groups.empty() ? gsl::span<const ast::union_expr::field>{expr.fields}
+                                : comp_.keep_items(spliced_items(
+                                      expr.fields, expr.cfg_groups, mod().field_arms_of(n.inst)))};
 
     auto&      ctx{comp_.ctx()};
     const auto count{rec.count()};
@@ -369,25 +402,66 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
+        field_types[i] = *TRY(field_type_of(type_body, name, field_src));
+        if (bit_packed) { TRY(check_packed_field(*field_types[i], name, "union", field_src)); }
         if (resolved.alignment) {
             DISCARD(comp_.report(u_,
-                                 source{ast::node_id{expr.fields[i].name}},
+                                 source{fields[i].name},
                                  gs::error::ILLEGAL_ATTRIBUTE,
                                  "Attribute 'align' is not supported on union fields"));
+            if (bit_packed) { TRY(reject_packed_alignment(name, "union", field_src)); }
         }
-
-        field_types[i] = *TRY(field_type_of(type_body, name, field_src));
     }
 
-    const bool                                    is_extern{(agg_flags & flags::AGG_EXTERN) != 0};
-    const gsl::span<const ast::union_expr::field> fields{expr.fields};
+    if (bit_packed) {
+        u64 widest{0};
+        for (const auto field : field_types) {
+            widest =
+                std::max<u64>(widest, gs::packed_field_bits(*field, comp_.ptr_bits()).value_or(0));
+        }
+
+        TRY(check_packed_width(widest, "union", src));
+    }
+
+    // Every field names a variant of the tag enum, and every variant has a field
+    if (tag_enum) {
+        const auto& en{tag_enum->get_data().as<gs::types::enum_t>()};
+        for (usize i{0}; i < count; ++i) {
+            const auto name{u_.source->ast.get_as<ast::identifier_expr>(fields[i].name).name};
+            if (!std::ranges::contains(en.variant_names, name)) {
+                return comp_.report(
+                    u_,
+                    source{fields[i].name},
+                    gs::error::ILLEGAL_UNION_TAG,
+                    fmt::format("Union field '{}' is not a variant of its tag enum '{}'",
+                                name,
+                                ctx.type_display_name(*tag_enum)));
+            }
+        }
+
+        for (const auto variant : en.variant_names) {
+            const bool has_field{std::ranges::any_of(fields, [&](const auto& field) {
+                return u_.source->ast.get_as<ast::identifier_expr>(field.name).name == variant;
+            })};
+            if (!has_field) {
+                return comp_.report(
+                    u_,
+                    src,
+                    gs::error::ILLEGAL_UNION_TAG,
+                    fmt::format("Variant '{}' of the tag enum '{}' has no union field",
+                                variant,
+                                ctx.type_display_name(*tag_enum)));
+            }
+        }
+    }
+
     n.type->resolve<gs::types::union_t>(field_types,
                                         fields,
                                         ctx.pool.get_many_pending(0),
                                         *u_.source,
-                                        is_extern || void_tag,
+                                        is_extern || is_packed || void_tag,
                                         is_extern,
-                                        false,
+                                        is_packed,
                                         tag_enum,
                                         gs::declared_names(ctx.arena, *u_.source, fields));
     return {};
@@ -444,8 +518,11 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
     const auto& expr{ast_of<ast::enum_expr>(u_, src)};
 
     // The type's AST lists every gated field, not only the ones the configuration selects
-    if (!expr.cfg_groups.empty()) { return comp_.unsupported(u_, src, "`@cfg`-gated fields"); }
-    const gsl::span<const ast::enum_expr::enumeration> values{expr.enumerations};
+    const gsl::span<const ast::enum_expr::enumeration> values{
+        expr.cfg_groups.empty()
+            ? gsl::span<const ast::enum_expr::enumeration>{expr.enumerations}
+            : comp_.keep_items(
+                  spliced_items(expr.enumerations, expr.cfg_groups, mod().field_arms_of(n.inst)))};
     n.type->resolve<gs::types::enum_t>(values,
                                        (enum_flags & flags::NON_EXHAUSTIVE) != 0,
                                        underlying,

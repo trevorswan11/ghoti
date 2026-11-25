@@ -30,14 +30,6 @@ namespace {
     return ut && !ut->is_untagged;
 }
 
-// The index of the field `name` among `names`, none when there is no such field
-[[nodiscard]] auto index_of(gsl::span<const std::string_view> names, std::string_view name)
-    -> stdx::option<usize> {
-    const auto found{std::ranges::find(names, name)};
-    if (found == names.end()) { return stdx::none; }
-    return static_cast<usize>(found - names.begin());
-}
-
 // Whether a value of the type holds a `type`, so it exists only at compile time
 [[nodiscard]] auto holds_type(const gs::type& type, u32 depth = 0) -> bool {
     if (depth > 8) { return false; }
@@ -74,7 +66,17 @@ auto analyzer::spill(const gir::value& v, gs::type& type, bool to_entry) -> plac
 }
 
 auto analyzer::load(const place& p) -> gir::value {
-    return gir::value{builder_.emit_load(p.address, *p.pointee), *p.pointee};
+    if (p.packed) { return packed_read(p); }
+
+    // A volatile load still reads through the volatile type, but the value it gives is plain
+    auto& pointee{*p.pointee};
+    if (pointee.is_volatile() && gs::is_value_type(pointee.get_kind())) {
+        auto& pool{comp_.ctx().pool};
+        auto& plain{*pool.with_const(*pool.strip_volatile(pointee), true)};
+        return gir::value{builder_.emit_load(p.address, pointee), plain};
+    }
+
+    return gir::value{builder_.emit_load(p.address, pointee), pointee};
 }
 
 auto analyzer::settle(const place& p) -> place {
@@ -285,6 +287,7 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     }
 
     const auto index{TRY(field_index(type, name, src))};
+    if (is_bit_packed(type)) { return packed_place(base, index, field_type_at(type, index)); }
     if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}) {
         auto& declared{ut->type_at(index)};
         auto& field_type{mutable_view(declared, base.is_mutable || base.owned_copy)};
@@ -305,8 +308,10 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
         };
     }
 
-    // Through a `mut?` pointer an array field's elements read as immutable
-    auto&      declared{type.get_data().as<gs::types::struct_t>().type_at(index)};
+    // Through a `mut?` pointer an array field's elements read as immutable, and a volatile
+    // struct's fields are volatile too
+    auto&      declared{*comp_.ctx().pool.with_volatile(
+        type.get_data().as<gs::types::struct_t>().type_at(index), type.is_volatile())};
     auto&      field_type{object.pointee->is_poly()
                               ? immutable_view(declared)
                               : mutable_view(declared, base.is_mutable || base.owned_copy)};
@@ -384,6 +389,13 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
 
     if (object.is<function_ref>()) { return comp_.unsupported(u_, src, "a field of a function"); }
     TRY(require_runtime(src));
+
+    // A bit-packed value's field is its bits, read without storing the value
+    if (const auto v{object.as_opt<gir::value>()}; v && is_bit_packed(type_of(object))) {
+        auto&      type{type_of(object)};
+        const auto index{TRY(field_index(type, name, src))};
+        return operand{packed_extract(*v, type, index, field_type_at(type, index))};
+    }
 
     const auto object_place{TRY(address_of(object_ref, src))};
     const auto base{TRY(through_pointer(object_place, src, checked))};
@@ -802,6 +814,15 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     }
 
     const auto slot{TRY(address_of(operand_ref, src))};
+    if (slot.packed) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_PACKED_FIELD_ADDRESS,
+                            fmt::format("cannot take {} a field of a 'packed struct'; copy it into "
+                                        "a local first",
+                                        is_pointer ? "the address of" : "a reference to"));
+    }
+
     if (is_mut && !slot.is_mutable) {
         // `^mut a[i]` of an immutable element is an error, just like `a[i] = v`
         const auto target_inst{as_inst(operand_ref)};
