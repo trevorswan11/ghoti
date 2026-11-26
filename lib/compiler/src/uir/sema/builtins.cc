@@ -684,13 +684,13 @@ auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> resu
         return coerce_to(value, target, src, {.what = use_site::kind::STORE});
     }
 
-    // A known value may narrow when it fits, and is still cast where it is used. A runtime one
-    // narrows through the builtin that says how
+    // A known value may narrow when it fits, and is still cast where it is used
     if (!gs::is_same_unqualified(from, target) && !gs::is_implicit_widenable(from, target)) {
         if (!comptime_value(value)) {
             return comp_.report(u_, src, gs::error::TYPE_MISMATCH, narrowing_as(from, target));
         }
 
+        // A runtime one narrows through the builtin that says how
         DISCARD(TRY(coerce_to(value, target, src, {.what = use_site::kind::STORE})));
     }
 
