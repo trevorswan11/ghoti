@@ -69,8 +69,7 @@ namespace {
     return gs::pointee_of(t);
 }
 
-// Whether a type body spells `auto` behind pointers, references, slices or an array:
-// `&mut? auto`, `[3]auto`
+// Whether a type body spells `auto` behind pointers, references, slices or an array
 [[nodiscard]] auto is_auto_pattern(const module_t& m, gsl::span<const inst_id> body) -> bool {
     if (body.empty() || m.tag_of(body.back()) != tag::yield) { return false; }
     auto at{m.data_of(body.back()).un.operand};
