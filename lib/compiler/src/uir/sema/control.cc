@@ -55,7 +55,7 @@ auto analyzer::condition(const operand& op, const source& src) -> result<gir::va
 
 auto analyzer::unrolls(ref r) const -> bool {
     const auto inst{as_inst(r)};
-    return inst && std::ranges::contains(unrolling_, *inst);
+    return inst && std::ranges::contains(unrolling_, *inst, &unrolled_loop::inst);
 }
 
 auto analyzer::target_of(ref r) -> target& {
@@ -69,8 +69,13 @@ auto analyzer::target_of(ref r) -> target& {
 
 auto analyzer::arrive(target& t, const operand& value, const source& src) -> void {
     if (!t.exit) { t.exit = new_segment(); }
-    t.arrivals.emplace_back<incoming>(
-        {.seg = builder_.get_segment()->get_id(), .value = value, .src = src});
+
+    // A type from an arm a known condition skips never reaches the merge
+    const auto known{comptime_value(value)};
+    if (untaken_ == 0 || !known || !comp_.constants().is_type(*known)) {
+        t.arrivals.emplace_back<incoming>(
+            {.seg = builder_.get_segment()->get_id(), .value = value, .src = src});
+    }
     emit_goto(*t.exit);
 }
 
@@ -128,13 +133,11 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     std::erase_if(values, [&](const operand& v) { return is_untyped_literal(v); });
     auto& peer{*TRY(peer_type(values, src))};
 
-    // A runtime array arm meets a slice where it is stored
-    if (peer.get_kind() == gs::type_kind::SLICE &&
-        std::ranges::any_of(values, [&](const operand& v) {
-            return type_of(v).get_kind() == gs::type_kind::ARRAY && !comptime_value(v);
-        })) {
-        return comp_.unsupported(u_, src, "arrays meeting as a slice");
-    }
+    // A runtime array arm meets a slice of it where it is stored
+    const auto sliced{[&](const operand& v) {
+        return peer.get_kind() == gs::type_kind::SLICE &&
+               type_of(v).get_kind() == gs::type_kind::ARRAY && !comptime_value(v);
+    }};
 
     auto& slot_type{gs::is_comptime_numeric(peer.get_kind()) ? comp_.ctx().default_concrete(peer)
                                                              : peer};
@@ -142,8 +145,11 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     for (const auto& arrival : arrivals) {
         builder_.set_segment(*gir_fn_->get_segment(arrival.seg));
         builder_.set_splice(true);
+        const auto arm{sliced(arrival.value) ? array_slice(arrival, arrival.src)
+                                             : result<operand>{arrival.value}};
         const auto stored{
-            coerce_to(arrival.value, slot_type, arrival.src, {.what = use_site::kind::STORE})};
+            arm ? coerce_to(*arm, slot_type, arrival.src, {.what = use_site::kind::STORE})
+                : result<operand>{stdx::err{arm.error()}}};
         const auto value{stored ? as_runtime(*stored, arrival.src) : stdx::err{stored.error()}};
         if (value) { builder_.emit_store(slot, *value); }
         builder_.set_splice(false);
@@ -155,6 +161,35 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
 
     switch_to(merge);
     return gir::value{builder_.emit_load(slot, slot_type), slot_type};
+}
+
+auto analyzer::arm_address(const incoming& arm, const source& src) -> result<gir::value> {
+    const auto& array{arm.value};
+    auto&       type{type_of(array)};
+    if (const auto p{array.as_opt<place>()}) { return settle(*p).address; }
+    if (const auto s{array.as_opt<slot_value>()}) { return s->address; }
+    if (const auto g{array.as_opt<global_ref>()}) {
+        return global_place(g->symbol, *g->type, true).address;
+    }
+
+    // A value the arm just loaded is sliced where it was loaded from
+    auto&      insts{gir_fn_->get_segment(arm.seg)->get_instructions()};
+    const auto v{array.as_opt<gir::value>()};
+    const auto last{insts.size() >= 2 ? insts.end() - 2 : insts.end()};
+    if (v && last != insts.end() && (*last)->kind == gir::instruction_kind::LOAD &&
+        (*last)->result == v->data && !(*last)->operands.empty() &&
+        (*last)->operands.front().type) {
+        const auto from{(*last)->operands.front().data};
+        insts.erase(last);
+        return gir::value{from, type};
+    }
+
+    return spill(TRY(as_runtime(array, src)), type, false).address;
+}
+
+auto analyzer::array_slice(const incoming& arm, const source& src) -> result<operand> {
+    const auto address{TRY(arm_address(arm, src))};
+    return operand{TRY(slice_of_array(address, type_of(arm.value)))};
 }
 
 auto analyzer::analyze_block(inst_id inst) -> result<operand> {
@@ -218,7 +253,10 @@ auto analyzer::analyze_condbr(inst_id inst) -> result<operand> {
         // The arm a known condition skips keeps its type errors, but no value it would compute
         switch_to(seg);
         const auto reported{comp_.diagnostic_count()};
+        const bool skipped{known && !taken};
+        untaken_ += skipped ? 1 : 0;
         const auto analyzed{analyze_body(body)};
+        untaken_ -= skipped ? 1 : 0;
         if (known && !taken && comp_.drop_value_errors(reported)) {
             // An arm cut short by a dropped error leaves the segments it opened unreachable
             const auto here{builder_.get_segment()->get_id()};
@@ -261,8 +299,7 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     // An unrolled loop runs its control at compile time and copies its body per iteration
     if ((loop_flags & flags::UNROLL) != 0) {
         if (is_comptime()) { return run_loop(inst); }
-        unrolling_.emplace_back(inst);
-        const auto unrolled{gsl::finally([this] { unrolling_.pop_back(); })};
+        const auto unrolled{unrolling(inst)};
         return run_loop(inst);
     }
 
@@ -362,10 +399,36 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
     return finish_merge(arrivals, exit, src);
 }
 
+auto analyzer::unrolled_jump(ref to, bool is_break, const source& src) -> result<void> {
+    if (is_comptime() || unrolling_.empty()) { return {}; }
+    const auto  name{is_break ? "break" : "continue"};
+    const auto  code{is_break ? gs::error::UNROLLED_LOOP_BREAK : gs::error::UNROLLED_LOOP_CONTINUE};
+    const auto& inner{unrolling_.back()};
+    if (!unrolls(to)) {
+        // A target around the unrolled loop has no place in its copied body
+        const auto found{std::ranges::find(targets_, *as_inst(to), &target::inst)};
+        if (static_cast<usize>(found - targets_.begin()) >= inner.targets) { return {}; }
+        return comp_.report(
+            u_, src, code, fmt::format("'{}' cannot target a loop outside an unrolled loop", name));
+    }
+
+    // Each copy of the body leaves or repeats at compile time, so the jump can't be runtime's
+    const auto own{std::ranges::find(unrolling_, *as_inst(to), &unrolled_loop::inst)};
+    if (runtime_depth_ <= own->runtime_depth) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        code,
+                        fmt::format("'{}' inside an unrolled loop is only allowed within "
+                                    "compile-time control flow{}",
+                                    name,
+                                    is_break ? "" : " (such as `if comptime`)"));
+}
+
 auto analyzer::analyze_break(inst_id inst) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
     const auto  value{TRY(resolve_value(d.bin.rhs, src))};
+    TRY(unrolled_jump(d.bin.lhs, true, src));
     if (is_comptime() || unrolls(d.bin.lhs)) {
         jump_.emplace(jump::kind::BREAK, *as_inst(d.bin.lhs), value);
         return void_value();
@@ -377,6 +440,7 @@ auto analyzer::analyze_break(inst_id inst) -> result<operand> {
 
 auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
     const auto& operand_ref{mod().data_of(inst).un.operand};
+    TRY(unrolled_jump(operand_ref, false, src_of(inst)));
     if (is_comptime() || unrolls(operand_ref)) {
         jump_.emplace(jump::kind::REPEAT, *as_inst(operand_ref), stdx::none);
         return void_value();

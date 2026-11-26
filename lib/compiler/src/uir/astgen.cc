@@ -553,10 +553,13 @@ auto astgen::lower_attributes(const stdx::option<ast::attribute_list>& attribute
         if (routed && ast::routes_to_fn_literal(item.kind) != *routed) { continue; }
         std::vector<ref> args;
         args.reserve(item.args.size());
+        const auto reads_before{param_reads_};
         for (const auto arg : item.args) { args.emplace_back(expr(arg)); }
-        DISCARD(add_pl(tag::attribute,
-                       writer().u32_field(static_cast<u32>(item.kind)).refs_field(args),
-                       item.name));
+        const u32 bits{param_reads_ != reads_before ? flags::ATTR_READS_PARAMS : 0U};
+        DISCARD(
+            add_pl(tag::attribute,
+                   writer().u32_field(static_cast<u32>(item.kind)).refs_field(args).u32_field(bits),
+                   item.name));
     }
 }
 

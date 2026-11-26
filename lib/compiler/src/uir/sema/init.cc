@@ -371,7 +371,6 @@ auto analyzer::init_array(inst_id inst, gs::type& type, const source& src) -> re
         return comp_.constants().intern(ip::aggregate_value{std::move(elements)}, type);
     }
 
-    if (arr.len == 0) { return comp_.unsupported(u_, src, "an empty array at runtime"); }
     const auto                           slot{builder_.emit_alloca(type)};
     std::vector<stdx::option<ip::index>> known;
     for (u64 i{0}; const auto value_ref : *values) {

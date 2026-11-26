@@ -435,10 +435,7 @@ auto analyzer::comptime_expect(gsl::span<const ref> args, const source& src, boo
     return operand{comp_.constants().intern(false, bool_type)};
 }
 
-namespace {
-
-// Whether an attribute list holds `@[discardable]` with no condition or a `true` one
-[[nodiscard]] auto lists_discardable(const module_t& m, gsl::span<const inst_id> attrs) -> bool {
+auto lists_discardable(const module_t& m, gsl::span<const inst_id> attrs) -> bool {
     return std::ranges::any_of(attrs, [&](inst_id inst) {
         if (m.tag_of(inst) != tag::attribute) { return false; }
         record_reader rec{m, m.data_of(inst).pl.extra};
@@ -450,8 +447,6 @@ namespace {
         return args.empty() || as_well_known(args.front()) == well_known::bool_true;
     });
 }
-
-} // namespace
 
 auto compilation::is_discardable(instance& fn) -> bool {
     // A generic's instance folds its attributes with its body, which may depend on its parameters
@@ -519,6 +514,7 @@ auto analyzer::analyze_unused(inst_id inst) -> result<operand> {
     const auto call{as_inst(d.un.operand)};
     const auto callee{call ? callees_.find(*call) : callees_.end()};
     if (callee != callees_.end() && comp_.is_discardable(*callee->second)) { return void_value(); }
+    if (call && discardable_calls_.contains(*call)) { return void_value(); }
     return comp_.report(u_,
                         src,
                         gs::error::UNUSED_RESULT,

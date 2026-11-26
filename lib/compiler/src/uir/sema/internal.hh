@@ -459,6 +459,8 @@ struct generic_fn {
     // The type its value has, holding its environment when it captures, and its number there
     stdx::option<gs::type&> value_type{};
     u32                     value_id{0};
+    // The attributes no parameter decides, once `@typeInfo` asks
+    stdx::option<gs::resolved_attributes> attributes{};
 };
 
 // What a function declared inside a type sees of it
@@ -966,6 +968,9 @@ class compilation {
     auto note_storage(const unit& u, decl_id decl) -> void {
         decls_[u.index][std::to_underlying(decl)].has_storage = true;
     }
+    [[nodiscard]] auto has_storage(const unit& u, decl_id decl) const -> bool {
+        return decls_[u.index][std::to_underlying(decl)].has_storage;
+    }
 
     // Runs `fn` at compile time on interned arguments, memoized when the call is pure
     [[nodiscard]] auto
@@ -1210,6 +1215,12 @@ struct binary_info {
 };
 
 // A break or a fallthrough reaching a merge: where it left from and what it carried
+struct unrolled_loop {
+    inst_id inst;
+    u32     runtime_depth;
+    usize   targets;
+};
+
 struct incoming {
     gir::segment_id seg;
     operand         value;
@@ -1645,14 +1656,22 @@ class analyzer {
     [[nodiscard]] auto
     load_dyn_entry(const operand& object, gs::type& dyn, u64 index, const source& src)
         -> result<dyn_entry>;
+    // A `dyn` object's `{ data, vtable }` stored in a slot typed by the bare `dyn`
+    [[nodiscard]] auto spill_dyn(const operand& object, gs::type& dyn, const source& src)
+        -> result<gir::value>;
+    // `@dynCast(^T, w)` reads `w`'s data pointer as a `^T`, unchecked
+    [[nodiscard]] auto builtin_dyn_cast(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
     // The comptime values a type declaration captures from the body around it
     [[nodiscard]] auto captured_values(inst_id inst, gs::type_kind kind)
         -> result<std::vector<ip::index>>;
     [[nodiscard]] auto resolve_struct(nominal& n) -> result<void>;
     [[nodiscard]] auto resolve_union(nominal& n) -> result<void>;
     [[nodiscard]] auto resolve_enum(nominal& n) -> result<void>;
-    [[nodiscard]] auto field_type_of(gsl::span<const inst_id> body,
-                                     std::string_view         name,
+    // A field's type, an `auto` one taken from its default: `a: auto = 42` is an `i32`
+    [[nodiscard]] auto field_type_of(gsl::span<const inst_id>                body,
+                                     stdx::option<gsl::span<const inst_id>> default_body,
+                                     std::string_view                        name,
                                      const source& src) -> result<gsl::not_null<gs::type*>>;
     // The enum's variant `name` as a constant
     // The variant an enum constant names, none for any other constant
@@ -1673,6 +1692,8 @@ class analyzer {
     [[nodiscard]] auto analyze_elem_val(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_elem_ptr(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand>;
+    // The module-level declaration a `decl_val` names, when it has a GIR global
+    [[nodiscard]] auto declared_global(ref r) const -> stdx::option<decl_id>;
     [[nodiscard]] auto analyze_deref(inst_id inst) -> result<operand>;
     // `*s[a..b]`, the array a range of known length spans
     [[nodiscard]] auto
@@ -1787,8 +1808,6 @@ class analyzer {
     // Every value a range takes, when both its bounds are known
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
-    // Whether a `break` or `continue` names `loop`
-    [[nodiscard]] auto jumped_to(inst_id loop) const -> bool;
     // A `for` capture's type, a `&v` or `^v` one's checked against the iterable it reaches into
     [[nodiscard]] auto for_capture_type(const source&      src,
                                         usize              at,
@@ -2031,6 +2050,9 @@ class analyzer {
 
     // Operators (arith.cc)
     [[nodiscard]] auto analyze_binary(inst_id inst, tag t) -> result<operand>;
+    // The binary operator later in `body` whose left side is `call`, read through its reference
+    [[nodiscard]] auto reading_binary(gsl::span<const inst_id> body, inst_id call) const
+        -> stdx::option<inst_id>;
     [[nodiscard]] auto analyze_unary(inst_id inst, tag t) -> result<operand>;
     [[nodiscard]] auto analyze_bool_op(inst_id inst, bool is_and) -> result<operand>;
     [[nodiscard]] auto
@@ -2091,6 +2113,10 @@ class analyzer {
     [[nodiscard]] auto slice_of_array(const gir::value& address, gs::type& from)
         -> result<gir::value>;
     [[nodiscard]] auto as_runtime(const operand& op, const source& src) -> result<gir::value>;
+    // The runtime address of a compile-time address that names no global
+    [[nodiscard]] auto
+    stored_pointee(const ip::address_value& address, gs::type& type, const source& src)
+        -> result<gir::value>;
     // A function as a compile-time value of the function type `target`, none when it isn't one
     [[nodiscard]] auto comptime_callable(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
@@ -2187,6 +2213,9 @@ class analyzer {
     [[nodiscard]] auto analyze_discard(inst_id inst) -> result<operand>;
 
     // Control flow (control.cc)
+    // A runtime array arm as a slice of where it is stored, or of a slot holding it
+    [[nodiscard]] auto array_slice(const incoming& arm, const source& src) -> result<operand>;
+    [[nodiscard]] auto arm_address(const incoming& arm, const source& src) -> result<gir::value>;
     [[nodiscard]] auto analyze_block(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_loop(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_condbr(inst_id inst) -> result<operand>;
@@ -2206,6 +2235,14 @@ class analyzer {
     // A block at compile time, taking a `break` that targets it as its value
     [[nodiscard]] auto run_block(inst_id inst, gsl::span<const inst_id> body) -> result<operand>;
     [[nodiscard]] auto run_loop(inst_id inst) -> result<operand>;
+    // Records a loop unrolled into a runtime body until the guard ends
+    [[nodiscard]] auto unrolling(inst_id inst) {
+        unrolling_.emplace_back<unrolled_loop>(
+            {.inst = inst, .runtime_depth = runtime_depth_, .targets = targets_.size()});
+        return gsl::finally([this] { unrolling_.pop_back(); });
+    }
+    // Reports a `break` or `continue` an unrolled loop's runtime copies can't take
+    [[nodiscard]] auto unrolled_jump(ref to, bool is_break, const source& src) -> result<void>;
     // Analyzes what follows at compile time until the guard ends
     [[nodiscard]] auto comptime_scope() {
         ++comptime_depth_;
@@ -2336,6 +2373,9 @@ class analyzer {
     [[nodiscard]] auto analyze_type_of(inst_id inst) -> result<operand>;
 
     // Reflection (reflection.cc)
+    // A generic's own attributes, an error when one reads its parameters
+    [[nodiscard]] auto generic_attributes(generic_fn& g, const source& src)
+        -> result<gs::resolved_attributes>;
     [[nodiscard]] auto builtin_type_info(gsl::span<const ref> args, const source& src)
         -> result<operand>;
     [[nodiscard]] auto type_info(gs::type&                                    type,
@@ -2368,6 +2408,9 @@ class analyzer {
     [[nodiscard]] auto field_default_value(gs::type& type, usize index, const source& src)
         -> result<stdx::option<ip::index>>;
     [[nodiscard]] auto builtin_bit_size(gsl::span<const ref> args, const source& src)
+        -> result<operand>;
+    // A file's bytes as a constant `[N:0]u8`, read through the context's cache
+    [[nodiscard]] auto builtin_embed(gsl::span<const ref> args, const source& src)
         -> result<operand>;
     [[nodiscard]] auto builtin_type_name(gsl::span<const ref> args, const source& src)
         -> result<operand>;
@@ -2501,6 +2544,10 @@ class analyzer {
     [[nodiscard]] auto compare_out_of_range(const binary_info& info,
                                             const operand&     lhs,
                                             const operand&     rhs) -> stdx::option<bool>;
+    // `+` or a comparison of two known strings, none for anything else
+    [[nodiscard]] auto string_binary(const binary_info& info,
+                                     const operand&     lhs,
+                                     const operand&     rhs) -> stdx::option<ip::index>;
     // A binary operator of an inferred cast and an untyped value, once its type is known
     [[nodiscard]] auto binary_as(inst_id inst, gs::type& target, const source& src)
         -> result<operand>;
@@ -2586,6 +2633,8 @@ class analyzer {
         -> result<operand>;
     // `@as(T, x)` with its target known
     [[nodiscard]] auto as_to(gs::type& target, ref value_ref, const source& src) -> result<operand>;
+    // Why `@as` can't narrow a runtime `from` to `target`, naming the builtin that can
+    [[nodiscard]] auto narrowing_as(const gs::type& from, const gs::type& target) -> std::string;
     // Casts and conversions (casts.cc)
     [[nodiscard]] auto builtin_cast(inst_id              inst,
                                     syntax::builtin_t    which,
@@ -2706,7 +2755,7 @@ class analyzer {
     std::vector<propagation>                                              propagations_;
     ankerl::unordered_dense::map<inst_id, stdx::option<returned_failure>> failures_;
     // The loops being unrolled into a runtime body, innermost last
-    std::vector<inst_id>                            unrolling_;
+    std::vector<unrolled_loop>                      unrolling_;
     ankerl::unordered_dense::map<inst_id, mem_view> mem_views_;
     // The types an inferred return type meets, when collecting them
     stdx::option<std::vector<gsl::not_null<gs::type*>>> collected_returns_;
@@ -2726,6 +2775,8 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, dyn_entry> dyn_entries_;
     // The reference each binary operator read its left side through
     ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
+    // A binary operator's left side read through a returned reference right after its call
+    ankerl::unordered_dense::map<inst_id, std::pair<gir::value, operand>> early_reads_;
     // Compile-time string parameters built on entry, which spilling them reuses
     ankerl::unordered_dense::map<inst_id, gir::value> entry_strings_;
     // The packed fields a nested packed field's place is reached through
@@ -2736,8 +2787,6 @@ class analyzer {
     usize comptime_depth_{0};
     // Inside a signature's `@TypeOf`, which reads a runtime parameter's type only
     bool only_types_{false};
-    // The local `const` initializers being analyzed
-    usize const_inits_{0};
     // The values `capture` instructions read, and the type whose namespace holds the body
     std::vector<ip::index> captures_;
     // A closure body's captures read from its environment, by capture slot
@@ -2751,11 +2800,15 @@ class analyzer {
     // The call instruction being analyzed, and the function each call reached
     stdx::option<inst_id>                                           calling_;
     ankerl::unordered_dense::map<inst_id, gsl::not_null<instance*>> callees_;
+    // The `dyn` calls whose interface method is `@[discardable]`
+    ankerl::unordered_dense::set<inst_id> discardable_calls_;
     stdx::option<nominal&>  scope_;
     stdx::option<gs::type&> self_type_;
     std::string             symbol_prefix_;
     u32                     frame_;
     u32                     runtime_depth_{0};
+    // The arms being analyzed that a known condition skips
+    u32 untaken_{0};
     u32                     alloc_base_;
     stdx::option<jump>      jump_;
 };
@@ -2812,6 +2865,8 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 
 // Whether `d`'s value is the function literal `func` itself
 [[nodiscard]] auto declares_literal(const module_t& m, const decl& d, inst_id func) -> bool;
+// Whether an attribute list holds `@[discardable]` with no condition or a `true` one
+[[nodiscard]] auto lists_discardable(const module_t& m, gsl::span<const inst_id> attrs) -> bool;
 
 // An element as a container of `constant` mutability holds it. A pointer, reference or slice keeps
 // its own mutability, which is its pointee's

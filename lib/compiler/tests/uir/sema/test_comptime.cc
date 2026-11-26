@@ -60,6 +60,10 @@ class comptime_run {
         return UNWRAP(value(name).data.as_opt<bool>());
     }
 
+    [[nodiscard]] auto text_value(std::string_view name) const -> std::string {
+        return UNWRAP(value(name).data.as_opt<std::string>());
+    }
+
     [[nodiscard]] auto float_value(std::string_view name) const -> f64 {
         return UNWRAP(value(name).data.as_opt<f128>()).to_f64();
     }
@@ -126,14 +130,6 @@ class comptime_run {
     if (run.out().stopped_at) { FAIL("UIR Sema stopped at " << run.out().stopped_at->what); }
     REQUIRE_FALSE(run.out().diagnostics.empty());
     return run;
-}
-
-// A construct a later phase analyzes, which UIR Sema stops on until then
-auto check_later_phase(std::string_view source, std::string_view stops_on) -> void {
-    const comptime_run run{source};
-    REQUIRE(run.out().stopped_at);
-    INFO("stopped at " << run.out().stopped_at->what);
-    CHECK(run.out().stopped_at->what.contains(stops_on));
 }
 
 constexpr helpers::pipeline_settings UNSAFE{.runtime_safety = false};
@@ -457,7 +453,19 @@ TEST_CASE("Volatile variables refuse constant folding in const eval", "[uir]") {
 }
 
 TEST_CASE("Const eval string concatenation and comparison folding", "[uir]") {
-    check_later_phase(R"(const greeting = "Hello, " + "world!";)", "operator");
+    const auto run{accepted(R"(
+        const greeting = "Hello, " + "world!";
+        const is_same = "ghoti" == "ghoti";
+        const is_diff = "ghoti" != "c";
+        const is_less = "apple" < "banana";
+        const is_greater = "b" >= "ab";
+    )")};
+    CHECK(run.text_value("greeting") == "Hello, world!");
+    CHECK(run.value_type_name("greeting") == "[13:0]u8");
+    for (const auto name : {"is_same", "is_diff", "is_less", "is_greater"}) {
+        INFO(name);
+        CHECK(run.bool_value(name));
+    }
 }
 
 TEST_CASE("Const eval @setEvalRecursionLimit in function scope", "[uir]") {

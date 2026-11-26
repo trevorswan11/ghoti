@@ -401,6 +401,12 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     }
 
     if (const auto value{op.as_opt<gir::value>()}) {
+        // An untyped number read at runtime from its slot is used as the target's
+        if (gs::is_comptime_numeric(from.get_kind()) && gs::is_numeric(target.get_kind()) &&
+            !gs::is_comptime_numeric(target.get_kind())) {
+            return operand{gir::value{value->data, target}};
+        }
+
         if (gs::is_numeric(from.get_kind()) && gs::is_numeric(target.get_kind()) &&
             gs::is_implicit_widenable(from, target)) {
             TRY(require_runtime(src));
@@ -559,8 +565,11 @@ auto analyzer::read_through_reference(const operand& op, const source& src) -> r
     auto& type{type_of(op)};
     if (type.get_kind() != gs::type_kind::REFERENCE) { return op; }
 
-    // A compile-time reference holds what it refers to
-    if (const auto referent{comptime_referent(op)}) { return operand{*referent}; }
+    // A compile-time reference holds what it refers to, which runtime code reads where it lives
+    const bool stored_address{!is_comptime() && !memory_place(op) && comptime_value(op)};
+    if (const auto referent{comptime_referent(op)}; referent && !stored_address) {
+        return operand{*referent};
+    }
     if (is_comptime()) { return op; }
     auto&      referent{*gs::pointee_of(type)};
     const auto address{TRY(as_runtime(op, src))};
@@ -724,6 +733,28 @@ auto analyzer::concrete(const operand& op, const source& src) -> result<operand>
     return op;
 }
 
+auto analyzer::stored_pointee(const ip::address_value& address, gs::type& type, const source& src)
+    -> result<gir::value> {
+    const auto pointee_type{gs::pointee_of(type)};
+    if (address.pointee.size() != 1 || !pointee_type) {
+        return comp_.unsupported(u_, src, "the address of a value with no runtime storage");
+    }
+
+    // A typed value is hoisted into a hidden read-only global
+    const auto value{address.pointee.front()};
+    if (!gs::is_comptime_numeric(pointee_type->get_kind())) {
+        auto  name{comp_.literal_global_name("ref_lit")};
+        auto& global{
+            comp_.gir().add_global(name, *pointee_type, true, stdx::none, gir::linkage::INTERNAL)};
+        global.const_init.emplace(value);
+        return gir::value{builder_.emit_global_addr(std::move(name), *pointee_type, true), type};
+    }
+
+    // An untyped one has no global type, so it is kept in a slot
+    const auto slot{spill(constant(value, *pointee_type), *pointee_type, false)};
+    return gir::value{builder_.emit_address_of(slot.address, type), type};
+}
+
 auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::value> {
     const auto typed{TRY(concrete(op, src))};
     if (const auto value{typed.as_opt<gir::value>()}) { return *value; }
@@ -758,15 +789,16 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
         // A global's known address is read where it lives
         if (const auto address{data.as_opt<ip::address_value>()};
-            address && address->pointee.empty()) {
+            address && !address->symbol.empty()) {
             TRY(require_runtime(src));
             auto&             type{type_of(typed)};
             const std::string symbol{address->symbol};
             return gir::value{builder_.emit_global_addr(symbol, type, type.is_constant()), type};
         }
 
-        if (data.is<ip::address_value>()) {
-            return comp_.unsupported(u_, src, "the address of a value with no runtime storage");
+        if (const auto address{data.as_opt<ip::address_value>()}) {
+            TRY(require_runtime(src));
+            return stored_pointee(*address, type_of(typed), src);
         }
 
         if (const auto text{data.as_opt<std::string>()};

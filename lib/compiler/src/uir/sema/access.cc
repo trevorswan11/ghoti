@@ -415,7 +415,10 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
             return operand{TRY(read(field, src))};
         }
 
-        return comptime_field(*index, name, src);
+        // A runtime body reads through a known address where its value is stored
+        if (is_comptime() || !known.data.is<ip::address_value>()) {
+            return comptime_field(*index, name, src);
+        }
     }
 
     if (const auto g{object.as_opt<global_const>()}; g && is_comptime()) {
@@ -799,6 +802,15 @@ auto analyzer::analyze_elem_ptr(inst_id inst) -> result<operand> {
     return operand{elem};
 }
 
+auto analyzer::declared_global(ref r) const -> stdx::option<decl_id> {
+    const auto inst{as_inst(r)};
+    if (!inst || mod().tag_of(*inst) != tag::decl_val) { return stdx::none; }
+    const decl_id decl{mod().data_of(*inst).un.aux};
+    if (scope_ && mod().decl_at(decl).owner == scope_->inst) { return stdx::none; }
+    if (!comp_.has_storage(u_, decl)) { return stdx::none; }
+    return decl;
+}
+
 auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -874,8 +886,14 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
         auto& pointee{type_of(target)};
         auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
                                       : ctx.get_reference(mut, pointee)};
-        return comp_.constants().intern(ip::address_value{.symbol = {}, .pointee = {*known}},
-                                        address_type);
+        // A module constant's address names its global too, which runtime code reads
+        std::string symbol;
+        if (const auto decl{declared_global(operand_ref)}) {
+            symbol = TRY(global_symbol(*decl, src));
+        }
+
+        return comp_.constants().intern(
+            ip::address_value{.symbol = std::move(symbol), .pointee = {*known}}, address_type);
     }
 
     // A runtime place has no address until the code runs
@@ -1053,14 +1071,20 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
 
 auto analyzer::deref_slice(ref operand_ref, const operand& slice, bool as_place, const source& src)
     -> result<operand> {
-    // `*s[a..b]` is the array the range's known length spans
-    const auto inst{as_inst(operand_ref)};
+    // `*s[a..b]` is the array the range's known length spans, also through a `let` of it
+    auto inst{as_inst(operand_ref)};
+    while (inst && mod().tag_of(*inst) == tag::let_value) {
+        auto binding{record(*inst)};
+        binding.skip_str();
+        DISCARD(binding.ref_field());
+        inst = as_inst(*binding.ref_field());
+    }
     if (!inst || mod().tag_of(*inst) != tag::slice) {
         return comp_.unsupported(u_, src, "dereferencing a slice of unknown length");
     }
 
-    auto rec{record(*inst)};
-    rec.skip_ref();
+    auto       rec{record(*inst)};
+    const auto object_ref{*rec.ref_field()};
     const auto lo_ref{rec.ref_field()};
     const auto hi_ref{rec.ref_field()};
     const bool inclusive{(rec.u32_field() & flags::INCLUSIVE) != 0};
@@ -1071,8 +1095,17 @@ auto analyzer::deref_slice(ref operand_ref, const operand& slice, bool as_place,
         const auto exact{index ? int_of(comp_.constants().value_at(*index)) : stdx::none};
         return exact ? exact->to_i128() : stdx::none;
     }};
+    // An open end is the end of the array sliced
+    const auto open_end{[&]() -> stdx::option<i128> {
+        const auto object{resolve(object_ref, src)};
+        if (!object) { return stdx::none; }
+        auto&      type{type_of(*object)};
+        const auto arr{gs::pointee_of(type).value_or(type).get_data().as_opt<gs::types::array>()};
+        if (!arr) { return stdx::none; }
+        return static_cast<i128>(arr->len);
+    }};
     const auto lo{known_bound(lo_ref)};
-    const auto hi{hi_ref ? known_bound(hi_ref) : stdx::none};
+    const auto hi{hi_ref ? known_bound(hi_ref) : open_end()};
     if (!lo || !hi || *hi + (inclusive ? 1 : 0) < *lo) {
         return comp_.unsupported(u_, src, "dereferencing a slice of unknown length");
     }

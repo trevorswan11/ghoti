@@ -269,12 +269,23 @@ auto analyzer::resolve_fields(nominal& n) -> result<void> {
     }
 }
 
-auto analyzer::field_type_of(gsl::span<const inst_id> body,
-                             std::string_view         name,
-                             const source&            src) -> result<gsl::not_null<gs::type*>> {
+auto analyzer::field_type_of(gsl::span<const inst_id>               body,
+                             stdx::option<gsl::span<const inst_id>> default_body,
+                             std::string_view                       name,
+                             const source& src) -> result<gsl::not_null<gs::type*>> {
     auto& type{*TRY(eval_type(body, src))};
     if (type.get_kind() == gs::type_kind::AUTO) {
-        return comp_.unsupported(u_, src, "a field whose type is inferred");
+        if (!default_body || default_body->empty()) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_AUTO_USAGE,
+                                fmt::format("{} field '{}' cannot have type 'auto'",
+                                            default_body ? "Struct" : "Union",
+                                            name));
+        }
+
+        const auto value{TRY(eval_comptime(*default_body))};
+        return &inferred_type(value);
     }
 
     // A by-value field of a type still resolving its own fields can never be sized
@@ -319,13 +330,13 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
     for (u32 i{0}; i < count; ++i) {
         const auto name{rec.str_field()};
         rec.skip_u32();
-        const auto type_body{rec.body_field()};
-        rec.skip_body();
+        const auto  type_body{rec.body_field()};
+        const auto  default_body{rec.body_field()};
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         alignments[i]  = resolved.alignment.value_or(0);
-        field_types[i] = *TRY(field_type_of(type_body, name, field_src));
+        field_types[i] = *TRY(field_type_of(type_body, default_body, name, field_src));
         if (bit_packed) {
             TRY(check_packed_field(*field_types[i], name, "struct", field_src));
             if (resolved.alignment) { TRY(reject_packed_alignment(name, "struct", field_src)); }
@@ -400,7 +411,7 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto  attrs{rec.body_field()};
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
-        field_types[i] = *TRY(field_type_of(type_body, name, field_src));
+        field_types[i] = *TRY(field_type_of(type_body, stdx::none, name, field_src));
         if (bit_packed) { TRY(check_packed_field(*field_types[i], name, "union", field_src)); }
         if (resolved.alignment) {
             DISCARD(comp_.report(u_,

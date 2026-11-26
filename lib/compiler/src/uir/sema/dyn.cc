@@ -356,8 +356,13 @@ auto analyzer::call_dyn(inst_id              call,
     }
 
     // The method's parameter and return types come from the interface's own signature
-    const auto&   owner{*iface->owner};
-    const auto&   m{*owner.uir};
+    const auto& owner{*iface->owner};
+    const auto& m{*owner.uir};
+    const auto  named{std::ranges::find(methods, name, &interface_method::name)};
+    if (named != methods.end() && lists_discardable(m, named->attrs)) {
+        discardable_calls_.insert(call);
+    }
+
     record_reader rec{m, m.data_of(slot->func).pl.extra};
     const auto    params{params_of(m, rec.body_field())};
     const auto    ret{rec.body_field()};
@@ -435,20 +440,14 @@ auto analyzer::call_dyn(inst_id              call,
 
 auto analyzer::load_dyn_entry(const operand& object, gs::type& dyn, u64 index, const source& src)
     -> result<dyn_entry> {
-    auto& ctx{comp_.ctx()};
-    auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
-                                     ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
-    // A field holding the `dyn` is read from where it lives
-    const auto fat{TRY([&] -> result<gir::value> {
-        if (const auto p{object.as_opt<place>()}) { return read(*p, src); }
-        return as_runtime(object, src);
-    }())};
-    const auto spilled{builder_.emit_alloca(dyn)};
-    builder_.emit_store(gir::value{spilled, dyn}, fat);
-    const auto data_at{builder_.emit_get_element_ptr(
-        gir::value{spilled, dyn}, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
-    const auto table_at{builder_.emit_get_element_ptr(
-        gir::value{spilled, dyn}, {usize_constant(DYN_VTABLE_FIELD)}, opaque_ptr)};
+    auto&      ctx{comp_.ctx()};
+    auto&      opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
+                                          ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
+    const auto spilled{TRY(spill_dyn(object, dyn, src))};
+    const auto data_at{
+        builder_.emit_get_element_ptr(spilled, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
+    const auto table_at{
+        builder_.emit_get_element_ptr(spilled, {usize_constant(DYN_VTABLE_FIELD)}, opaque_ptr)};
     const auto data{builder_.emit_load(gir::value{data_at, opaque_ptr}, opaque_ptr)};
     const auto table{builder_.emit_load(gir::value{table_at, opaque_ptr}, opaque_ptr)};
     // The table is an array of code pointers
@@ -457,6 +456,53 @@ auto analyzer::load_dyn_entry(const operand& object, gs::type& dyn, u64 index, c
         gir::value{table, table_ptr}, {usize_constant(index)}, opaque_ptr)};
     const auto entry{builder_.emit_load(gir::value{entry_at, opaque_ptr}, opaque_ptr)};
     return dyn_entry{.data = gir::value{data, opaque_ptr}, .entry = gir::value{entry, opaque_ptr}};
+}
+
+auto analyzer::spill_dyn(const operand& object, gs::type& dyn, const source& src)
+    -> result<gir::value> {
+    // A field holding the `dyn` is read from where it lives
+    const auto fat{TRY([&] -> result<gir::value> {
+        if (const auto p{object.as_opt<place>()}) { return read(*p, src); }
+        return as_runtime(object, src);
+    }())};
+    const auto spilled{builder_.emit_alloca(dyn)};
+    builder_.emit_store(gir::value{spilled, dyn}, fat);
+    return gir::value{spilled, dyn};
+}
+
+auto analyzer::builtin_dyn_cast(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 2) { return comp_.unsupported(u_, src, "a `@dynCast` of this arity"); }
+    const auto target_at{arg_src(src, 0).value_or(src)};
+    auto&      target{*TRY(resolve_type(args[0], target_at))};
+    if (target.get_kind() != gs::type_kind::POINTER &&
+        target.get_kind() != gs::type_kind::REFERENCE) {
+        return comp_.report(u_,
+                            target_at,
+                            gs::error::TYPE_MISMATCH,
+                            "`@dynCast` target must be a pointer or reference type (`^T` / `&T`)");
+    }
+
+    const auto object_at{arg_src(src, 1).value_or(src)};
+    const auto object{TRY(resolve(args[1], object_at))};
+    auto&      from{type_of(object)};
+    const auto dyn{dyn_behind(from)};
+    if (!dyn) {
+        return comp_.report(
+            u_,
+            object_at,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("`@dynCast` source must be a `&dyn I` / `^dyn I`; found `{}`",
+                        comp_.ctx().type_display_name(from)));
+    }
+
+    TRY(require_runtime(src));
+    auto&      ctx{comp_.ctx()};
+    auto&      opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT,
+                                          ctx.get_builtin_resolved_type(gs::type_kind::OPAQUE))};
+    const auto spilled{TRY(spill_dyn(object, *dyn, src))};
+    const auto data_at{
+        builder_.emit_get_element_ptr(spilled, {usize_constant(DYN_DATA_FIELD)}, opaque_ptr)};
+    return gir::value{builder_.emit_load(gir::value{data_at, opaque_ptr}, target), target};
 }
 
 void analyzer::prepare_dyn_call(inst_id call) {

@@ -69,14 +69,19 @@ namespace {
     return gs::pointee_of(t);
 }
 
-// Whether a type body spells `auto` behind pointers, references or slices: `&mut? auto`
+// Whether a type body spells `auto` behind pointers, references, slices or an array
 [[nodiscard]] auto is_auto_pattern(const module_t& m, gsl::span<const inst_id> body) -> bool {
     if (body.empty() || m.tag_of(body.back()) != tag::yield) { return false; }
     auto at{m.data_of(body.back()).un.operand};
     while (const auto inst{as_inst(at)}) {
         const auto t{m.tag_of(*inst)};
-        if (t != tag::ptr_type && t != tag::ref_type && t != tag::slice_type) { return false; }
+        if (t != tag::ptr_type && t != tag::ref_type && t != tag::slice_type &&
+            t != tag::array_type) {
+            return false;
+        }
+
         record_reader rec{m, m.data_of(*inst).pl.extra};
+        if (t == tag::array_type) { rec.skip_ref(); }
         at = *rec.ref_field();
     }
 
@@ -94,6 +99,58 @@ namespace {
     for (u32 i{0}; i < names; ++i) { rec.skip_str(); }
     rec.skip_ref().skip_u32();
     return (rec.u32_field() & flags::IMPL_FN) != 0;
+}
+
+// Whether a type spells `auto` behind pointers, references, slices or arrays
+[[nodiscard]] auto holds_auto(const gs::type& t) -> bool {
+    if (t.get_kind() == gs::type_kind::AUTO) { return true; }
+    if (const auto arr{t.get_data().as_opt<gs::types::array>()}) {
+        return holds_auto(arr->underlying);
+    }
+
+    const auto leaf{element_of(t)};
+    return leaf && holds_auto(*leaf);
+}
+
+// The type an `auto` pattern takes from an argument's type, none when they don't fit
+[[nodiscard]] auto match_auto(gs::context& ctx, gs::type& declared, gs::type& given)
+    -> stdx::option<gs::type&> {
+    if (declared.get_kind() == gs::type_kind::AUTO) { return given; }
+    if (!holds_auto(declared)) { return declared; }
+
+    // `[n]auto` takes the argument's element type, its length still checked by the coercion
+    const auto given_array{given.get_data().as_opt<gs::types::array>()};
+    if (const auto arr{declared.get_data().as_opt<gs::types::array>()}) {
+        if (!given_array) { return declared; }
+        const auto elem{match_auto(ctx, arr->underlying, given_array->underlying)};
+        if (!elem) { return stdx::none; }
+        return ctx.get_array(
+            declared.get_key().get_mut(), given_array->null_terminated, arr->len, *elem);
+    }
+
+    // `mut?` takes the argument's own mutability, any other modifier keeps the declared one
+    const auto mut{declared.is_poly() ? given.get_key().get_mut() : declared.get_key().get_mut()};
+    auto&      leaf{*element_of(declared)};
+    if (const auto slice{declared.get_data().as_opt<gs::types::slice>()}) {
+        // A slice takes an array or a reference to one, as `[]T` does
+        const auto behind{gs::pointee_of(given)};
+        const auto array{given_array ? given_array
+                         : behind    ? behind->get_data().as_opt<gs::types::array>()
+                                     : stdx::none};
+        const auto given_slice{given.get_data().as_opt<gs::types::slice>()};
+        auto* held{given_slice ? &given_slice->underlying : array ? &array->underlying : nullptr};
+        if (!held) { return stdx::none; }
+        const auto elem{match_auto(ctx, leaf, *held)};
+        if (!elem) { return stdx::none; }
+        return ctx.get_slice(mut, slice->null_terminated, *elem);
+    }
+
+    const auto given_leaf{element_of(given)};
+    if (!given_leaf || given.get_kind() != declared.get_kind()) { return stdx::none; }
+    const auto inner{match_auto(ctx, leaf, *given_leaf)};
+    if (!inner) { return stdx::none; }
+    if (declared.get_kind() == gs::type_kind::POINTER) { return ctx.get_pointer(mut, *inner); }
+    return ctx.get_reference(mut, *inner);
 }
 
 [[nodiscard]] auto mut_prefix(const gs::type& underlying) -> std::string_view {
@@ -522,11 +579,13 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         const bool erased_param{type.get_kind() == gs::type_kind::FUNCTION};
         const auto closure{erased_param ? comp_.closure_body(type_of(arg)) : stdx::none};
         const auto arg_kind{type_of(arg).get_kind()};
-        const bool array_for_slice{type.get_kind() == gs::type_kind::SLICE &&
-                                   arg_kind == gs::type_kind::ARRAY};
-        const auto pointee{gs::pointee_of(type_of(arg))};
-        const bool function_ref_arg{erased_param && arg_kind == gs::type_kind::REFERENCE &&
-                                    pointee && pointee->get_kind() == gs::type_kind::FUNCTION};
+        // An `auto` pattern is spelled by the type it takes
+        const bool  array_for_slice{type.get_kind() == gs::type_kind::SLICE &&
+                                    arg_kind == gs::type_kind::ARRAY &&
+                                    !is_auto_pattern(m, type_body)};
+        const auto  pointee{gs::pointee_of(type_of(arg))};
+        const bool  function_ref_arg{erased_param && arg_kind == gs::type_kind::REFERENCE &&
+                                     pointee && pointee->get_kind() == gs::type_kind::FUNCTION};
         std::string spelled{comp_.mangle_type(item && erased_param ? *item->fn->type
                                               : array_for_slice || function_ref_arg ? type_of(arg)
                                                                                     : type)};
@@ -680,35 +739,13 @@ auto analyzer::call_following_poly(instance&            target,
 auto analyzer::matched_type(gs::type& declared, const operand& arg, const source& src)
     -> result<gsl::not_null<gs::type*>> {
     if (declared.get_kind() == gs::type_kind::AUTO) { return &inferred_type(arg); }
-
-    // `[n]auto` takes the argument's element type, its length still checked by the coercion
-    if (const auto arr{declared.get_data().as_opt<gs::types::array>()};
-        arr && arr->underlying.get_kind() == gs::type_kind::AUTO) {
-        const auto given{type_of(arg).get_data().as_opt<gs::types::array>()};
-        if (!given) { return &declared; }
-        return &comp_.ctx().get_array(
-            declared.get_key().get_mut(), given->null_terminated, arr->len, given->underlying);
-    }
-
-    const auto leaf{element_of(declared)};
-    if (!leaf || leaf->get_kind() != gs::type_kind::AUTO) { return &declared; }
-
-    auto&      given{type_of(arg)};
-    const auto given_leaf{element_of(given)};
-    if (!given_leaf || given.get_kind() != declared.get_kind()) {
+    if (!holds_auto(declared)) { return &declared; }
+    const auto matched{match_auto(comp_.ctx(), declared, type_of(arg))};
+    if (!matched) {
         return comp_.unsupported(u_, src, "an argument that doesn't match its `auto` pattern");
     }
 
-    // `mut?` takes the argument's own mutability, any other modifier keeps the declared one
-    const auto mut{declared.is_poly() ? given.get_key().get_mut() : declared.get_key().get_mut()};
-    auto&      ctx{comp_.ctx()};
-    switch (declared.get_kind()) {
-    case gs::type_kind::POINTER: return &ctx.get_pointer(mut, *given_leaf);
-    case gs::type_kind::SLICE:
-        return &ctx.get_slice(
-            mut, given.get_data().as<gs::types::slice>().null_terminated, *given_leaf);
-    default: return &ctx.get_reference(mut, *given_leaf);
-    }
+    return &*matched;
 }
 
 auto analyzer::pack_element_type(const operand& arg) -> gs::type& {
