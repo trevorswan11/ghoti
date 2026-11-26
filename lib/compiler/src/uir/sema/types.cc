@@ -1,6 +1,8 @@
+#include <array>
 #include <limits>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gsl/span>
@@ -37,6 +39,16 @@ namespace {
     return value;
 }
 
+// Every limb, for a literal wider than 128 bits
+[[nodiscard]] auto wide_limbs_value(gsl::span<const u32> limbs) -> big_int {
+    std::vector<u64> words((limbs.size() + 1) / 2);
+    for (usize i{0}; i < limbs.size(); ++i) {
+        words[i / 2] |= static_cast<u64>(limbs[i]) << (32U * (i % 2));
+    }
+
+    return big_int::from_words(words, words.size() * 64, false);
+}
+
 } // namespace
 
 auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index {
@@ -57,6 +69,24 @@ auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::ind
     return pool.intern(value, type);
 }
 
+auto float_of_int(const big_int& value, float_format format) -> f128 {
+    if (const auto small{value.to_i128()}) {
+        return gir::semantics::float_from_int(
+            {.bits = 128, .is_signed = true}, static_cast<u128>(*small), format);
+    }
+
+    if (const auto wide{value.to_u128()}) {
+        return gir::semantics::float_from_int({.bits = 128, .is_signed = false}, *wide, format);
+    }
+
+    // Past 128 bits the digits round once, as a literal's do
+    return f128::parse(value.to_string(), format).value;
+}
+
+auto wrap_int(const big_int& value, u64 bits, bool is_signed) -> big_int {
+    return big_int::from_words(value.to_words(bits), bits, is_signed);
+}
+
 auto analyzer::analyze_int_value(inst_id inst) -> result<operand> {
     const big_int value{static_cast<u128>(mod().data_of(inst).int_value)};
     return intern_int(comp_.constants(), value, builtin(gs::type_kind::COMPTIME_INT));
@@ -74,16 +104,13 @@ auto analyzer::negated_to_fit(inst_id inst, const big_int& value, const gs::type
 }
 
 auto analyzer::analyze_int_lit(inst_id inst) -> result<operand> {
-    auto        rec{record(inst)};
-    const auto  limbs{rec.words_field()};
-    const auto  width{rec.u32_field()};
-    const auto  bits{rec.u32_field()};
-    const auto& src{src_of(inst)};
-    if ((bits & flags::INT_BIG) != 0) {
-        return comp_.unsupported(u_, src, "an integer literal wider than 128 bits");
-    }
-
-    const big_int value{limbs_value(limbs)};
+    auto          rec{record(inst)};
+    const auto    limbs{rec.words_field()};
+    const auto    width{rec.u32_field()};
+    const auto    bits{rec.u32_field()};
+    const auto&   src{src_of(inst)};
+    const big_int value{(bits & flags::INT_BIG) != 0 ? wide_limbs_value(limbs)
+                                                     : big_int{limbs_value(limbs)}};
     const bool    is_signed{(bits & flags::INT_SIGNED) != 0};
     auto&         ctx{comp_.ctx()};
     const bool    sized{(bits & flags::INT_SIZE) != 0};
@@ -111,20 +138,21 @@ auto analyzer::analyze_float_lit(inst_id inst) -> result<operand> {
     const auto bits{f128::from_bits(limbs_value(rec.words_field()))};
     const auto width{rec.u32_field()};
 
-    // An untyped literal is kept in quad precision, which would round it twice into a narrower
-    // format whose nearest value its digits decide differently
+    // An untyped literal is kept in quad precision
     const auto node{src_of(inst).as_opt<ast::node_id>()};
     const auto lit{width == 0 && node ? u_.source->ast.get_as_opt<ast::float_literal_expr>(*node)
                                       : stdx::none};
+    std::array<f128, 4> narrowed{};
+    bool                rounds_twice{false};
     if (lit) {
-        for (const auto format : {float_format::HALF, float_format::SINGLE, float_format::DOUBLE}) {
-            if (!(lit->value_in(format) == bits.round_to(format))) {
-                return comp_.unsupported(
-                    u_, src_of(inst), "an untyped float literal that rounds twice when narrowed");
-            }
+        for (const auto format :
+             {float_format::HALF, float_format::SINGLE, float_format::DOUBLE, float_format::X87}) {
+            narrowed.at(std::to_underlying(format)) = lit->value_in(format);
+            rounds_twice |= !(narrowed.at(std::to_underlying(format)) == bits.round_to(format));
         }
     }
-    auto& type{[&] -> gs::type& {
+
+    auto&      type{[&] -> gs::type& {
         switch (width) {
         case 16:  return builtin(gs::type_kind::F16);
         case 32:  return builtin(gs::type_kind::F32);
@@ -134,7 +162,12 @@ auto analyzer::analyze_float_lit(inst_id inst) -> result<operand> {
         default:  return builtin(gs::type_kind::COMPTIME_FLOAT);
         }
     }()};
-    return gir::value::constant(comp_.constants(), bits, type).constant_index();
+    const auto index{gir::value::constant(comp_.constants(), bits, type).constant_index()};
+    if (lit) {
+        comp_.note_literal_digits(
+            index, rounds_twice ? stdx::option<std::array<f128, 4>>{narrowed} : stdx::none);
+    }
+    return index;
 }
 
 auto analyzer::analyze_int_type(inst_id inst) -> result<operand> {
@@ -288,8 +321,8 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     const auto coerced{TRY(coerce_to(len, usize_type, src, {.what = use_site::kind::STORE}))};
     const auto value{int_of(comp_.constants().value_at(TRY(require_comptime(coerced, src))))};
     const auto small{value ? value->to_u128() : stdx::none};
-    if (!small || *small > static_cast<u128>(std::numeric_limits<u32>::max())) {
-        return comp_.unsupported(u_, src, "an array length past 32 bits");
+    if (!small || *small > static_cast<u128>(std::numeric_limits<usize>::max())) {
+        return comp_.unsupported(u_, src, "an array length past 64 bits");
     }
 
     return static_cast<usize>(*small);
@@ -301,6 +334,17 @@ auto analyzer::analyze_func(inst_id inst) -> result<operand> {
         if (fn_ && !declaring_) {
             if (wrapping_closure(inst)) { return void_value(); }
             return local_function(inst, {});
+        }
+
+        // A literal a top-level statement holds is checked like a function nothing calls
+        if (statement_ && !fn_) {
+            const auto node{src_of(inst).as_opt<ast::node_id>()};
+            auto       member{member_context_here()};
+            member.symbol = comp_.lasting_name(
+                fmt::format("statement{}", node ? node->get_index() : std::to_underlying(inst)));
+            const auto declared{TRY(comp_.declare_function(u_, *statement_, inst, member))};
+            if (const auto fn{declared.as_opt<function_ref>()}) { comp_.request_body(*fn->fn); }
+            return declared;
         }
 
         return comp_.unsupported(u_, src_of(inst), "a function literal used as a value");

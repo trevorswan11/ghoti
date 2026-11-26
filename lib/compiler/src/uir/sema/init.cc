@@ -285,21 +285,26 @@ auto analyzer::field_default(gs::type&             type,
 auto analyzer::init_union(inst_id inst, gs::type& type, const source& src) -> result<operand> {
     auto rec{record(inst)};
     rec.skip_ref();
-    const auto  entries{named_values(rec)};
-    const auto& ut{type.get_data().as<gs::types::union_t>()};
+    const auto entries{named_values(rec)};
     if (entries.size() != 1) {
         return comp_.report(
             u_, src, gs::error::TYPE_MISMATCH, "A union initializer must set exactly one field");
     }
 
     const auto index{TRY(field_index(type, entries.front().name, src))};
-    auto&      field_type{ut.type_at(index)};
     const auto given{TRY(resolve_value(entries.front().value, src))};
-    const auto value{TRY(coerce_to(given, field_type, src, {.what = use_site::kind::STORE}))};
+    return union_of(type, index, given, src);
+}
+
+auto analyzer::union_of(gs::type& type, usize index, const operand& given, const source& src)
+    -> result<operand> {
+    const auto& ut{type.get_data().as<gs::types::union_t>()};
+    auto&       field_type{ut.type_at(index)};
+    const auto  value{TRY(coerce_to(given, field_type, src, {.what = use_site::kind::STORE}))};
     if (is_comptime()) {
         const auto payload{TRY(require_comptime(value, src))};
         return comp_.constants().intern(
-            ip::union_value{.active_field = std::string{entries.front().name},
+            ip::union_value{.active_field = std::string{ut.field_names[index]},
                             .payload      = {payload}},
             type);
     }

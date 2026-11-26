@@ -90,6 +90,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::ASSERT:                   return builtin_assert(args, src, false);
     case builtin_t::VERIFY:                   return builtin_assert(args, src, true);
     case builtin_t::TRAP:                     return builtin_trap(src);
+    case builtin_t::C_VA_START:
+    case builtin_t::C_VA_COPY:
+    case builtin_t::C_VA_END:
+    case builtin_t::C_VA_ARG:                 return builtin_c_va(which, args, src);
     case builtin_t::PANIC:                    return builtin_panic(args, src);
     case builtin_t::IMPLEMENTS:               return builtin_implements(args, src);
     case builtin_t::AS:                       return builtin_as(inst, args, src);
@@ -473,8 +477,7 @@ auto analyzer::builtin_tag_name(gsl::span<const ref> args, const source& src) ->
     auto&      ctx{comp_.ctx()};
     auto&      name_type{ctx.get_slice(gs::types::mut::CONSTANT, true, ctx.get_int(8, false))};
     if (const auto literal{value.as_opt<enum_literal>()}) {
-        const auto name{mod().string(mod().data_of(literal->inst).str)};
-        return comp_.constants().intern(std::string{name}, name_type);
+        return comp_.constants().intern(literal_name(*literal), name_type);
     }
 
     auto&      type{type_of(value)};
@@ -683,6 +686,53 @@ auto analyzer::builtin_this(const source& src) -> result<operand> {
     }
 
     return interned_type(*comp_.declare_nominal(u_, *owner, kind).type);
+}
+
+auto analyzer::builtin_c_va(syntax::builtin_t which, gsl::span<const ref> args, const source& src)
+    -> result<operand> {
+    const auto name{syntax::builtin_name(which)};
+    auto&      ctx{comp_.ctx()};
+    const auto lists{which == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
+    const auto wanted{which == syntax::builtin_t::C_VA_ARG ? 2UZ : lists};
+    if (args.size() != wanted) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Builtin expects {} arguments, found {}", wanted, args.size()));
+    }
+
+    // Every va builtin addresses caller-provided `va_list` storage through a pointer
+    std::vector<gir::value> values;
+    for (usize i{0}; i < lists; ++i) {
+        const auto list{TRY(resolve_value(args[i], src))};
+        auto&      list_type{type_of(list)};
+        if (list_type.get_kind() != gs::type_kind::POINTER || list_type.is_constant()) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                fmt::format("'{}' expects a `^mut` pointer to `va_list` storage; found '{}'",
+                            name,
+                            ctx.type_display_name(list_type)));
+        }
+        values.emplace_back(TRY(as_runtime(list, src)));
+    }
+
+    auto& result_type{which == syntax::builtin_t::C_VA_ARG ? *TRY(resolve_type(args[1], src))
+                                                           : builtin(gs::type_kind::VOID_)};
+    if (which == syntax::builtin_t::C_VA_START &&
+        !fn_->type->get_data().as<gs::types::function>().is_variadic) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`");
+    }
+
+    TRY(require_runtime(src));
+    const auto result{builder_.emit_builtin_call(name, std::move(values), result_type)};
+    if (!result) { return void_value(); }
+    return gir::value{*result, result_type};
 }
 
 auto analyzer::builtin_trap(const source& src) -> result<operand> {

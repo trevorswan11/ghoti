@@ -10,6 +10,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
@@ -109,6 +110,15 @@ template <typename T> using int_result = stdx::result<T, int_fault>;
     -> int_result<u128>;
 [[nodiscard]] auto compare_int(int_compare_op op, int_domain domain, u128 lhs, u128 rhs) noexcept
     -> bool;
+
+// The same folds on exact values, for integers of any width
+[[nodiscard]] auto
+fold_wide_int(int_op op, int_domain domain, const big_int& lhs, const big_int& rhs)
+    -> int_result<big_int>;
+[[nodiscard]] auto fold_wide_shift(int_op op, int_domain domain, const big_int& lhs, i128 amount)
+    -> int_result<big_int>;
+[[nodiscard]] auto fold_wide_unary(int_unary_op op, int_domain domain, const big_int& value)
+    -> int_result<big_int>;
 
 // `@intCast`: the same value in `to`, or a fault when it doesn't fit
 [[nodiscard]] auto cast_int(int_domain from, int_domain to, u128 value) -> int_result<u128>;

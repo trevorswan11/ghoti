@@ -171,12 +171,13 @@ TEST_CASE("A labeled jump needs a label that encloses it") {
 }
 
 TEST_CASE("A jump may not leave a defer body") {
-    check_lowering(
-        "const f = fn(): void { loop { defer { break; } } };",
-        {{"A break cannot leave a defer body", error::ILLEGAL_CONTROL_FLOW, std::pair{0UZ, 38UZ}}});
+    check_lowering("const f = fn(): void { loop { defer { break; } } };",
+                   {{"cannot 'break' from inside a 'defer' body",
+                     error::DEFER_BODY_JUMP,
+                     std::pair{0UZ, 38UZ}}});
     check_lowering("const f = fn(): i32 { defer { return 1; } return 0; };",
-                   {{"A return cannot leave a defer body",
-                     error::ILLEGAL_CONTROL_FLOW,
+                   {{"cannot 'return' from inside a 'defer' body",
+                     error::DEFER_BODY_JUMP,
                      std::pair{0UZ, 30UZ}}});
     check_lowers("const f = fn(): void { defer { loop { break; } } };");
 }

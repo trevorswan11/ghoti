@@ -566,4 +566,160 @@ auto fold_float(float_op op, float_format format, f128 lhs, f128 rhs) -> f128 {
     return lhs;
 }
 
+namespace {
+
+// The value two's complement `domain` keeps of `v`
+[[nodiscard]] auto wrap_wide(const big_int& v, int_domain domain) -> big_int {
+    return big_int::from_words(v.to_words(domain.bits), domain.bits, domain.is_signed);
+}
+
+[[nodiscard]] auto clamp_wide(const big_int& v, int_domain domain) -> big_int {
+    const auto lo{big_int::min_of(domain.bits, domain.is_signed)};
+    const auto hi{big_int::max_of(domain.bits, domain.is_signed)};
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+} // namespace
+
+auto fold_wide_int(int_op op, int_domain domain, const big_int& lhs, const big_int& rhs)
+    -> int_result<big_int> {
+    const auto l{wrap_wide(lhs, domain)};
+    const auto r{wrap_wide(rhs, domain)};
+    const auto exact{[&] {
+        switch (op) {
+        case int_op::ADD:
+        case int_op::WRAP_ADD:
+        case int_op::SAT_ADD:  return l + r;
+        case int_op::SUB:
+        case int_op::WRAP_SUB:
+        case int_op::SAT_SUB:  return l - r;
+        default:               return l * r;
+        }
+    }};
+    switch (op) {
+    case int_op::ADD:
+    case int_op::SUB:
+    case int_op::MUL: {
+        // Unsigned arithmetic wraps; signed arithmetic must stay in range
+        const auto v{exact()};
+        if (!domain.is_signed) { return wrap_wide(v, domain); }
+        if (v.fits(domain.bits, true)) { return v; }
+        return stdx::err{int_fault::OVERFLOW_};
+    }
+    case int_op::WRAP_ADD:
+    case int_op::WRAP_SUB:
+    case int_op::WRAP_MUL: return wrap_wide(exact(), domain);
+    case int_op::SAT_ADD:
+    case int_op::SAT_SUB:
+    case int_op::SAT_MUL:  return clamp_wide(exact(), domain);
+    case int_op::SHL:
+    case int_op::SHR:
+    case int_op::WRAP_SHL:
+    case int_op::SAT_SHL:  {
+        const auto amount{r.to_i128().value_or(i128{domain.bits})};
+        return fold_wide_shift(op, domain, l, amount);
+    }
+    case int_op::AND:       return wrap_wide(l & r, domain);
+    case int_op::OR:        return wrap_wide(l | r, domain);
+    case int_op::XOR:       return wrap_wide(l ^ r, domain);
+    case int_op::MIN:       return l < r ? l : r;
+    case int_op::MAX:       return l < r ? r : l;
+    case int_op::DIV:
+    case int_op::REM:
+    case int_op::DIV_FLOOR:
+    case int_op::DIV_EXACT:
+    case int_op::MOD:       {
+        if (r.is_zero()) {
+            const bool remainder{op == int_op::REM || op == int_op::MOD};
+            return stdx::err{remainder ? int_fault::MODULO_BY_ZERO : int_fault::DIVISION_BY_ZERO};
+        }
+        const auto quotient{l / r};
+        const auto remainder{l % r};
+        if (!quotient.fits(domain.bits, domain.is_signed)) {
+            return stdx::err{int_fault::OVERFLOW_};
+        }
+        const bool rounds_down{!remainder.is_zero() && l.is_negative() != r.is_negative()};
+        switch (op) {
+        case int_op::DIV:       return quotient;
+        case int_op::REM:       return remainder;
+        case int_op::DIV_FLOOR: return rounds_down ? quotient - big_int{i128{1}} : quotient;
+        case int_op::DIV_EXACT:
+            if (!remainder.is_zero()) { return stdx::err{int_fault::INEXACT_DIVISION}; }
+            return quotient;
+        default: return rounds_down ? remainder + r : remainder;
+        }
+    }
+    }
+    return stdx::err{int_fault::OVERFLOW_};
+}
+
+auto fold_wide_shift(int_op op, int_domain domain, const big_int& lhs, i128 amount)
+    -> int_result<big_int> {
+    const auto l{wrap_wide(lhs, domain)};
+    const bool in_range{amount >= 0 && amount < domain.bits};
+    switch (op) {
+    case int_op::WRAP_SHL:
+        // Shifting every bit out leaves nothing, whatever the amount
+        if (!in_range) { return big_int{}; }
+        return wrap_wide(l.shl(static_cast<u64>(amount)), domain);
+    case int_op::SAT_SHL: {
+        if (l.is_zero()) { return big_int{}; }
+        const auto limit{l.is_negative() ? big_int::min_of(domain.bits, domain.is_signed)
+                                         : big_int::max_of(domain.bits, domain.is_signed)};
+        if (!in_range) { return limit; }
+        return clamp_wide(l.shl(static_cast<u64>(amount)), domain);
+    }
+    default: {
+        if (amount < 0) { return stdx::err{int_fault::NEGATIVE_SHIFT}; }
+        if (amount >= domain.bits) { return stdx::err{int_fault::SHIFT_TOO_WIDE}; }
+        const auto bits{static_cast<u64>(amount)};
+        if (op == int_op::SHL) { return wrap_wide(l.shl(bits), domain); }
+        return l.shr(bits);
+    }
+    }
+}
+
+auto fold_wide_unary(int_unary_op op, int_domain domain, const big_int& value)
+    -> int_result<big_int> {
+    const auto v{wrap_wide(value, domain)};
+    const auto pattern{[&] { return v.to_words(domain.bits); }};
+    switch (op) {
+    case int_unary_op::NEG:
+        if (domain.is_signed && v == big_int::min_of(domain.bits, true)) {
+            return stdx::err{int_fault::OVERFLOW_};
+        }
+        return wrap_wide(-v, domain);
+    case int_unary_op::WRAP_NEG: return wrap_wide(-v, domain);
+    case int_unary_op::NOT:      return wrap_wide(~v, domain);
+    case int_unary_op::ABS:
+        if (!v.is_negative()) { return v; }
+        if (v == big_int::min_of(domain.bits, true)) { return stdx::err{int_fault::OVERFLOW_}; }
+        return -v;
+    case int_unary_op::CLZ: {
+        const auto words{pattern()};
+        u64        count{0};
+        for (u64 bit{domain.bits}; bit-- > 0;) {
+            if (((words[bit / 64] >> (bit % 64)) & 1U) != 0) { break; }
+            ++count;
+        }
+        return big_int{u128{count}};
+    }
+    case int_unary_op::CTZ: {
+        const auto words{pattern()};
+        u64        count{0};
+        for (u64 bit{0}; bit < domain.bits; ++bit) {
+            if (((words[bit / 64] >> (bit % 64)) & 1U) != 0) { break; }
+            ++count;
+        }
+        return big_int{u128{count}};
+    }
+    case int_unary_op::POPCOUNT: {
+        u64 count{0};
+        for (const auto word : pattern()) { count += static_cast<u64>(std::popcount(word)); }
+        return big_int{u128{count}};
+    }
+    }
+    return v;
+}
+
 } // namespace ghoti::gir::semantics

@@ -20,6 +20,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/uir/sema/sema.hh"
 #include "helpers/uir_diff.hh"
+#include "support/big_int.hh"
 #include "support/int128.hh"
 #include "support/test.hh"
 
@@ -54,6 +55,17 @@ class uir_run {
                          [](u64 x) -> stdx::option<i128> { return static_cast<i128>(x); },
                          [](const auto&) -> stdx::option<i128> { return stdx::none; })};
         return UNWRAP(exact);
+    }
+
+    // An integer of any width, spelled in decimal
+    [[nodiscard]] auto int_text(std::string_view name) const -> std::string {
+        const auto& v{pool().value_at(root_index(name))};
+        return v.data.visit([](i64 x) { return fmt::format("{}", x); },
+                            [](u64 x) { return fmt::format("{}", x); },
+                            [](i128 x) { return big_int{x}.to_string(); },
+                            [](u128 x) { return big_int{x}.to_string(); },
+                            [](const big_int& x) { return x.to_string(); },
+                            [](const auto&) { return std::string{"<not an integer>"}; });
     }
 
     [[nodiscard]] auto type_name(std::string_view name) const -> std::string {

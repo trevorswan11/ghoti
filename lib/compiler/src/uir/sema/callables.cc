@@ -748,7 +748,7 @@ auto analyzer::call_closure(const operand&       callee,
     return gir::value{*result, ret};
 }
 
-auto analyzer::comptime_callable(const operand& op, gs::type& target, const source&)
+auto analyzer::comptime_callable(const operand& op, gs::type& target, const source& src)
     -> result<stdx::option<operand>> {
     // A `^fn(...)` holds the function the same way, and is never null
     const auto pointer{target.get_data().as_opt<gs::types::pointer>()};
@@ -758,9 +758,32 @@ auto analyzer::comptime_callable(const operand& op, gs::type& target, const sour
         return operand{*index};
     }
 
+    // A generic that captures nothing is its instance for the signature's parameters
+    if (const auto generic{op.as_opt<generic_ref>()}; generic && !generic->fn->env) {
+        auto&              target_fn{*TRY(instance_for_signature(
+            *generic->fn, signature.get_data().as<gs::types::function>(), src))};
+        const function_ref instance{&target_fn};
+        if (!names_function(instance, signature)) { return stdx::none; }
+        return operand{comp_.function_value(target_fn)};
+    }
+
     const auto fn{op.as_opt<function_ref>()};
     if (!fn || fn->fn->env || !names_function(*fn, signature)) { return stdx::none; }
     return operand{comp_.function_value(*fn->fn)};
+}
+
+auto analyzer::instance_for_signature(generic_fn&                g,
+                                      const gs::types::function& signature,
+                                      const source& src) -> result<gsl::not_null<instance*>> {
+    std::vector<call_arg> args;
+    for (const auto param : signature.params) {
+        args.emplace_back(call_arg{.value = operand{gir::value{gir::local_id{}, *param}}});
+    }
+
+    auto  binding{TRY(bind_generic(g, args, src))};
+    auto& target_fn{*TRY(comp_.instance_for(g, std::move(binding)))};
+    TRY(comp_.infer_return(target_fn, u_, src));
+    return &target_fn;
 }
 
 auto analyzer::as_erased_callable(const operand& op, gs::type& target, const source& src)
@@ -787,14 +810,7 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
 
     // A generic that captures nothing is its instance for the signature's parameters
     if (const auto generic{op.as_opt<generic_ref>()}; generic && !generic->fn->env) {
-        std::vector<call_arg> args;
-        for (const auto param : erased->params) {
-            args.emplace_back(call_arg{.value = operand{gir::value{gir::local_id{}, *param}}});
-        }
-
-        auto  binding{TRY(bind_generic(*generic->fn, args, src))};
-        auto& target_fn{*TRY(comp_.instance_for(*generic->fn, std::move(binding)))};
-        TRY(comp_.infer_return(target_fn, u_, src));
+        auto& target_fn{*TRY(instance_for_signature(*generic->fn, *erased, src))};
         auto& thin{*target_fn.type};
         if (&ctx.with_erasure(thin, true) != &signature) { return stdx::none; }
         TRY(require_runtime(src));
@@ -804,16 +820,37 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
     }
 
     // A closure is its environment's address, and its body is the code
-    auto& from{type_of(op)};
+    auto&      given{type_of(op)};
+    const bool by_reference{given.get_kind() == gs::type_kind::REFERENCE};
+    auto&      from{by_reference ? *gs::pointee_of(given) : given};
+    auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT, builtin(gs::type_kind::OPAQUE))};
+    const auto environment{[&] -> result<gir::value> {
+        if (by_reference) { return as_runtime(op, src); }
+        const auto address{TRY(closure_address(op, src))};
+        return gir::value{builder_.emit_address_of(address, opaque_ptr), opaque_ptr};
+    }};
     if (const auto body{comp_.closure_body(from)}) {
         const auto& closure{from.get_data().as<gs::types::closure_t>()};
         if (&ctx.with_erasure(closure.signature, true) != &signature) { return stdx::none; }
         TRY(require_runtime(src));
-        auto& opaque_ptr{ctx.get_pointer(gs::types::mut::CONSTANT, builtin(gs::type_kind::OPAQUE))};
-        const auto       address{TRY(closure_address(op, src))};
-        const gir::value env{builder_.emit_address_of(address, opaque_ptr), opaque_ptr};
+        const auto env{TRY(environment())};
         comp_.request_body(*body);
         return operand{gir::value{builder_.emit_make_callable(env, body->symbol, target), target}};
+    }
+
+    // A capturing generic is its instance for the signature, over its environment
+    if (const auto g{comp_.closure_generic(from)}; g && g->env) {
+        auto&       target_fn{*TRY(instance_for_signature(*g, *erased, src))};
+        const auto& impl{target_fn.type->get_data().as<gs::types::function>()};
+        auto        params{ctx.pool.get_many_unsafe(impl.params.size() - 1)};
+        for (usize i{1}; i < impl.params.size(); ++i) { params[i - 1] = impl.params[i]; }
+        auto& visible{ctx.get_function(params, impl.return_type, false, impl.conv, false)};
+        if (&ctx.with_erasure(visible, true) != &signature) { return stdx::none; }
+        TRY(require_runtime(src));
+        const auto env{TRY(environment())};
+        comp_.request_body(target_fn);
+        return operand{
+            gir::value{builder_.emit_make_callable(env, target_fn.symbol, target), target}};
     }
 
     // A thin function value, such as an `extern fn`, is wrapped the same way

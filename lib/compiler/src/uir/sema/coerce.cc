@@ -91,14 +91,33 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
 
     if (const auto literal{op.as_opt<enum_literal>()}) {
         // `.name` of a struct or union is its member constant, unless it names a union's field
-        const auto name{mod().string(mod().data_of(literal->inst).str)};
+        const auto name{literal_name(*literal)};
         const auto kind{target.get_kind()};
+        if (kind == gs::type_kind::ENUM_LITERAL) { return op; }
+
+        // `.name` as a function is the member of the type it returns
+        const auto pointee{gs::pointee_of(target)};
+        const auto signature{
+            (pointee ? *pointee : target).get_data().as_opt<gs::types::function>()};
+        if (const auto returned{signature ? stdx::option<gs::type&>{signature->return_type}
+                                          : stdx::none};
+            returned && (returned->get_kind() == gs::type_kind::STRUCT ||
+                         returned->get_kind() == gs::type_kind::UNION ||
+                         returned->get_kind() == gs::type_kind::ENUM)) {
+            TRY(comp_.require_fields(u_, src, *returned));
+            const auto member{TRY(member_of(*returned, name, src))};
+            return operand{TRY(coerce_to(member, target, src, {.what = use_site::kind::STORE}))};
+        }
+
+        if (kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION) {
+            TRY(comp_.require_fields(u_, src, target));
+        }
+
         const auto union_field{[&] {
             const auto ut{target.get_data().as_opt<gs::types::union_t>()};
             return ut && std::ranges::contains(ut->field_names, name);
         }};
         if ((kind == gs::type_kind::STRUCT || kind == gs::type_kind::UNION) && !union_field()) {
-            TRY(comp_.require_fields(u_, src, target));
             auto member{TRY(member_of(target, name, src))};
 
             // Compile time reads a constant's value rather than its global
@@ -109,8 +128,17 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             return operand{TRY(coerce_to(member, target, src, {.what = use_site::kind::STORE}))};
         }
 
+        // A union's `void` field holds nothing to give it
+        if (kind == gs::type_kind::UNION) {
+            const auto& ut{target.get_data().as<gs::types::union_t>()};
+            const auto  at{std::ranges::find(ut.field_names, name)};
+            const usize index{static_cast<usize>(at - ut.field_names.begin())};
+            if (ut.type_at(index).get_kind() != gs::type_kind::VOID_) { return stdx::none; }
+            return operand{TRY(union_of(target, index, void_value(), src))};
+        }
+
         if (target.get_kind() != gs::type_kind::ENUM) { return stdx::none; }
-        return enum_constant(target, mod().string(mod().data_of(literal->inst).str), src);
+        return enum_constant(target, name, src);
     }
 
     // A cast's target is the type it is used as, unless that has no width of its own
@@ -289,6 +317,10 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }
 
         if (v.data.is<ip::nullptr_value>() && target.get_kind() == gs::type_kind::POINTER) {
+            // A null `^fn` is both of its words zeroed
+            if (gs::is_fat_callable(target)) {
+                return operand{pool.intern(ip::zero_value{}, target)};
+            }
             return operand{pool.intern(ip::nullptr_value{}, target)};
         }
 
@@ -316,14 +348,8 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         const bool to_float{gs::is_float(target.get_kind()) ||
                             target.get_kind() == gs::type_kind::COMPTIME_FLOAT};
         if (to_float && int_of(v)) {
-            const auto value{*int_of(v)};
-            const auto exact{value.to_i128()};
-            if (!exact) {
-                return comp_.unsupported(u_, src, "a wide integer converted to a float");
-            }
-
-            const auto as_float{gir::semantics::float_from_int(
-                {.bits = 128, .is_signed = true}, static_cast<u128>(*exact), float_format::QUAD)};
+            const auto format{gs::float_format_of(target).value_or(float_format::QUAD)};
+            const auto as_float{float_of_int(*int_of(v), format)};
             return operand{gir::value::constant(pool, as_float, target).constant_index()};
         }
 
@@ -339,6 +365,15 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             if (const auto format{gs::float_format_of(target)}; origin && format) {
                 const auto again{evaluate_traced(origin->function, origin->input, *format)};
                 return operand{gir::value::constant(pool, again.value, target).constant_index()};
+            }
+
+            // An untyped literal rounds straight from its digits
+            const auto format{gs::float_format_of(target)};
+            if (const auto digits{known && format &&
+                                          from.get_kind() == gs::type_kind::COMPTIME_FLOAT
+                                      ? comp_.literal_digits_in(*known, *format)
+                                      : stdx::none}) {
+                return operand{gir::value::constant(pool, *digits, target).constant_index()};
             }
 
             return operand{gir::value::constant(pool, *f, target).constant_index()};
@@ -562,6 +597,13 @@ auto analyzer::coerce_to(const operand&  op,
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
 
+    // A reference to a closure is the environment an erased `fn` holds
+    if (const auto referent{gs::pointee_of(from)};
+        from.get_kind() == gs::type_kind::REFERENCE && !is_comptime() && referent &&
+        (comp_.closure_body(*referent) || comp_.closure_generic(*referent))) {
+        if (const auto erased{TRY(as_erased_callable(op, target, src))}) { return *erased; }
+    }
+
     // A reference is read where a value is wanted
     if (from.get_kind() == gs::type_kind::REFERENCE && !is_comptime() &&
         target.get_kind() != gs::type_kind::REFERENCE &&
@@ -638,6 +680,20 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
     return *peer;
 }
 
+auto analyzer::literal_name(const enum_literal& literal) const -> std::string {
+    if (literal.named) {
+        return comp_.constants().value_at(*literal.named).data.as<ip::enum_value>().name;
+    }
+
+    return std::string{mod().string(mod().data_of(literal.inst).str)};
+}
+
+auto analyzer::literal_value(const enum_literal& literal) -> ip::index {
+    if (literal.named) { return *literal.named; }
+    return comp_.constants().intern(ip::enum_value{.name = literal_name(literal), .value = 0},
+                                    builtin(gs::type_kind::ENUM_LITERAL));
+}
+
 auto analyzer::concrete(const operand& op, const source& src) -> result<operand> {
     if (const auto cast{op.as_opt<cast_ref>()}) { return cast_target_inferred(*cast, stdx::none); }
     if (const auto init{op.as_opt<anon_init>()}; init && mod().tag_of(init->inst) == tag::range) {
@@ -645,7 +701,13 @@ auto analyzer::concrete(const operand& op, const source& src) -> result<operand>
     }
 
     if (const auto m{op.as_opt<merge_ref>()}) {
-        if (is_untyped_literal(merges_[m->index].arrivals.front().value)) {
+        // A lone untyped arrival, like a block breaking out a range, is that value
+        const auto& arrivals{merges_[m->index].arrivals};
+        if (arrivals.size() == 1 && is_untyped_literal(arrivals.front().value)) {
+            return concrete(arrivals.front().value, src);
+        }
+
+        if (is_untyped_literal(arrivals.front().value)) {
             return comp_.unsupported(u_, src, "an untyped literal with no type to take");
         }
 

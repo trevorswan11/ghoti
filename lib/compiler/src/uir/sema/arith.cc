@@ -1,5 +1,6 @@
 #include <array>
 #include <compare>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -11,6 +12,7 @@
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
@@ -261,8 +263,7 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     const auto lhs_literal{lhs.as_opt<enum_literal>()};
     const auto rhs_literal{rhs.as_opt<enum_literal>()};
     if (info.cls == op_class::EQUALITY && lhs_literal && rhs_literal) {
-        const bool same{mod().string(mod().data_of(lhs_literal->inst).str) ==
-                        mod().string(mod().data_of(rhs_literal->inst).str)};
+        const bool same{literal_name(*lhs_literal) == literal_name(*rhs_literal)};
         return operand{comp_.constants().intern(info.kind == instruction_kind::EQ ? same : !same,
                                                 builtin(gs::type_kind::BOOL))};
     }
@@ -390,12 +391,15 @@ auto analyzer::compare_out_of_range(const binary_info& info, const operand& lhs,
 
 auto analyzer::binary_as(inst_id inst, gs::type& target, const source& src) -> result<operand> {
     // Both sides take the target, then the operator applies to them where they were analyzed
-    const auto&                              d{mod().data_of(inst)};
+    const auto& d{mod().data_of(inst)};
+    // A shift's amount keeps its own type
+    const bool shift{binary_info_of(mod().tag_of(inst)).cls == op_class::SHIFT};
     std::vector<std::pair<inst_id, operand>> saved;
     const auto                               restore{gsl::finally([&] {
         for (auto& [i, value] : saved) { values_.insert_or_assign(i, std::move(value)); }
     })};
     for (const auto side : {d.bin.lhs, d.bin.rhs}) {
+        if (shift && side == d.bin.rhs) { continue; }
         const auto side_inst{as_inst(side)};
         if (!side_inst) { continue; }
         const auto found{values_.find(*side_inst)};
@@ -502,7 +506,7 @@ auto analyzer::compare_tag(const binary_info& info,
     TRY(comp_.require_fields(u_, src, union_type));
     const auto ut{union_type.get_data().as_opt<gs::types::union_t>()};
     if (!ut || ut->is_untagged) { return stdx::none; }
-    const auto name{mod().string(mod().data_of(literal.inst).str)};
+    const auto name{literal_name(literal)};
     const auto index{TRY(field_index(union_type, name, src))};
     auto&      bool_type{builtin(gs::type_kind::BOOL)};
     auto&      pool{comp_.constants()};
@@ -618,11 +622,8 @@ auto analyzer::fold_binary(const binary_info& info,
         return operand{pool.intern(compare(compare_op_of(info.kind), *l, *r), bool_type)};
     }
 
+    // An untyped value has no range to wrap or clamp to, so those operators are the plain ones
     if (peer.get_kind() == gs::type_kind::COMPTIME_INT) {
-        if (info.wrapping || info.saturating) {
-            return comp_.unsupported(u_, src, "a wrapping or saturating operator on comptime_int");
-        }
-
         const auto value{[&] -> stdx::option<big_int> {
             switch (info.kind) {
             case instruction_kind::ADD: return *l + *r;
@@ -656,12 +657,18 @@ auto analyzer::fold_binary(const binary_info& info,
     // there is no runtime to leave it to
     const auto op{semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
     if (!op) { return stdx::none; }
-    // The old emitter folds known operands of any width, which UIR doesn't yet past 128 bits
+    const auto domain{domain_of(peer)};
     if (!folds_exactly(peer)) {
-        return comp_.unsupported(u_, src, "compile-time arithmetic past 128 bits");
+        const auto folded{semantics::fold_wide_int(*op, domain, *l, *r)};
+        if (folded) { return operand{intern_int(pool, *folded, peer)}; }
+        if (!is_comptime()) { return stdx::none; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            semantics::describe(folded.error(), domain, comp_.ctx().type_display_name(peer)));
     }
 
-    const auto domain{domain_of(peer)};
     const auto bits{[&](const big_int& v) {
         return semantics::to_domain(
             v.is_negative() ? static_cast<u128>(*v.to_i128()) : *v.to_u128(), domain);
@@ -726,12 +733,11 @@ auto analyzer::analyze_shift(inst_id            inst,
     const auto  kind{info.kind};
     const auto& src{src_of(inst)};
     auto&       shifted{type_of(lhs)};
-    if (comptime_value(lhs) && comptime_value(rhs)) {
-        if (!folds_exactly(shifted)) {
-            return comp_.unsupported(u_, src, "compile-time arithmetic past 128 bits");
-        }
+    if (comptime_value(lhs) && comptime_value(rhs)) { return fold_shift(info, lhs, rhs, src); }
 
-        return fold_shift(info, lhs, rhs, src);
+    // An untyped value shifted by a runtime amount takes the type it is used as
+    if (shifted.get_kind() == gs::type_kind::COMPTIME_INT && comptime_value(lhs)) {
+        return cast_ref{inst};
     }
 
     if (!gs::is_integer(shifted.get_kind())) {
@@ -788,7 +794,10 @@ auto analyzer::fold_shift(const binary_info& info,
     const auto value{int_of(pool.value_at(*comptime_value(lhs)))};
     const auto amount{int_of(pool.value_at(*comptime_value(rhs)))};
     if (!value || !amount) { return comp_.unsupported(u_, src, "a shift of a non-integer"); }
-    const auto small_amount{amount->to_i128()};
+    // An amount past i128 shifts out every bit just like one past the width
+    constexpr auto I128_MAX{static_cast<i128>(~u128{0} >> 1)};
+    const auto     small_amount{
+        amount->to_i128().value_or(amount->is_negative() ? -I128_MAX - 1 : I128_MAX)};
     const auto fault{[&](semantics::int_fault f, semantics::int_domain domain) {
         return comp_.report(u_,
                             src,
@@ -798,15 +807,8 @@ auto analyzer::fold_shift(const binary_info& info,
 
     // An untyped value shifts exactly, growing as far as the comptime_int limit
     if (shifted.get_kind() == gs::type_kind::COMPTIME_INT) {
-        if (info.wrapping || info.saturating) {
-            return comp_.unsupported(u_, src, "a wrapping or saturating shift of comptime_int");
-        }
-
-        if (!small_amount || *small_amount < 0) {
-            return fault(semantics::int_fault::NEGATIVE_SHIFT, {});
-        }
-
-        if (*small_amount >= static_cast<i128>(MAX_COMPTIME_INT_BITS)) {
+        if (small_amount < 0) { return fault(semantics::int_fault::NEGATIVE_SHIFT, {}); }
+        if (small_amount >= static_cast<i128>(MAX_COMPTIME_INT_BITS)) {
             return comp_.report(u_,
                                 src,
                                 gs::error::COMPTIME_EVALUATION_FAILED,
@@ -815,22 +817,28 @@ auto analyzer::fold_shift(const binary_info& info,
                                             MAX_COMPTIME_INT_BITS));
         }
 
-        const auto bits{static_cast<u64>(*small_amount)};
+        const auto bits{static_cast<u64>(small_amount)};
         return operand{
             intern_int(pool,
                        info.kind == instruction_kind::SHL ? value->shl(bits) : value->shr(bits),
                        shifted)};
     }
 
-    if (!gs::is_integer(shifted.get_kind()) || !small_amount) {
+    if (!gs::is_integer(shifted.get_kind())) {
         return comp_.unsupported(u_, src, "a shift of this constant");
     }
 
     const auto op{*semantics::int_op_of(info.kind, info.wrapping, info.saturating)};
     const auto domain{domain_of(shifted)};
+    if (!folds_exactly(shifted)) {
+        const auto folded{semantics::fold_wide_shift(op, domain, *value, small_amount)};
+        if (!folded) { return fault(folded.error(), domain); }
+        return operand{intern_int(pool, *folded, shifted)};
+    }
+
     const auto bits{semantics::to_domain(
         value->is_negative() ? static_cast<u128>(*value->to_i128()) : *value->to_u128(), domain)};
-    const auto folded{semantics::fold_int_shift(op, domain, bits, *small_amount)};
+    const auto folded{semantics::fold_int_shift(op, domain, bits, small_amount)};
     if (!folded) { return fault(folded.error(), domain); }
     const auto out{domain.is_signed ? big_int{semantics::signed_value(*folded, domain)}
                                     : big_int{semantics::unsigned_value(*folded, domain)}};
@@ -849,7 +857,6 @@ auto analyzer::fold_unary(tag t, const operand& value, gs::type& type) -> stdx::
 
     if (t == tag::pos) { return value; }
     const bool negate{t != tag::bit_not};
-    if (!folds_exactly(type)) { return stdx::none; }
     if (const auto f{v.data.as_opt<f128>()}; f && negate) {
         return operand{pool.intern(-*f, type)};
     }
@@ -868,11 +875,17 @@ auto analyzer::fold_unary(tag t, const operand& value, gs::type& type) -> stdx::
     }
 
     const auto domain{domain_of(type)};
-    const auto bits{semantics::to_domain(
-        exact->is_negative() ? static_cast<u128>(*exact->to_i128()) : *exact->to_u128(), domain)};
     const auto op{!negate              ? semantics::int_unary_op::NOT
                   : t == tag::neg_wrap ? semantics::int_unary_op::WRAP_NEG
                                        : semantics::int_unary_op::NEG};
+    if (!folds_exactly(type)) {
+        const auto wide{semantics::fold_wide_unary(op, domain, *exact)};
+        if (!wide) { return stdx::none; }
+        return operand{intern_int(pool, *wide, type)};
+    }
+
+    const auto bits{semantics::to_domain(
+        exact->is_negative() ? static_cast<u128>(*exact->to_i128()) : *exact->to_u128(), domain)};
     const auto folded{semantics::fold_int_unary(op, domain, bits)};
     if (!folded) { return stdx::none; }
     const auto out{domain.is_signed ? big_int{semantics::signed_value(*folded, domain)}
@@ -923,7 +936,7 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
     case tag::bit_not:  {
         const bool negate{t != tag::bit_not};
         if (!(negate ? gs::is_numeric(type.get_kind()) : is_int_like(type))) { break; }
-        if (const auto index{comptime_value(operand_value)}; index && folds_exactly(type)) {
+        if (const auto index{comptime_value(operand_value)}) {
             const auto& v{pool.value_at(*index)};
             if (!v.data.is<f128>() && !int_of(v)) { break; }
             if (const auto folded{fold_unary(t, operand_value, type)}) { return *folded; }

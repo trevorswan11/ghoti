@@ -504,7 +504,6 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     // An immutable binding of a function names it, so calls through it stay direct
     if (const auto fn{init.as_opt<function_ref>()}) {
         if (!type_ref || names_function(*fn, *TRY(resolve_type(*type_ref, src)))) { return init; }
-        return comp_.unsupported(u_, src, "a function bound to a `let`");
     }
 
     if (const auto index{comptime_value(init)}; index && comp_.constants().is_type(*index)) {

@@ -410,8 +410,16 @@ auto compilation::declare_function(const unit&           u,
     }
 
     // `@[testing]` only lets the body use the test builtins
-    if ((fn_flags & ~(flags::EXPLICIT_CONV | flags::TESTING | flags::MOVE)) != 0) {
-        return unsupported(u, src, "a variadic, extern, erased or `impl` function");
+    constexpr auto DEFINED_FLAGS{flags::EXPLICIT_CONV | flags::TESTING | flags::MOVE |
+                                 flags::VARIADIC};
+    if ((fn_flags & ~DEFINED_FLAGS) != 0) {
+        return unsupported(u, src, "an extern, erased or `impl` function");
+    }
+
+    // A C-variadic function takes its extra arguments as a C function does
+    const bool variadic{(fn_flags & flags::VARIADIC) != 0};
+    if (variadic && (bound_count != 0 || is_generic(u, func))) {
+        return unsupported(u, src, "a generic C-variadic function");
     }
 
     if (bound_count != 0 || is_generic(u, func)) { return declare_generic(u, decl, func, member); }
@@ -465,7 +473,7 @@ auto compilation::declare_function(const unit&           u,
 
     auto span{ctx_.pool.get_many_unsafe(param_types.size())};
     for (usize i{0}; i < param_types.size(); ++i) { span[i] = param_types[i]; }
-    auto& fn_type{ctx_.get_function(span, return_type, false, conv, false)};
+    auto& fn_type{ctx_.get_function(span, return_type, variadic, conv, false)};
 
     // A non-generic function's attributes are known before its body, for `@typeInfo`
     auto folded{TRY(sig.fold_attributes(
@@ -728,10 +736,16 @@ auto analyzer::analyze_global(decl_id                        decl,
     const auto  constant_index{comptime_value(value)};
     if (!constant_index) {
         if (is_untyped_literal(value)) {
-            if (!declared && value.is<cast_ref>()) {
+            // An inferred cast or a range has a type of its own
+            const auto init{value.as_opt<anon_init>()};
+            const bool is_range{init && mod().tag_of(init->inst) == tag::range};
+            if (!declared && (value.is<cast_ref>() || is_range)) {
                 return analyze_global(decl, TRY(concrete(value, src)), declared, attrs, src);
             }
 
+            // A constant enum literal has no storage and takes its type where it is read
+            const bool is_mut{d.has(decl_flags::LET) || d.has(decl_flags::MUT)};
+            if (!declared && value.is<enum_literal>() && !is_mut) { return value; }
             if (!declared) {
                 return comp_.unsupported(u_, src, "an untyped literal as a global's value");
             }
