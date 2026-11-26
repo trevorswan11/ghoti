@@ -2754,8 +2754,7 @@ class analyzer {
     std::vector<std::vector<operand>>                                     packs_;
     std::vector<propagation>                                              propagations_;
     ankerl::unordered_dense::map<inst_id, stdx::option<returned_failure>> failures_;
-    // The loops being unrolled into a runtime body, innermost last, with the runtime branch
-    // depth and the number of jump targets around each
+    // The loops being unrolled into a runtime body, innermost last
     std::vector<unrolled_loop>                      unrolling_;
     ankerl::unordered_dense::map<inst_id, mem_view> mem_views_;
     // The types an inferred return type meets, when collecting them
@@ -2776,8 +2775,7 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, dyn_entry> dyn_entries_;
     // The reference each binary operator read its left side through
     ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
-    // A binary operator's left side read through a returned reference right after its call,
-    // with the reference
+    // A binary operator's left side read through a returned reference right after its call
     ankerl::unordered_dense::map<inst_id, std::pair<gir::value, operand>> early_reads_;
     // Compile-time string parameters built on entry, which spilling them reuses
     ankerl::unordered_dense::map<inst_id, gir::value> entry_strings_;
