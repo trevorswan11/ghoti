@@ -121,4 +121,12 @@ TEST_CASE("An integer cast to an enum checks it lands on a variant", "[uir]") {
     CHECK(gir.contains("invalid enum value"));
 }
 
+TEST_CASE("`@ptrFromInt` of a negative number folds to its pointer-width bits", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        const all_ones: ^mut opaque = @ptrFromInt(^mut opaque, -1);
+        const address = @intFromPtr(all_ones);
+    )")};
+    CHECK(run.int_text("address") == "18446744073709551615");
+}
+
 } // namespace ghoti::tests

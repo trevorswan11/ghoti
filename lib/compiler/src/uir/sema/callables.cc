@@ -46,7 +46,7 @@ constexpr u64 GENERIC_VALUE_MARKER{0x7569725f67656e76};
     bool       any{false};
     for (u32 i{0}; i < count; ++i) {
         rec.skip_ref();
-        any = any || rec.u32_field() != 0;
+        any = any || (rec.u32_field() & flags::CAPTURE_BY_REF) != 0;
         rec.skip_str();
     }
 
@@ -100,7 +100,10 @@ auto compilation::declare_local(const unit& u, const instance& enclosing, local_
     const auto declared{TRY(declare_function(u, enclosing.decl, decl.func, decl.member))};
 
     // A local function's body is emitted once a runtime use needs it
-    if (const auto fn{declared.as_opt<function_ref>()}) { defer_body(*fn->fn); }
+    if (const auto fn{declared.as_opt<function_ref>()}) {
+        fn->fn->known_packs = decl.known_packs;
+        defer_body(*fn->fn);
+    }
 
     // A generic's or a ctor instance's function declares its own local generics, named apart
     const auto owner{enclosing.scope       ? stdx::option<nominal&>{*enclosing.scope}
@@ -139,12 +142,13 @@ auto compilation::declare_local(const unit& u, const instance& enclosing, local_
         make_uninit_span<gs::types::closure_capture>(ctx_.arena, decl.env_captures.size())};
     std::ranges::copy(decl.env_captures, captures.begin());
     auto& env{*arena_.make<closure_env>(closure_env{
-        .type      = &env_type,
-        .fields    = std::move(decl.fields),
-        .moves     = is_move_fn(*u.uir, decl.func),
-        .self_name = generic ? "env" : "self",
-        .self_slot = decl.self_slot,
-        .id        = id,
+        .type       = &env_type,
+        .fields     = std::move(decl.fields),
+        .pack_slots = std::move(decl.pack_slots),
+        .moves      = is_move_fn(*u.uir, decl.func),
+        .self_name  = generic ? "env" : "self",
+        .self_slot  = decl.self_slot,
+        .id         = id,
     })};
 
     // A generic's binding holds the environment under a function type of the generic's own
@@ -386,20 +390,23 @@ auto analyzer::names_itself(stdx::option<inst_id> from) const -> bool {
     return t == tag::let_value || t == tag::const_local;
 }
 
-auto analyzer::local_function(inst_id                func,
-                              std::vector<ip::index> captures,
-                              stdx::option<u32>      self_slot) -> result<operand> {
+auto analyzer::local_function(inst_id                                             func,
+                              std::vector<ip::index>                              captures,
+                              stdx::option<u32>                                   self_slot,
+                              std::vector<std::pair<u32, std::vector<ip::index>>> known_packs)
+    -> result<operand> {
     if (const auto known{comp_.local_function_of(u_, func, &*fn_, captures)}) { return *known; }
 
     auto member{member_context_here()};
     member.captures = std::move(captures);
     return comp_.declare_local(u_,
                                *fn_,
-                               {.inst      = func,
-                                .func      = func,
-                                .member    = std::move(member),
-                                .name      = binding_name_of(func),
-                                .self_slot = self_slot});
+                               {.inst        = func,
+                                .func        = func,
+                                .member      = std::move(member),
+                                .name        = binding_name_of(func),
+                                .self_slot   = self_slot,
+                                .known_packs = std::move(known_packs)});
 }
 
 auto analyzer::comptime_closure(inst_id inst) -> result<operand> {
@@ -417,26 +424,48 @@ auto analyzer::comptime_closure(inst_id inst) -> result<operand> {
     const auto                         placeholder{capture_placeholder()};
     for (u32 i{0}; i < count; ++i) {
         const auto value_ref{*rec.ref_field()};
-        const bool by_ref{rec.u32_field() != 0};
+        const bool by_ref{(rec.u32_field() & flags::CAPTURE_BY_REF) != 0};
         rec.skip_str();
         if (names_itself(as_inst(value_ref))) { return comp_.needs_runtime(u_, src); }
 
+        // A `move fn` captures a read of a `let mut`, whose memory it copies
+        auto read{value_ref};
+        if (const auto from{as_inst(value_ref)};
+            moves && from && mod().tag_of(*from) == tag::load) {
+            read = mod().data_of(*from).un.operand;
+        }
+
+        const auto target{TRY(resolve(read, src))};
+        const auto at{target.as_opt<comptime_place>()};
+        if (by_ref && !at) { return comp_.needs_runtime(u_, src); }
+
+        // A `move fn` keeps a copy of its own, which its calls write
+        if (at && moves) {
+            env.emplace_back(operand{comp_.new_alloc({
+                .type                = type_of(target),
+                .value               = comptime_value(load_comptime(*at)),
+                .frame               = frame_,
+                .runtime_depth       = runtime_depth_,
+                .keeps_comptime_type = false,
+            })});
+            known.emplace_back(placeholder);
+            borrows = true;
+            continue;
+        }
+
         if (by_ref) {
-            const auto target{TRY(resolve(value_ref, src))};
-            if (!target.is<comptime_place>()) { return comp_.needs_runtime(u_, src); }
             env.emplace_back(target);
             known.emplace_back(placeholder);
             borrows = true;
             continue;
         }
 
-        const auto index{comptime_value(TRY(resolve_value(value_ref, src)))};
+        const auto index{comptime_value(at ? load_comptime(*at) : target)};
         if (!index) { return comp_.needs_runtime(u_, src); }
         env.emplace_back(stdx::none);
         known.emplace_back(*index);
     }
 
-    if (moves) { return comp_.unsupported(u_, src, "a `move fn` at compile time"); }
     if (!borrows) { return local_function(func, std::move(known)); }
     auto member{member_context_here()};
     member.captures = std::move(known);
@@ -457,19 +486,22 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
 
     const bool moves{is_move_fn(mod(), func)};
 
-    auto&                                   ctx{comp_.ctx()};
-    std::vector<ip::index>                  known;
-    std::vector<stdx::option<u32>>          fields;
-    std::vector<gs::types::closure_capture> captures;
-    std::vector<gir::value>                 stored;
-    stdx::option<u32>                       self_slot;
-    std::vector<named_capture>              named;
-    std::vector<ref>                        capture_refs;
-    const auto                              placeholder{capture_placeholder()};
+    auto&                                               ctx{comp_.ctx()};
+    std::vector<ip::index>                              known;
+    std::vector<stdx::option<u32>>                      fields;
+    std::vector<gs::types::closure_capture>             captures;
+    std::vector<gir::value>                             stored;
+    stdx::option<u32>                                   self_slot;
+    std::vector<named_capture>                          named;
+    std::vector<ref>                                    capture_refs;
+    std::vector<std::pair<u32, u32>>                    pack_slots;
+    std::vector<std::pair<u32, std::vector<ip::index>>> known_packs;
+    const auto                                          placeholder{capture_placeholder()};
     for (u32 i{0}; i < count; ++i) {
         const auto value_ref{*rec.ref_field()};
         capture_refs.emplace_back(value_ref);
-        const bool by_ref{rec.u32_field() != 0};
+        const auto bits{rec.u32_field()};
+        const bool by_ref{(bits & flags::CAPTURE_BY_REF) != 0};
         const auto name{comp_.lasting_name(rec.str_field())};
         const auto from{as_inst(value_ref)};
         // The literal's own binding, which a generic calls itself through
@@ -501,7 +533,53 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
 
         // A `const`, a compile-time parameter, a type or a function cannot be stored
         const auto value{TRY(resolve_value(value_ref, src))};
-        const auto index{comptime_value(value)};
+
+        // A pack is copied element by element, from the fields that follow its slot
+        if (const auto pack{value.as_opt<pack_ref>()}) {
+            if (is_comptime()) { return comp_.needs_runtime(u_, src); }
+            const auto elements{packs_[pack->index]};
+
+            // A pack only measured stores nothing, its elements known by type alone
+            if ((bits & flags::CAPTURE_LEN_ONLY) != 0 && !comp_.is_generic(u_, func)) {
+                std::vector<ip::index> typed;
+                for (const auto& element : elements) {
+                    auto& type{type_of(TRY(concrete(element, src)))};
+                    typed.emplace_back(comp_.constants().intern(ip::undefined_value{}, type));
+                }
+
+                known_packs.emplace_back(i, std::move(typed));
+                fields.emplace_back(stdx::none);
+                known.emplace_back(placeholder);
+                continue;
+            }
+
+            if (elements.empty()) {
+                return comp_.unsupported(u_, src, "a capture of an empty pack");
+            }
+            fields.emplace_back(static_cast<u32>(captures.size()));
+            pack_slots.emplace_back(i, static_cast<u32>(elements.size()));
+            for (usize k{0}; k < elements.size(); ++k) {
+                const auto typed{TRY(concrete(elements[k], src))};
+                auto&      captured{type_of(typed)};
+                stored.emplace_back(TRY(as_runtime(typed, src)));
+                stored.back().type.emplace(captured);
+                captures.emplace_back(
+                    gs::types::closure_capture{comp_.lasting_name(fmt::format("{}#{}", name, k)),
+                                               &captured,
+                                               &captured,
+                                               gs::types::capture_mode::VALUE});
+            }
+
+            known.emplace_back(placeholder);
+            continue;
+        }
+
+        auto index{comptime_value(value)};
+        // A local function is captured as its value, which a call goes through
+        if (const auto fn{value.as_opt<function_ref>()}; fn && !index) {
+            index = comp_.function_value(*fn->fn);
+        }
+
         const bool is_const{from && (mod().tag_of(*from) == tag::const_local ||
                                      (mod().tag_of(*from) == tag::param && index))};
         const bool runtime{!is_const && !value.is<function_ref>() && !value.is<generic_ref>() &&
@@ -562,12 +640,17 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
     if (is_comptime() && !named.empty()) {
         if (self_slot) { return comp_.needs_runtime(u_, src); }
         const auto plain{TRY(local_function(func, std::move(known)))};
+
+        // A generic's instances read the known captures it was declared with
+        if (plain.is<generic_ref>()) { return plain; }
         const auto fn{plain.as_opt<function_ref>()};
         if (!fn) { return comp_.needs_runtime(u_, src); }
         return operand{TRY(comp_.comptime_function(*fn->fn, named))};
     }
 
-    if (captures.empty()) { return local_function(func, std::move(known), self_slot); }
+    if (captures.empty()) {
+        return local_function(func, std::move(known), self_slot, std::move(known_packs));
+    }
     if (is_comptime()) { return comp_.needs_runtime(u_, src); }
 
     auto declared{comp_.local_function_of(u_, inst, &*fn_, known)};
@@ -587,7 +670,9 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
                                                   .name         = binding_name_of(inst),
                                                   .env_captures = std::move(captures),
                                                   .fields       = std::move(fields),
+                                                  .pack_slots   = std::move(pack_slots),
                                                   .self_slot    = self_slot,
+                                                  .known_packs  = std::move(known_packs),
                                                   .signature    = signature})));
     }
 
@@ -628,9 +713,32 @@ auto analyzer::bind_environment(const closure_env& env, const gir::value& self) 
         };
     }
 
+    // A pack's elements are read into a pack of the body's own
+    for (const auto& [slot, len] : env.pack_slots) {
+        std::vector<operand> elements;
+        for (u32 k{0}; k < len; ++k) {
+            const auto       field{*env.fields[slot] + k};
+            auto&            storage{*closure.captures[field].storage_type};
+            const auto       address{builder_.emit_get_element_ptr(
+                gir::value{self.data, *env.type}, {usize_constant(field)}, storage)};
+            const gir::value at{address, storage};
+            if (env.moves) {
+                elements.emplace_back(
+                    slot_value{.address = at, .type = &storage, .is_mutable = true});
+            } else {
+                elements.emplace_back(gir::value{builder_.emit_load(at, storage), storage});
+            }
+        }
+
+        env_values_[slot] = pack_ref{static_cast<u32>(packs_.size())};
+        packs_.emplace_back(std::move(elements));
+    }
+
     for (usize slot{0}; slot < env.fields.size(); ++slot) {
         const auto field{env.fields[slot]};
-        if (!field) { continue; }
+        if (!field || std::ranges::contains(env.pack_slots, slot, &std::pair<u32, u32>::first)) {
+            continue;
+        }
 
         const auto& capture{closure.captures[*field]};
         auto&       storage{*capture.storage_type};

@@ -582,7 +582,7 @@ auto analyzer::comptime_argument(const call_arg&         arg,
         return *comptime_value(*known);
     }
 
-    const auto checked{TRY(at_comptime_boundary(std::move(known)))};
+    const auto checked{TRY(at_comptime_boundary(std::move(known), src))};
     return *comptime_value(checked);
 }
 

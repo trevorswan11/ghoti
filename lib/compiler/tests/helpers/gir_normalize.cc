@@ -250,14 +250,18 @@ struct module_dump {
             }
         }
 
-        // A generic instance's local generics are numbered by each pipeline's own count
+        // A generic instance's local generics are numbered by each pipeline's own count, which
+        // the old pipeline writes without leading zeros
         if (stdx::string::substr(dump, i).starts_with("_i") && i > 0 &&
-            is_mangle_char(dump[i - 1]) && i + 18 <= dump.size() &&
-            std::ranges::all_of(stdx::string::substr(dump, i + 2, 16), is_hex) &&
-            (i + 18 == dump.size() || !is_mangle_char(dump[i + 18]) || dump[i + 18] == '_')) {
-            out += "_i#";
-            i += 18;
-            continue;
+            is_mangle_char(dump[i - 1])) {
+            usize end{i + 2};
+            while (end < dump.size() && end < i + 18 && is_hex(dump[end])) { ++end; }
+            const bool ends{end == dump.size() || !is_mangle_char(dump[end]) || dump[end] == '_'};
+            if (end >= i + 14 && ends) {
+                out += "_i#";
+                i = end;
+                continue;
+            }
         }
 
         // A second same-named generic's instances are numbered by when each was first instantiated

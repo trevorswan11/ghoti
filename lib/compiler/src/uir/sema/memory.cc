@@ -141,6 +141,90 @@ auto analyzer::store_comptime(const comptime_place& p, const operand& value, con
     return {};
 }
 
+auto analyzer::comptime_range(const operand& dest, const source& src) -> result<memory_view> {
+    const auto into{view_of(dest)};
+    if (!into) { return comp_.unsupported(u_, src, "a copy into this range at compile time"); }
+    if (!into->is_mutable) {
+        return comp_.report(u_, src, gs::error::ASSIGNMENT_TO_CONST, std::string{ASSIGN_CONSTANT});
+    }
+
+    return *into;
+}
+
+auto analyzer::comptime_range_copy(const operand&   dest,
+                                   const operand&   from,
+                                   std::string_view what,
+                                   const source&    src) -> result<void> {
+    const auto into{TRY(comptime_range(dest, src))};
+    auto&      pool{comp_.constants()};
+
+    // The source is read whole before any element is written, so the two may overlap
+    std::vector<operand> elements;
+    if (const auto view{view_of(from)}) {
+        for (u64 i{0}; i < view->len; ++i) {
+            auto element{view->array};
+            element.path.emplace_back(
+                comptime_step{static_cast<u32>(view->offset + i), view->elem});
+            elements.emplace_back(load_comptime(element));
+        }
+    } else {
+        auto& array{comp_.ctx().get_array(gs::types::mut::CONSTANT, false, into.len, *into.elem)};
+        const auto source_value{
+            is_untyped_literal(from)
+                ? TRY(coerce_to(from, array, src, {.what = use_site::kind::STORE}))
+                : TRY(read_through_reference(from, src))};
+        const auto  known{TRY(require_comptime(source_value, src))};
+        const auto& data{pool.value_at(known).data};
+        if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+            for (const auto& e : agg->elements) {
+                elements.emplace_back(e ? operand{*e}
+                                        : operand{pool.intern(ip::undefined_value{}, *into.elem)});
+            }
+        } else if (const auto text{data.as_opt<std::string>()}) {
+            for (const char c : *text) {
+                elements.emplace_back(pool.intern(u64{static_cast<u8>(c)}, *into.elem));
+            }
+        } else {
+            return comp_.unsupported(u_, src, "a copy from this value at compile time");
+        }
+    }
+
+    if (elements.size() != into.len) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            fmt::format("{} with mismatched slice lengths", what));
+    }
+
+    for (u64 i{0}; i < into.len; ++i) {
+        auto element{into.array};
+        element.path.emplace_back(comptime_step{static_cast<u32>(into.offset + i), into.elem});
+        TRY(store_comptime(element, elements[i], src));
+    }
+
+    return {};
+}
+
+auto analyzer::comptime_fill(const operand& dest, const operand& value, const source& src)
+    -> result<void> {
+    const auto into{TRY(comptime_range(dest, src))};
+    auto&      ctx{comp_.ctx()};
+    if (!gs::is_same_unqualified(*into.elem, ctx.get_int(8, false)) &&
+        !gs::is_same_unqualified(*into.elem, ctx.get_int(8, true))) {
+        return comp_.unsupported(u_, src, "a `@memset` of wide elements at compile time");
+    }
+
+    const auto byte{
+        TRY(coerce_to(value, comp_.ctx().get_int(8, false), src, {.what = use_site::kind::STORE}))};
+    for (u64 i{0}; i < into.len; ++i) {
+        auto element{into.array};
+        element.path.emplace_back(comptime_step{static_cast<u32>(into.offset + i), into.elem});
+        TRY(store_comptime(element, byte, src));
+    }
+
+    return {};
+}
+
 auto analyzer::load_comptime(const comptime_place& p) -> operand {
     auto& pool{comp_.constants()};
     auto& alloc{comp_.alloc_at(p)};
@@ -737,6 +821,12 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
 
     // `a[i..j] = v` moves the source's elements into the range, whose length matches statically
     if (const auto lhs{as_inst(d.bin.lhs)}; lhs && mod().tag_of(*lhs) == tag::mem_view) {
+        if (is_comptime()) {
+            const auto copied{TRY(resolve_value(d.bin.rhs, src))};
+            TRY(comptime_range_copy(target, copied, "a range copy", src));
+            return void_value();
+        }
+
         const auto found{mem_views_.find(*lhs)};
         if (found == mem_views_.end()) {
             return comp_.unsupported(u_, src, "a copy into a slice range");
@@ -744,9 +834,28 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
 
         const auto dest{found->second};
         const auto given{TRY(resolve_value(d.bin.rhs, src))};
-        const auto from{TRY(buffer_view(d.bin.rhs, given, false, src))};
+        const auto read_from{[&] -> result<gir::value> {
+            // An untyped `.{...}` is an array of the range's elements, spilled to be read from
+            const auto init{given.as_opt<anon_init>()};
+            if (!init || mod().tag_of(init->inst) != tag::init_array || !dest.elem) {
+                const auto view{TRY(buffer_view(d.bin.rhs, given, false, src))};
+                return view.data;
+            }
+
+            auto& ctx{comp_.ctx()};
+            auto  items{record(init->inst)};
+            items.skip_ref();
+            auto&      array{ctx.get_array(
+                gs::types::mut::CONSTANT, false, items.refs_field().size(), *dest.elem)};
+            const auto typed{TRY(coerce_to(given, array, src, {.what = use_site::kind::STORE}))};
+            const auto slot{spill(TRY(as_runtime(typed, src)), array, false).address};
+            auto&      byte_ptr{ctx.get_pointer(gs::types::mut::MUTABLE, ctx.get_int(8, false))};
+            return gir::value{builder_.emit_get_element_ptr(slot, {usize_constant(0)}, byte_ptr),
+                              byte_ptr};
+        }()};
+        const auto from{TRY(read_from)};
         DISCARD(builder_.emit_builtin_call(syntax::builtin_name(syntax::builtin_t::MEMMOVE),
-                                           {dest.data, from.data, *dest.bytes},
+                                           {dest.data, from, *dest.bytes},
                                            builtin(gs::type_kind::VOID_)));
         return void_value();
     }

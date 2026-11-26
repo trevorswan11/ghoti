@@ -285,7 +285,16 @@ auto analyzer::require_comptime(const operand& op, const source& src) -> result<
     return comp_.needs_runtime(u_, src);
 }
 
-auto analyzer::at_comptime_boundary(result<operand> value) -> result<operand> {
+auto analyzer::at_comptime_boundary(result<operand> value, const source& src) -> result<operand> {
+    // A `@skip` the evaluation ran skips the test here
+    if (!value && value.error() == stop::SKIP) {
+        auto&      ctx{comp_.ctx()};
+        auto&      text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
+        const auto message{comp_.constants().intern(comp_.take_skip(), text_type)};
+        if (!gir_fn_) { return comp_.unsupported(u_, src, "a `@skip` outside a test"); }
+        return emit_skip(constant(message, text_type), src);
+    }
+
     if (value || value.error() != stop::RUNTIME) { return value; }
     return comp_.report_runtime_need(u_,
                                      stdx::none,

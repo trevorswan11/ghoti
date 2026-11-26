@@ -354,25 +354,39 @@ auto analyzer::builtin_src(const source& src) -> result<operand> {
 
 auto analyzer::builtin_skip(gsl::span<const ref> args, const source& src) -> result<operand> {
     if (args.size() > 1) { return comp_.unsupported(u_, src, "a `@skip` of this arity"); }
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a `@skip` at compile time"); }
-
-    auto&      ctx{comp_.ctx()};
-    auto&      pool{comp_.constants()};
-    auto&      u32_type{ctx.get_int(32, false)};
-    auto&      text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
-    gir::value message{constant(pool.intern(std::string{}, text_type), text_type)};
+    auto&       ctx{comp_.ctx()};
+    auto&       pool{comp_.constants()};
+    auto&       text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
+    gir::value  message{constant(pool.intern(std::string{}, text_type), text_type)};
+    std::string known_message;
     if (!args.empty()) {
         // A known message is passed as its text
         const auto given{TRY(resolve_value(args.front(), src))};
         const auto known{comptime_value(given)};
         if (const auto text{known ? known_text(*known) : stdx::none}) {
-            message = constant(pool.intern(*text, text_type), text_type);
+            known_message = *text;
+            message       = constant(pool.intern(*text, text_type), text_type);
+        } else if (is_comptime()) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_EVALUATION_FAILED,
+                                "@skip message must be a compile-time-constant string");
         } else {
             const auto coerced{TRY(coerce_to(given, text_type, src, {}))};
             message = TRY(as_runtime(coerced, src));
         }
     }
 
+    // At compile time the whole evaluation is left, and the test skips where it began
+    if (is_comptime()) { return stdx::err{comp_.skip(std::move(known_message))}; }
+    return emit_skip(message, src);
+}
+
+auto analyzer::emit_skip(const gir::value& message, const source& src) -> result<operand> {
+    auto& ctx{comp_.ctx()};
+    auto& pool{comp_.constants()};
+    auto& u32_type{ctx.get_int(32, false)};
+    auto& text_type{ctx.get_slice(gs::types::mut::CONSTANT, false, ctx.get_int(8, false))};
     DISCARD(TRY(comp_.prelude_function("skip_handler", u_, src)));
     const auto              at{builtin_name_location(src)};
     std::vector<gir::value> call_args;

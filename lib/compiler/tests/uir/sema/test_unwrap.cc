@@ -289,4 +289,71 @@ TEST_CASE("A match on a call's aggregate result takes it apart in a copy", "[uir
     CHECK(diff.status == helpers::uir_diff_status::MATCH);
 }
 
+TEST_CASE("Unwrapping `if`, `while`, `?` and errdefer run at compile time", "[uir]") {
+    const auto run{helpers::uir_accepted(with_types(R"(
+        const pick = fn(o: Opt): i32 { if (o) |v| { return v; } else { return -1; } };
+        const code = fn(r: Res): i32 { return if (r) |v| v else |e| @as(i32, e) + 100; };
+        const Counter = struct { left: i32 };
+        const next = fn(c: &mut Counter): Res {
+            if (c.left == 0) { return .{ .err = 7 }; }
+            c.left -= 1;
+            return .{ .ok = c.left };
+        };
+        const total = fn(n: i32): i32 {
+            let mut c: Counter = .{ .left = n };
+            let mut sum: i32 = 0;
+            while (next(&mut c)) |v| { sum += v; } else |e| { sum += @as(i32, e) * 10; }
+            return sum;
+        };
+        const plus = fn(o: Opt): Opt {
+            let v = o?;
+            return .{ .some = v + 1 };
+        };
+        const or_zero = fn(o: Opt): i32 { return if (o) |v| v else 0; };
+        const bump = fn(): i32 {
+            let mut o: Opt = .{ .some = 1 };
+            if (o) |&mut v| { v += 4; }
+            return or_zero(o);
+        };
+        const logged = fn(r: Res, log: &mut i32): Res {
+            defer log += 1;
+            errdefer log += 100;
+            let v = r?;
+            return .{ .ok = v };
+        };
+        const run_log = fn(r: Res): i32 {
+            let mut log: i32 = 0;
+            _ = logged(r, &mut log);
+            return log;
+        };
+        const some = pick(.{ .some = 5 });
+        const none = pick(.{ .none = {} });
+        const residual = code(.{ .err = 3 });
+        const looped = total(3);
+        const propagated = or_zero(plus(.{ .some = 1 }));
+        const stopped = or_zero(plus(.{ .none = {} }));
+        const written = bump();
+        const failed = run_log(.{ .err = 1 });
+        const passed = run_log(.{ .ok = 1 });
+    )"))};
+    CHECK(run.int_value("some") == 5);
+    CHECK(run.int_value("none") == -1);
+    CHECK(run.int_value("residual") == 103);
+    CHECK(run.int_value("looped") == 73);
+    CHECK(run.int_value("propagated") == 2);
+    CHECK(run.int_value("stopped") == 0);
+    CHECK(run.int_value("written") == 5);
+    CHECK(run.int_value("failed") == 101);
+    CHECK(run.int_value("passed") == 1);
+}
+
+TEST_CASE("A `!` that fails at compile time is reported", "[uir]") {
+    const auto run{helpers::uir_rejected(with_types(R"(
+        const get = fn(o: Opt): i32 { return o!; };
+        const unwrapped = get(.{ .none = {} });
+    )"))};
+    CHECK(run.codes() == std::vector{error::COMPTIME_EVALUATION_FAILED});
+    CHECK(run.messages().front() == "'!' unwrapped an empty optional");
+}
+
 } // namespace ghoti::tests

@@ -154,7 +154,8 @@ auto astgen::write_captures(record_writer&                   record,
     record.count(captures.size());
     for (usize i{0}; i < captures.size(); ++i) {
         record.ref_field(outer[i])
-            .u32_field(captures[i].by_ref ? 1U : 0U)
+            .u32_field((captures[i].by_ref ? u32{flags::CAPTURE_BY_REF} : 0U) |
+                       (captures[i].reads_value ? 0U : u32{flags::CAPTURE_LEN_ONLY}))
             .str_field(captures[i].name);
     }
 }

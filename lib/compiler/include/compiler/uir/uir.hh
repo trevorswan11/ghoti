@@ -286,6 +286,10 @@ enum : u32 {
 
     // deref's aux: the pointee as a place to store through, not a value read from it
     DEREF_PLACE = 1U << 0,
+
+    // a capture's `by_ref` word
+    CAPTURE_BY_REF   = 1U << 0,
+    CAPTURE_LEN_ONLY = 1U << 1, // only its `.len` is read, which a pack knows without its values
 };
 
 } // namespace flags

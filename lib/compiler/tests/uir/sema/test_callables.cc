@@ -435,4 +435,60 @@ TEST_CASE("A function literal a top-level statement discards is still checked", 
     CHECK_FALSE(bad.out().diagnostics.empty());
 }
 
+TEST_CASE("A `move fn` run at compile time keeps a copy it writes", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        const run = fn(): i32 {
+            let mut c: i32 = 0;
+            let bump = move fn(x: i32): i32 { c += x; return c; };
+            _ = bump(1);
+            return bump(2) * 10 + c;
+        };
+        const moved = run();
+    )")};
+    CHECK(run.int_value("moved") == 30);
+}
+
+TEST_CASE("Local functions and interface methods take their defaults", "[uir]") {
+    const auto diff{diff_source(R"(
+        const Shape = interface {
+            pub const scaled = fn(&self, by: i32 = 2, extra: i32 = 0): i32;
+        };
+        const Sq = struct { s: i32 };
+        impl Shape for Sq {
+            pub const scaled = fn(&self, by: i32, extra: i32): i32 { return self.s * by + extra; };
+        }
+        const through_dyn = fn(s: &dyn Shape): i32 { return s.scaled(); };
+        const through_bound = fn(s: &impl Shape): i32 { return s.scaled(3); };
+        pub const main = fn(): i32 {
+            const twice = fn(x: i32, times: i32 = 2): i32 { return x * times; };
+            let sq = Sq{ .s = 5 };
+            return sq.scaled() + through_dyn(&sq) + through_bound(&sq) + twice(4);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A closure copies the pack it captures, or only its length", "[uir]") {
+    const auto diff{diff_source(R"(
+        const outer = fn(rest...): i32 {
+            let len = fn(): i32 { return @intCast(rest.len); };
+            let first = fn(): i32 { return @as(i32, @intCast(rest[0])); };
+            return len() + first();
+        };
+        pub const main = fn(): i32 { return outer(5, 6, 7) + outer(@as(i64, 9)); };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A parameter's type may ask an earlier parameter's type", "[uir]") {
+    const auto diff{diff_source(R"(
+        const a = fn(b: i32, c: ^@TypeOf(b)): i32 { return b + *c; };
+        pub const main = fn(): i32 { let x: i32 = 1; return a(2, ^x); };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
 } // namespace ghoti::tests
