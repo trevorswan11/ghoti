@@ -439,8 +439,7 @@ auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
 auto astgen::lower_node(ast::node_id id, const ast::assignment_expr& node) -> ref {
     const auto op{id.get_token_type()};
 
-    // `a[i..j] = v` and `*a[i..j] = v` take the range apart before the source is computed, like
-    // `@memmove`
+    // `a[i..j] = v` and `*a[i..j] = v` take the range apart before the source is computed
     const auto deref{ast_.get_as_opt<ast::dereference_expr>(node.lhs)};
     const auto range_lhs{deref ? deref->rhs : node.lhs};
     if (const auto index{ast_.get_as_opt<ast::index_expr>(range_lhs)};
@@ -938,8 +937,6 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
                                .u32_field(slot)
                                .u32_field(static_cast<u32>(named.capture.modifier.get_raw())),
                            id)};
-                // A destructuring's check, with its empty body, binds nothing; the declarations
-                // after it do. A capture's pattern binds into the body it wraps
                 if (!checks_destructuring) {
                     DISCARD(declare(
                         named.name, named.at, {.kind = binding_kind::VALUE, .value = bound}));
