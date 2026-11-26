@@ -229,8 +229,7 @@ auto analyzer::vector_binary(const binary_info& info,
     const auto len{lhs_vec ? lhs_vec->len : rhs_vec->len};
     auto&      lane{lhs_vec ? lhs_vec->underlying : rhs_vec->underlying};
     const auto l{TRY(vector_operand(lhs, lane, len, src))};
-    // A known vector is built before a runtime scalar is broadcast against it, as the old
-    // emitter does
+    // A known vector is built before a runtime scalar is broadcast against it
     stdx::option<gir::value> built_l;
     if (!rhs_vec && !rhs.is<anon_init>() && !comptime_value(rhs) && lanes_of(l, len)) {
         TRY(require_runtime(src));
