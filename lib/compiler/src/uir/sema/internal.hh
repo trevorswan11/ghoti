@@ -793,8 +793,6 @@ class compilation {
         return found->second;
     }
 
-    // An untyped float literal's own nearest value in each format quad can't round into once
-    // The literal analyzed last wins, since a literal is analyzed just before it is used
     auto note_literal_digits(ip::index value, stdx::option<std::array<f128, 4>> narrowed) -> void {
         if (!narrowed) {
             literal_digits_.erase(std::to_underlying(value));
@@ -802,6 +800,7 @@ class compilation {
         }
         literal_digits_.insert_or_assign(std::to_underlying(value), *narrowed);
     }
+
     [[nodiscard]] auto literal_digits_in(ip::index value, float_format format) const
         -> stdx::option<f128> {
         const auto found{literal_digits_.find(std::to_underlying(value))};

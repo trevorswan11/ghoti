@@ -1,5 +1,6 @@
 #include <array>
 #include <compare>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -11,6 +12,7 @@
 
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
@@ -389,9 +391,9 @@ auto analyzer::compare_out_of_range(const binary_info& info, const operand& lhs,
 
 auto analyzer::binary_as(inst_id inst, gs::type& target, const source& src) -> result<operand> {
     // Both sides take the target, then the operator applies to them where they were analyzed
-    // A shift's amount keeps its own type
     const auto& d{mod().data_of(inst)};
-    const bool  shift{binary_info_of(mod().tag_of(inst)).cls == op_class::SHIFT};
+    // A shift's amount keeps its own type
+    const bool shift{binary_info_of(mod().tag_of(inst)).cls == op_class::SHIFT};
     std::vector<std::pair<inst_id, operand>> saved;
     const auto                               restore{gsl::finally([&] {
         for (auto& [i, value] : saved) { values_.insert_or_assign(i, std::move(value)); }

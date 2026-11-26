@@ -570,8 +570,7 @@ auto analyzer::comptime_argument(const call_arg&         arg,
         if (declared) { value = TRY(coerce_to(value, *declared, src, use)); }
         const auto known{TRY(require_comptime(value, src))};
 
-        // A `comptime` parameter takes a function as a copy of it, and a generic's instance as it
-        // is
+        // A `comptime` parameter takes a function as a copy of it
         if (const auto fn{comp_.plain_function(known)}; fn && fn->bindings.empty()) {
             return operand{TRY(comp_.comptime_function(*fn, {}))};
         }

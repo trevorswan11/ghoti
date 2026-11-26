@@ -138,8 +138,7 @@ auto analyzer::analyze_float_lit(inst_id inst) -> result<operand> {
     const auto bits{f128::from_bits(limbs_value(rec.words_field()))};
     const auto width{rec.u32_field()};
 
-    // An untyped literal is kept in quad precision, so a narrower format it becomes rounds its
-    // digits once rather than the quad value again
+    // An untyped literal is kept in quad precision
     const auto node{src_of(inst).as_opt<ast::node_id>()};
     const auto lit{width == 0 && node ? u_.source->ast.get_as_opt<ast::float_literal_expr>(*node)
                                       : stdx::none};
