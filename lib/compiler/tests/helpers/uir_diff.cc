@@ -412,6 +412,11 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"an inline aggregate type in value position has no runtime value"},
     // The address of an untyped constant points at a `comptime_int` slot
     std::string_view{"address of a scalar static member constant"},
+    // The old emitter spills a `match` of untyped arms as `comptime_int`
+    std::string_view{"Top-level runtime patterns stay lazy and in order"},
+    // The old pipeline accepts a local `const` a runtime call initializes when it is an aggregate
+    std::string_view{
+        "A return inside a function literal runs none of the enclosing function's defers"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
@@ -428,9 +433,12 @@ constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
         "`eql`-shaped comptime fn: early length mismatch and content mismatch both fold correctly"},
 };
 
-// Tests where the old emitter's GIR only has another shape: a known value left to runtime, or
-// a value copied through one more slot
+// Tests where the old emitter's GIR only has another shape: a known value left to runtime, a
+// value copied through one more slot, or a constant spelled with other digits
 constexpr std::array OLD_SHAPE_TESTS{
+    // `@as(usize, -1)` is the constant `-1`, which UIR spells as the unsigned all-ones value
+    std::string_view{
+        "Module-scope @ptrFromInt with a negative literal folds to an all-ones pointer"},
     // `@intCast` range checks and negation past 128 bits stay at runtime
     std::string_view{
         "multiplying and dividing integers past the inline width goes through compiler_rt"},

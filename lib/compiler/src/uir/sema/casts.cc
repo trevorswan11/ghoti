@@ -935,8 +935,9 @@ auto analyzer::fold_cast(builtin_t       which,
             .constant_index();
     }
     case builtin_t::PTR_FROM_INT: {
-        // A pointer known at compile time is its address as an integer
-        const auto address{exact ? exact->to_u128() : stdx::none};
+        // A pointer known at compile time is its address as an integer, a negative one wrapping
+        const auto address{exact ? wrap_int(*exact, comp_.ptr_bits(), false).to_u128()
+                                 : stdx::none};
         if (!address || *address > std::numeric_limits<u64>::max()) {
             return comp_.unsupported(u_, src, "a `@ptrFromInt` of this value at compile time");
         }

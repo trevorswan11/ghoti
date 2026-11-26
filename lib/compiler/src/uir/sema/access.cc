@@ -878,6 +878,12 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
                                         address_type);
     }
 
+    // A runtime place has no address until the code runs
+    if (is_comptime() && (target.is<place>() || target.is<slot_value>() ||
+                          target.is<global_ref>() || target.is<gir::value>())) {
+        return comp_.needs_runtime(u_, src);
+    }
+
     if (is_comptime()) { return comp_.unsupported(u_, src, "an address at compile time"); }
 
     auto& target_type{type_of(target)};
@@ -1013,7 +1019,8 @@ auto analyzer::analyze_deref(inst_id inst) -> result<operand> {
         return load_comptime(*memory);
     }
 
-    if (const auto referent{comptime_referent(ptr)}; referent && !as_place && is_comptime()) {
+    // A known address holds a value nothing writes through, so its place reads as the value
+    if (const auto referent{comptime_referent(ptr)}; referent && is_comptime()) {
         return *referent;
     }
 

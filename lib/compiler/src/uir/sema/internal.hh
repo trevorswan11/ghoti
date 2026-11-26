@@ -55,6 +55,7 @@ enum class stop : u8 {
     POISON,      // A reported error
     UNSUPPORTED, // A construct this phase doesn't handle
     RUNTIME,     // A comptime evaluation needed a runtime value, which its boundary reports
+    SKIP,        // A comptime `@skip`, which its boundary turns into the test's skip
 };
 
 template <typename T> using result = stdx::result<T, stop>;
@@ -360,6 +361,8 @@ struct param_binding {
 struct closure_env {
     gsl::not_null<gs::type*>       type;
     std::vector<stdx::option<u32>> fields;
+    // A captured pack's slot and its length, its elements the fields from the slot's on
+    std::vector<std::pair<u32, u32>> pack_slots{};
     // A `move fn` owns its copies
     bool moves{false};
     // The environment parameter's name, and the capture slot naming the function itself
@@ -409,6 +412,8 @@ struct instance {
     stdx::option<u32>                  env_frame{};
     // The capture slot of a local function's own name
     stdx::option<u32> self_capture{};
+    // Packs captured only for their length, by slot, as `undefined` values of their types
+    std::vector<std::pair<u32, std::vector<ip::index>>> known_packs{};
 };
 
 // One `@[...]` entry with the operands of its arguments
@@ -481,7 +486,9 @@ struct local_decl {
     std::string_view                        name{};
     std::vector<gs::types::closure_capture> env_captures{};
     std::vector<stdx::option<u32>>          fields{};
+    std::vector<std::pair<u32, u32>>        pack_slots{};
     stdx::option<u32>                       self_slot{};
+    std::vector<std::pair<u32, std::vector<ip::index>>> known_packs{};
     // A capturing generic's type as written, for its environment
     stdx::option<gs::type&> signature{};
 };
@@ -808,6 +815,13 @@ class compilation {
         return found->second.at(std::to_underlying(format));
     }
 
+    // A compile-time `@skip` unwinds to its boundary, which takes its message
+    auto skip(std::string message) -> stop {
+        pending_skip_ = std::move(message);
+        return stop::SKIP;
+    }
+    [[nodiscard]] auto take_skip() -> std::string { return std::exchange(pending_skip_, {}); }
+
     // An inferred return type that an untyped `return` leaves to the peer of every `return`
     [[nodiscard]] auto infer_peer_return(instance& fn) -> result<void>;
     // Analyzes a body whose return type is inferred now, since a caller needs that type
@@ -871,6 +885,9 @@ class compilation {
     [[nodiscard]] auto interface_methods(const nominal& iface) -> std::vector<interface_method>;
     // Whether the interface's method `name` gives any parameter a default argument
     [[nodiscard]] auto method_has_defaults(const nominal& iface, std::string_view name) -> bool;
+    // The interface's wrapper a call of `name` with `written` arguments goes to, else `name`
+    [[nodiscard]] auto
+    defaulted_method(const nominal& iface, std::string_view name, usize written) -> std::string;
     // The vtable of an impl's interface for its target, made and its methods requested on first use
     [[nodiscard]] auto vtable_for(impl_instance& applied) -> result<std::string_view>;
     // Whether an interface declares associated types or constants
@@ -1128,6 +1145,7 @@ class compilation {
     u32                                     speculating_{0};
     ankerl::unordered_dense::map<u32, math_origin> math_origins_;
     ankerl::unordered_dense::map<u32, std::array<f128, 4>> literal_digits_;
+    std::string                                            pending_skip_;
     std::vector<gsl::not_null<generic_fn*>> generics_;
     std::vector<gsl::not_null<impl_entry*>> impls_;
     ankerl::unordered_dense::map<impl_key, stdx::option<impl_instance&>, impl_key_hash>
@@ -1387,6 +1405,12 @@ class analyzer {
         gsl::not_null<gs::type*>      residual;
     };
 
+    // A `Flow` known at compile time: whether it breaks, and the reference or residual it holds
+    struct known_flow {
+        bool                    is_break;
+        stdx::option<ip::index> payload;
+    };
+
     // The `Flow` that `branch` returned, spilled, and whether it breaks
     struct flow_result {
         gir::value slot;
@@ -1394,6 +1418,8 @@ class analyzer {
         // Where the operand lives, which a capture by reference is checked against
         bool is_const;
         bool is_poly;
+        // Set at compile time, where nothing is spilled
+        stdx::option<known_flow> known{};
     };
 
     // A returned value's `Flow`, none when its type can't fail
@@ -1470,9 +1496,11 @@ class analyzer {
     // Whether a closure right after the function literal `func` wraps it
     [[nodiscard]] auto wrapping_closure(inst_id func) const -> bool;
     // A function literal of a runtime body, with the compile-time values its captures read
-    [[nodiscard]] auto local_function(inst_id                func,
-                                      std::vector<ip::index> captures,
-                                      stdx::option<u32> self_slot = stdx::none) -> result<operand>;
+    [[nodiscard]] auto local_function(
+        inst_id                                             func,
+        std::vector<ip::index>                              captures,
+        stdx::option<u32>                                   self_slot   = stdx::none,
+        std::vector<std::pair<u32, std::vector<ip::index>>> known_packs = {}) -> result<operand>;
     // Whether a capture's source is the binding the literal initializes, not analyzed yet
     [[nodiscard]] auto names_itself(stdx::option<inst_id> from) const -> bool;
     // A closure that only runs at compile time
@@ -1534,6 +1562,11 @@ class analyzer {
                                    std::string_view     name,
                                    gsl::span<const ref> args,
                                    const source&        src) -> result<operand>;
+    // The interface wrapper an impl inherits for a call of `name` leaving defaults off
+    [[nodiscard]] auto interface_wrapper(gs::type&        owner,
+                                         std::string_view name,
+                                         usize            written,
+                                         const source&    src) -> result<stdx::option<instance&>>;
     // `^T`, `&T` and `[]T`
     [[nodiscard]] auto analyze_elem_type(inst_id inst, tag t) -> result<operand>;
     [[nodiscard]] auto analyze_array_type(inst_id inst) -> result<operand>;
@@ -1919,6 +1952,10 @@ class analyzer {
     [[nodiscard]] auto payload_capture(const ast::capture_t& capture,
                                        const flow_result&    flow,
                                        const unwrap_shape&   shape) -> result<operand>;
+    // A payload capture of a compile-time `Flow`, the payload or its address
+    [[nodiscard]] auto known_capture(const ast::capture_t& capture,
+                                     const flow_result&    flow,
+                                     gs::type&             cap_type) -> result<operand>;
     [[nodiscard]] auto residual_capture(const flow_result& flow, const unwrap_shape& shape)
         -> operand;
     [[nodiscard]] auto analyze_residual(inst_id inst) -> result<operand>;
@@ -2086,6 +2123,16 @@ class analyzer {
                                       const operand&        value,
                                       const source&         src) -> result<void>;
     [[nodiscard]] auto load_comptime(const comptime_place& p) -> operand;
+    // The writable run of compile-time memory a range copy or `@memset` fills
+    [[nodiscard]] auto comptime_range(const operand& dest, const source& src)
+        -> result<memory_view>;
+    // `a[i..j] = v`, `@memcpy` and `@memmove` into compile-time memory
+    [[nodiscard]] auto comptime_range_copy(const operand&   dest,
+                                           const operand&   from,
+                                           std::string_view what,
+                                           const source&    src) -> result<void>;
+    [[nodiscard]] auto comptime_fill(const operand& dest, const operand& value, const source& src)
+        -> result<void>;
     // A runtime slot holding a copy of what comptime memory holds
     [[nodiscard]] auto comptime_copy(const comptime_place& p, const source& src) -> result<place>;
     // The compile-time address of a place in comptime memory as a value of `type`
@@ -2170,7 +2217,8 @@ class analyzer {
         return gsl::finally([this] { --runtime_depth_; });
     }
     // Reports a runtime need that reached a comptime boundary in a runtime function
-    [[nodiscard]] auto at_comptime_boundary(result<operand> value) -> result<operand>;
+    [[nodiscard]] auto at_comptime_boundary(result<operand> value, const source& src)
+        -> result<operand>;
     [[nodiscard]] auto known_bool(const operand& op, const source& src) -> result<bool>;
     // The result slot of a runtime `and` / `or`, holding the value its left side decides alone
     [[nodiscard]] auto bool_slot(inst_id inst, bool is_and) -> gir::value;
@@ -2343,6 +2391,8 @@ class analyzer {
     [[nodiscard]] auto comptime_expect(gsl::span<const ref> args, const source& src, bool require)
         -> result<operand>;
     [[nodiscard]] auto builtin_skip(gsl::span<const ref> args, const source& src) -> result<operand>;
+    // Calls the skip handler, then leaves the test, or the `@[testing]` helper for good
+    [[nodiscard]] auto emit_skip(const gir::value& message, const source& src) -> result<operand>;
     // The function an `@export` argument names, none for anything else
     [[nodiscard]] auto export_target(ref arg, const source& src) -> result<stdx::option<instance&>>;
     // The text a known string constant holds
@@ -2368,6 +2418,8 @@ class analyzer {
         gir::value count;
         // The destination's size in bytes, which the old emitter computes before the source
         stdx::option<gir::value> bytes;
+        // The element type, which an untyped `.{...}` source takes
+        stdx::option<gs::type&> elem{};
     };
 
     // Memory builtins (math.cc)
@@ -2440,11 +2492,10 @@ class analyzer {
     [[nodiscard]] auto range_value(inst_id inst, stdx::option<gs::type&> elem, const source& src)
         -> result<operand>;
 
-    // A `?` or `!` unwrapped at compile time through the operand's `branch`
-    [[nodiscard]] auto comptime_unwrap(const operand&      op,
-                                       const unwrap_shape& shape,
-                                       bool                propagates,
-                                       const source&       src) -> result<operand>;
+    // Runs the operand's `branch` at compile time, on compile-time memory holding it
+    [[nodiscard]] auto
+    comptime_flow(ref operand_ref, const operand& op, const unwrap_shape& shape, const source& src)
+        -> result<flow_result>;
 
     // A comparison of an integer with an untyped number outside its type, known whatever the value
     [[nodiscard]] auto compare_out_of_range(const binary_info& info,

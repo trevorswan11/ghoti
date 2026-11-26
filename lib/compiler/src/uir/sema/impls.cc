@@ -258,12 +258,6 @@ auto compilation::impl_context(impl_instance& applied) -> member_context {
 auto compilation::impl_member(impl_instance& applied, std::string_view name, const source& use)
     -> result<stdx::option<operand>> {
     const auto& u{*applied.entry->owner};
-    const auto  iface{applied.interface ? nominal_of(*applied.interface) : stdx::none};
-    if (iface && method_has_defaults(*iface, name)) {
-        return unsupported(
-            u, u.uir->src_of(applied.entry->inst), "an interface method with default arguments");
-    }
-
     const auto& m{*u.uir};
     const auto  ns{m.namespace_of(applied.entry->inst)};
     if (ns) {

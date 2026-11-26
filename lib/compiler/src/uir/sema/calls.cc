@@ -404,7 +404,7 @@ auto analyzer::call_with(instance&            target,
             return comp_.call_comptime(u_, src, target, std::move(values));
         }()};
         if (is_comptime()) { return value; }
-        return at_comptime_boundary(std::move(value));
+        return at_comptime_boundary(std::move(value), src);
     }
 
     std::vector<gir::value> values;

@@ -93,6 +93,7 @@ auto analyzer::emit_flow(ref                 operand_ref,
                          const operand&      op,
                          const unwrap_shape& shape,
                          const source&       src) -> result<flow_result> {
+    if (is_comptime()) { return comptime_flow(operand_ref, op, shape, src); }
     auto& ctx{comp_.ctx()};
     auto& operand_type{type_of(op)};
     auto& target{unref(operand_type)};
@@ -257,9 +258,36 @@ auto analyzer::analyze_unwrap(inst_id inst) -> result<operand> {
 
     stdx::option<propagation> propagated;
     if (propagates) { propagated.emplace(TRY(propagation_for(op, *shape, src))); }
-    if (is_comptime()) { return comptime_unwrap(op, *shape, propagates, src); }
-
     const auto flow{TRY(emit_flow(operand_ref, op, *shape, src))};
+
+    // At compile time the `continue` payload is a reference to the result
+    if (flow.known && !flow.known->is_break) {
+        const auto referent{flow.known->payload ? comptime_referent(operand{*flow.known->payload})
+                                                : stdx::none};
+        if (!referent) {
+            return comp_.unsupported(u_, src, "an unwrap of this payload at compile time");
+        }
+        return operand{*referent};
+    }
+
+    if (flow.known && propagated) {
+        propagated->flow = flow;
+        propagations_.emplace_back(std::move(*propagated));
+        const auto out{analyze_body(failure)};
+        propagations_.pop_back();
+        DISCARD(TRY(out));
+        return void_value();
+    }
+
+    if (flow.known) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            shape->residual->get_kind() == gs::type_kind::VOID_
+                                ? "'!' unwrapped an empty optional"
+                                : "'!' unwrapped an errored result");
+    }
+
     const auto payload_seg{new_segment()};
     const auto diverge_seg{new_segment()};
     builder_.emit_cond_goto(flow.is_break, diverge_seg, payload_seg);
@@ -282,16 +310,31 @@ auto analyzer::analyze_unwrap(inst_id inst) -> result<operand> {
     return flow_output(flow, *shape);
 }
 
-auto analyzer::comptime_unwrap(const operand&      op,
-                               const unwrap_shape& shape,
-                               bool                propagates,
-                               const source&       src) -> result<operand> {
+auto analyzer::comptime_flow(ref                 operand_ref,
+                             const operand&      op,
+                             const unwrap_shape& shape,
+                             const source&       src) -> result<flow_result> {
     auto& ctx{comp_.ctx()};
     auto& pool{comp_.constants()};
-    auto& target{unref(type_of(op))};
+    auto& operand_type{type_of(op)};
+    auto& target{unref(operand_type)};
 
-    // `branch` is given a reference into compile-time memory holding the operand
-    auto place{memory_place(op)};
+    // A `let mut` is the memory `branch` sees, so a capture by reference writes into it
+    stdx::option<comptime_place> place;
+    bool                         is_const{true};
+    if (operand_type.get_kind() == gs::type_kind::REFERENCE) {
+        place    = memory_place(op);
+        is_const = operand_type.is_constant();
+    } else if (auto inst{as_inst(operand_ref)}) {
+        if (mod().tag_of(*inst) == tag::load) { inst = as_inst(mod().data_of(*inst).un.operand); }
+        if (const auto found{inst ? values_.find(*inst) : values_.end()}; found != values_.end()) {
+            if (const auto held{found->second.as_opt<comptime_place>()}) {
+                place    = *held;
+                is_const = false;
+            }
+        }
+    }
+
     if (!place) {
         const auto read{TRY(read_through_reference(op, src))};
         const auto known{TRY(require_comptime(read, src))};
@@ -310,27 +353,20 @@ auto analyzer::comptime_unwrap(const operand&      op,
     const auto branched{TRY(call_impl_method(*shape.applied, "branch", std::move(args), src))};
     const auto flow{comptime_value(branched)};
     const auto un{flow ? pool.value_at(*flow).data.as_opt<ip::union_value>() : stdx::none};
-    if (!un || un->payload.empty()) {
+    if (!un) {
         return comp_.unsupported(u_, src, "an unwrap whose `branch` isn't known at compile time");
     }
 
-    // `continue` holds a reference to the payload, which is the result
-    if (un->active_field == "continue") {
-        const auto payload{un->payload.front()};
-        const auto referent{comptime_referent(operand{payload})};
-        if (!referent) {
-            return comp_.unsupported(u_, src, "an unwrap of this payload at compile time");
-        }
-        return operand{*referent};
-    }
-
-    if (propagates) { return comp_.unsupported(u_, src, "a `?` that propagates at compile time"); }
-    return comp_.report(u_,
-                        src,
-                        gs::error::COMPTIME_EVALUATION_FAILED,
-                        shape.residual->get_kind() == gs::type_kind::VOID_
-                            ? "'!' unwrapped an empty optional"
-                            : "'!' unwrapped an errored result");
+    return flow_result{
+        .slot     = {},
+        .is_break = {},
+        .is_const = is_const,
+        .is_poly  = operand_type.is_poly(),
+        .known    = known_flow{.is_break = un->active_field != "continue",
+                               .payload  = un->payload.empty()
+                                               ? stdx::none
+                                               : stdx::option<ip::index>{un->payload.front()}},
+    };
 }
 
 auto analyzer::bind_unwrapped(gsl::span<const inst_id> body, u32 slot, const operand& value)
@@ -351,6 +387,7 @@ auto analyzer::payload_capture(const ast::capture_t& capture,
         .capture = capture, .value_type = output, .place_is_const = flow.is_const};
     auto& cap_type{*TRY(capture_type(
         site, {.is_const = flow.is_const, .is_addressable = true, .is_poly = flow.is_poly}))};
+    if (flow.known) { return known_capture(capture, flow, cap_type); }
 
     // The `continue` payload is a reference to the output inside the operand
     auto&      out_ref{comp_.ctx().get_reference(gs::types::mut::POLY, output)};
@@ -368,7 +405,35 @@ auto analyzer::payload_capture(const ast::capture_t& capture,
     return operand{slot_value{.address = slot, .type = &cap_type}};
 }
 
+auto analyzer::known_capture(const ast::capture_t& capture,
+                             const flow_result&    flow,
+                             gs::type&             cap_type) -> result<operand> {
+    const source src{*capture.payload};
+    const auto   payload{flow.known->payload ? operand{*flow.known->payload} : void_value()};
+    if (capture.modifier.is_value()) {
+        const auto referent{comptime_referent(payload)};
+        if (!referent) {
+            return comp_.unsupported(u_, src, "an unwrap of this payload at compile time");
+        }
+        return operand{*referent};
+    }
+
+    // A capture by reference is the payload's address, at the capture's type
+    if (const auto at{memory_place(payload)}) { return operand{memory_address(*at, cap_type)}; }
+    auto&      pool{comp_.constants()};
+    const auto known{comptime_value(payload)};
+    const auto address{known && !pool.is_type(*known)
+                           ? pool.value_at(*known).data.as_opt<ip::address_value>()
+                           : stdx::none};
+    if (!address) {
+        return comp_.unsupported(u_, src, "an unwrap of this payload at compile time");
+    }
+    return operand{pool.intern(ip::address_value{*address}, cap_type)};
+}
+
 auto analyzer::residual_capture(const flow_result& flow, const unwrap_shape& shape) -> operand {
+    if (flow.known) { return flow.known->payload ? operand{*flow.known->payload} : void_value(); }
+
     auto&      residual{*shape.residual};
     const auto residual_at{
         builder_.emit_get_element_ptr(flow.slot, {usize_constant(UNION_PAYLOAD_FIELD)}, residual)};
@@ -431,9 +496,23 @@ auto analyzer::analyze_unwrap_branch(inst_id inst) -> result<operand> {
 
     const auto op{TRY(resolve_value(cond_ref, src))};
     const auto shape{TRY(capture_shape(op, node.else_capture, "if", cond_src.value_or(src), src))};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "an unwrapping `if` at compile time"); }
-
     const auto flow{TRY(emit_flow(cond_ref, op, shape, src))};
+
+    // At compile time only the arm `branch` picks is analyzed
+    if (flow.known) {
+        const bool taken{!flow.known->is_break};
+        const auto body{taken ? then_body : else_body};
+        if (taken) {
+            bind_unwrapped(body, 0, TRY(payload_capture(*node.payload_capture, flow, shape)));
+        } else if (node.else_capture) {
+            bind_unwrapped(body, 1, residual_capture(flow, shape));
+        }
+
+        const auto out{TRY(analyze_body(body))};
+        if (jump_) { return void_value(); }
+        return out.yielded.value_or(void_value());
+    }
+
     const auto then_seg{new_segment()};
     const auto else_seg{new_segment()};
     const auto merge{new_segment()};
@@ -469,7 +548,9 @@ auto analyzer::analyze_residual(inst_id inst) -> result<operand> {
     auto& residual_type{*p.shape.residual};
 
     operand residual{void_value()};
-    if (residual_type.get_kind() != gs::type_kind::VOID_) {
+    if (p.flow.known) {
+        residual = residual_capture(p.flow, p.shape);
+    } else if (residual_type.get_kind() != gs::type_kind::VOID_) {
         const auto payload_at{builder_.emit_get_element_ptr(
             p.flow.slot, {usize_constant(UNION_PAYLOAD_FIELD)}, residual_type)};
         residual =
@@ -482,7 +563,9 @@ auto analyzer::analyze_residual(inst_id inst) -> result<operand> {
 
     // An errdefer reads the residual from its own slot
     operand kept{void_value()};
-    if (from.get_kind() != gs::type_kind::VOID_) {
+    if (p.flow.known) {
+        kept = converted;
+    } else if (from.get_kind() != gs::type_kind::VOID_) {
         const auto slot{spill(TRY(as_runtime(converted, src)), from, false)};
         kept = slot_value{.address = slot.address, .type = &from};
     }
@@ -506,7 +589,6 @@ auto analyzer::analyze_ret_failure(inst_id inst) -> result<operand> {
         return void_value();
     }
 
-    if (is_comptime()) { return comp_.unsupported(u_, src, "an errdefer at compile time"); }
     const auto flow{TRY(emit_flow(operand_ref, value, *shape, src))};
     failures_.insert_or_assign(inst, returned_failure{.flow = flow, .shape = *shape});
     return void_value();
@@ -517,8 +599,13 @@ auto analyzer::analyze_failure_is_set(inst_id inst) -> result<operand> {
     const auto  of{as_inst(mod().data_of(inst).un.operand)};
     const auto  found{of ? failures_.find(*of) : failures_.end()};
     if (found == failures_.end()) { return comp_.unsupported(u_, src, "a failure of no return"); }
-    if (!found->second) { return comp_.constants().intern(false, builtin(gs::type_kind::BOOL)); }
-    return operand{found->second->flow.is_break};
+    const auto& failure{found->second};
+    if (!failure || failure->flow.known) {
+        const bool failed{failure && failure->flow.known->is_break};
+        return comp_.constants().intern(failed, builtin(gs::type_kind::BOOL));
+    }
+
+    return operand{failure->flow.is_break};
 }
 
 auto analyzer::analyze_failure_residual(inst_id inst) -> result<operand> {
@@ -530,7 +617,9 @@ auto analyzer::analyze_failure_residual(inst_id inst) -> result<operand> {
     }
 
     const auto& failure{*found->second};
-    if (failure.shape.residual->get_kind() == gs::type_kind::VOID_) { return void_value(); }
+    if (!failure.flow.known && failure.shape.residual->get_kind() == gs::type_kind::VOID_) {
+        return void_value();
+    }
     return residual_capture(failure.flow, failure.shape);
 }
 
@@ -542,6 +631,13 @@ auto analyzer::analyze_ret_residual(inst_id inst) -> result<operand> {
 
     const auto& rewrapped{*propagations_.back().rewrapped};
     auto&       ret{*fn_->return_type};
+    if (is_comptime()) {
+        const auto returned{TRY(coerce_to(rewrapped, ret, src, {.what = use_site::kind::RETURN}))};
+        DISCARD(TRY(require_comptime(returned, src)));
+        jump_.emplace(jump::kind::RETURN, stdx::none, returned);
+        return void_value();
+    }
+
     if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {

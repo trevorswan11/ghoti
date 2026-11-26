@@ -770,7 +770,9 @@ auto analyzer::analyze_mem_view(inst_id inst) -> result<operand> {
     const auto  arg_ref{mod().data_of(inst).un.operand};
     const bool  is_dest{mod().data_of(inst).un.aux != 0};
     const auto  given{TRY(resolve_value(arg_ref, src))};
-    if (is_comptime()) { return comp_.unsupported(u_, src, "a memory builtin at compile time"); }
+
+    // At compile time the buffer itself is copied through
+    if (is_comptime()) { return given; }
     mem_views_.insert_or_assign(inst, TRY(buffer_view(arg_ref, given, is_dest, src)));
     return void_value();
 }
@@ -794,6 +796,7 @@ auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, cons
             .bytes = is_dest ? stdx::option<gir::value>{byte_count(
                                    count, gir::size_of(arr->underlying, layout))}
                              : stdx::none,
+            .elem  = arr->underlying,
         };
     }
 
@@ -814,6 +817,7 @@ auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, cons
         .bytes = is_dest ? stdx::option<gir::value>{byte_count(
                                count, gir::size_of(slice->underlying, layout))}
                          : stdx::none,
+        .elem  = slice->underlying,
     };
 }
 
@@ -821,6 +825,18 @@ auto analyzer::builtin_mem(syntax::builtin_t which, gsl::span<const ref> args, c
     -> result<operand> {
     const auto name{syntax::builtin_name(which)};
     if (args.size() != 2) { return comp_.unsupported(u_, src, "a memory builtin's arity"); }
+    if (is_comptime()) {
+        const auto dest{TRY(resolve_value(args[0], src))};
+        const auto from{TRY(resolve_value(args[1], src))};
+        if (which == syntax::builtin_t::MEMSET) {
+            TRY(comptime_fill(dest, from, src));
+        } else {
+            TRY(comptime_range_copy(dest, from, name, src));
+        }
+
+        return void_value();
+    }
+
     TRY(require_runtime(src));
     const auto view_of{[&](ref r) -> stdx::option<mem_view> {
         const auto inst{as_inst(r)};

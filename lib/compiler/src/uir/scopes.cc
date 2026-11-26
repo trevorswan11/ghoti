@@ -176,6 +176,7 @@ auto astgen::capture_ref(const lookup_hit& hit, use u, source src) -> ref {
                           boundary->mutated.contains(hit.found.name)};
         innermost        = capture_slot_of(*boundary, hit.found.name, by_ref);
         innermost_by_ref = boundary->captures[innermost].by_ref;
+        if (!reading_len_) { boundary->captures[innermost].reads_value = true; }
     }
 
     const auto captured{add_un(tag::capture, {}, innermost, src)};

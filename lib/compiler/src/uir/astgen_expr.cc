@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -438,11 +439,14 @@ auto astgen::lower_node(ast::node_id id, const ast::binary_expr& node) -> ref {
 auto astgen::lower_node(ast::node_id id, const ast::assignment_expr& node) -> ref {
     const auto op{id.get_token_type()};
 
-    // `a[i..j] = v` takes the range apart before the source is computed, like `@memmove`
-    if (const auto index{ast_.get_as_opt<ast::index_expr>(node.lhs)};
+    // `a[i..j] = v` and `*a[i..j] = v` take the range apart before the source is computed, like
+    // `@memmove`
+    const auto deref{ast_.get_as_opt<ast::dereference_expr>(node.lhs)};
+    const auto range_lhs{deref ? deref->rhs : node.lhs};
+    if (const auto index{ast_.get_as_opt<ast::index_expr>(range_lhs)};
         index && index->index.is<ast::range_expr>() &&
         !syntax::token_type::get_compound_base_op(op)) {
-        const auto view{add_un(tag::mem_view, expr(node.lhs), 1, id)};
+        const auto view{add_un(tag::mem_view, expr(range_lhs), 1, id)};
         DISCARD(add_bin(tag::store, view, expr(node.rhs), id));
         return to_ref(well_known::void_value);
     }
@@ -501,7 +505,11 @@ auto astgen::call(source src, source_location, const ast::call_expr& node) -> re
                           .u32_field(args_start),
                       src);
     }
-    const auto function{expr(node.function)};
+    // A call leaving a local function's defaults off goes to the wrapper declared beside it
+    const auto wrapper{local_default_wrapper(node)};
+    const auto function{wrapper
+                            ? identifier(callee, location_of(callee), *wrapper, use::VALUE).value
+                            : expr(node.function)};
     auto [args, mask]{call_args(node)};
     return add_pl(
         tag::call,
@@ -511,6 +519,26 @@ auto astgen::call(source src, source_location, const ast::call_expr& node) -> re
 
 auto astgen::lower_node(ast::node_id id, const ast::call_expr& node) -> ref {
     return call(id, location_of(id), node);
+}
+
+auto astgen::local_default_wrapper(const ast::call_expr& node) -> stdx::option<std::string_view> {
+    const auto ident{ast_.get_as_opt<ast::identifier_expr>(node.function)};
+    if (!ident || std::ranges::contains(node.pack_expansions, true)) { return stdx::none; }
+
+    // A module-level function's wrapper is Sema's to find, through its declaration
+    const auto local{lookup(ident->name)};
+    const auto fn{local.as_opt<lookup_hit>()};
+    if (!fn || fn->found.kind == binding_kind::DECL) { return stdx::none; }
+
+    const auto name{ast::default_wrapper_name(ident->name, node.arguments.size())};
+    const auto found{lookup(name)};
+    const auto wrapper{found.as_opt<lookup_hit>()};
+    if (!wrapper || wrapper->found.kind == binding_kind::DECL ||
+        wrapper->crossed.size() != fn->crossed.size()) {
+        return stdx::none;
+    }
+
+    return wrapper->found.name;
 }
 
 auto astgen::builtin_call(source                src,
@@ -573,7 +601,12 @@ auto astgen::type_of(source src, const ast::call_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::dot_expr& node) -> ref {
+    // A capture read only for its `.len` needs no copy of a pack's values
+    const bool len{name_of(node.member) == "len" &&
+                   ast_.get_as_opt<ast::identifier_expr>(node.object).has_value()};
+    const auto outer_len{std::exchange(reading_len_, len)};
     const auto object{place(node.object, use::PLACE)};
+    reading_len_ = outer_len;
     if (object.is_place) {
         const auto ptr{add_pl(tag::field_ptr,
                               writer()

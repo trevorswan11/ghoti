@@ -289,4 +289,51 @@ TEST_CASE("A compile-time dereference reads a known slice or undefined pointer",
     CHECK(agrees(diff));
 }
 
+TEST_CASE("Range copies and memory builtins write compile-time memory", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        const build = fn(): [4]u8 {
+            let mut buf: [4]mut u8 = .{ 0, 0, 0, 0 };
+            buf[1..3] = [2]u8{ 5, 6 };
+            buf[2..][1] = 9;
+            return buf;
+        };
+        const filled = fn(): [3]u8 {
+            let mut buf: [3]mut u8 = undefined;
+            @memset(buf[0..], 7);
+            let src: [2]u8 = .{ 1, 2 };
+            @memcpy(buf[1..], src[0..]);
+            return buf;
+        };
+        const x = build();
+        const y = filled();
+        const digits = @as(i32, x[0]) * 1000 + @as(i32, x[1]) * 100 + @as(i32, x[2]) * 10 +
+                       @as(i32, x[3]);
+        const filled_digits = @as(i32, y[0]) * 100 + @as(i32, y[1]) * 10 + @as(i32, y[2]);
+    )")};
+    CHECK(run.int_value("digits") == 569);
+    CHECK(run.int_value("filled_digits") == 712);
+}
+
+TEST_CASE("A range copy takes an untyped `.{...}` source and a dereferenced range", "[uir]") {
+    const auto diff{diff_source(R"(
+        pub const main = fn(): i32 {
+            let mut a: [4]mut u8 = .{ 1, 2, 3, 4 };
+            a[2..] = .{ 7, 8 };
+            let b: [2]u8 = .{ 9, 6 };
+            *a[0..2] = b;
+            return @as(i32, a[0]) + @as(i32, a[3]);
+        };
+    )")};
+    INFO(diff.detail);
+    CHECK(agrees(diff));
+}
+
+TEST_CASE("A global reads a module-level `comptime let mut` as what it holds", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        comptime let mut counter: i32 = 3;
+        const seen = counter;
+    )")};
+    CHECK(run.int_value("seen") == 3);
+}
+
 } // namespace ghoti::tests

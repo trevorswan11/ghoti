@@ -657,41 +657,51 @@ constexpr std::string_view RESULT_WITH_IMPLS{R"(
 )"};
 
 TEST_CASE("`errdefer` in `const_eval`", "[uir]") {
-    check_later_phase(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
+    const auto run{accepted(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
         const fail = fn(): R { return R{ .err = 42 }; };
-        comptime let mut err_log: i32 = 0;
-        const test_err = fn(): R {
-            errdefer |e| err_log = e;
+        const test_err = fn(log: &mut i32): R {
+            errdefer |e| log = e;
             let v = fail()?;
             return R{ .ok = v };
         };
-        const _dummy = test_err();
-        const final_log = err_log;
-    )"),
-                      "a `?` that propagates at compile time");
+        const run_err = fn(): i32 {
+            let mut log: i32 = 0;
+            _ = test_err(&mut log);
+            return log;
+        };
+        const final_log = run_err();
+    )"))};
+    CHECK(run.int_value("final_log") == 42);
 }
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`", "[uir]") {
-    check_later_phase(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
+    const auto run{accepted(fmt::format("{}{}", RESULT_WITH_IMPLS, R"(
         const fail = fn(): R { return R{ .err = 77 }; };
-        comptime let mut ref_log: i32 = 0;
-        const test_ref = fn(): R {
-            errdefer |&e| ref_log = e;
+        const test_ref = fn(log: &mut i32): R {
+            errdefer |&e| log = e;
             let v = fail()?;
             return R{ .ok = v };
         };
-        comptime let mut ptr_log: i32 = 0;
-        const test_ptr = fn(): R {
-            errdefer |^p| ptr_log = *p;
+        const test_ptr = fn(log: &mut i32): R {
+            errdefer |^p| log = *p;
             let v = fail()?;
             return R{ .ok = v };
         };
-        const _r = test_ref();
-        const _p = test_ptr();
-        const final_ref = ref_log;
-        const final_ptr = ptr_log;
-    )"),
-                      "a `?` that propagates at compile time");
+        const run_ref = fn(): i32 {
+            let mut log: i32 = 0;
+            _ = test_ref(&mut log);
+            return log;
+        };
+        const run_ptr = fn(): i32 {
+            let mut log: i32 = 0;
+            _ = test_ptr(&mut log);
+            return log;
+        };
+        const final_ref = run_ref();
+        const final_ptr = run_ptr();
+    )"))};
+    CHECK(run.int_value("final_ref") == 77);
+    CHECK(run.int_value("final_ptr") == 77);
 }
 
 TEST_CASE("A comptime store under a runtime condition is rejected", "[uir]") {

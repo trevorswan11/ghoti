@@ -457,6 +457,8 @@ auto compilation::declare_function(const unit&           u,
             return unsupported(u, param_src, "a parameter of a comptime-only or generic type");
         }
 
+        // A later type may ask a parameter's type but never its value
+        sig.bind(param, operand{gir::value{gir::local_id{}, type}});
         param_types.emplace_back(&type);
     }
 
@@ -734,6 +736,12 @@ auto analyzer::analyze_global(decl_id                        decl,
                               const source&                  src) -> result<operand> {
     const auto& d{mod().decl_at(decl)};
     const auto  constant_index{comptime_value(value)};
+
+    // A module-level `comptime let mut` read as a value is what its memory holds now
+    if (const auto memory{value.as_opt<comptime_place>()}; memory && !constant_index) {
+        return analyze_global(decl, load_comptime(*memory), declared, attrs, src);
+    }
+
     if (!constant_index) {
         if (is_untyped_literal(value)) {
             // An inferred cast or a range has a type of its own

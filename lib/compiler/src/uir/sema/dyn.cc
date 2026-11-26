@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/module/module.hh"
@@ -51,6 +52,15 @@ auto compilation::method_has_defaults(const nominal& iface, std::string_view nam
     }
 
     return false;
+}
+
+auto compilation::defaulted_method(const nominal& iface, std::string_view name, usize written)
+    -> std::string {
+    if (!method_has_defaults(iface, name)) { return std::string{name}; }
+    auto       wrapper{ast::default_wrapper_name(name, written)};
+    const auto methods{interface_methods(iface)};
+    if (std::ranges::contains(methods, wrapper, &interface_method::name)) { return wrapper; }
+    return std::string{name};
 }
 
 auto compilation::interface_methods(const nominal& iface) -> std::vector<interface_method> {
@@ -332,12 +342,10 @@ auto analyzer::call_dyn(inst_id              call,
     const auto iface{comp_.nominal_of(iface_type)};
     if (!iface) { return comp_.unsupported(u_, src, "a `dyn` of an interface UIR didn't declare"); }
 
+    // A call leaving defaulted arguments off goes through the wrapper's slot
     const auto methods{comp_.interface_methods(*iface)};
-    const auto slot{std::ranges::find(methods, name, &interface_method::name)};
-    if (comp_.method_has_defaults(*iface, name)) {
-        return comp_.unsupported(u_, src, "an interface method with default arguments");
-    }
-
+    const auto chosen{comp_.defaulted_method(*iface, name, args.size())};
+    const auto slot{std::ranges::find(methods, chosen, &interface_method::name)};
     if (slot == methods.end()) {
         return comp_.report(u_,
                             src,
@@ -463,12 +471,14 @@ void analyzer::prepare_dyn_call(inst_id call) {
     const auto name{rec.str_field()};
     rec.skip_u32();
     if (rec.ref_field()) { return; }
+    const auto written{rec.refs_field().size()};
 
     // Only a call the vtable can make is prepared, so a bad one still reports at the call
     const auto iface{comp_.nominal_of(dyn->get_data().as<gs::types::dyn_t>().interface)};
-    if (!iface || comp_.method_has_defaults(*iface, name)) { return; }
+    if (!iface) { return; }
     const auto methods{comp_.interface_methods(*iface)};
-    const auto slot{std::ranges::find(methods, name, &interface_method::name)};
+    const auto chosen{comp_.defaulted_method(*iface, name, written)};
+    const auto slot{std::ranges::find(methods, chosen, &interface_method::name)};
     if (slot == methods.end()) { return; }
     const auto index{static_cast<u64>(slot - methods.begin())};
     if (const auto loaded{load_dyn_entry(*object, *dyn, index, src_of(call))}) {

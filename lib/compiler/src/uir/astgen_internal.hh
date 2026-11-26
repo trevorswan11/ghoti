@@ -65,6 +65,8 @@ enum class scope_kind : u8 {
 struct capture_slot {
     std::string_view name{};
     bool             by_ref{false};
+    // Read for more than its `.len`
+    bool reads_value{false};
 };
 
 struct scope {
@@ -278,6 +280,9 @@ class astgen {
         -> stdx::option<ref>;
     [[nodiscard]] auto int_literal(ast::node_id id) -> ref;
     [[nodiscard]] auto call(source src, source_location at, const ast::call_expr& node) -> ref;
+    // The local `__ghoti_f@default<n>` a call of local `f` with `n` arguments goes to
+    [[nodiscard]] auto local_default_wrapper(const ast::call_expr& node)
+        -> stdx::option<std::string_view>;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::binary_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::assignment_expr& node) -> ref;
     [[nodiscard]] auto lower_node(ast::node_id id, const ast::call_expr& node) -> ref;
@@ -424,6 +429,7 @@ class astgen {
     bool                           statement_arms_{
         false};               // the next `if` or `match` is a statement, whose arms have no value
     usize prunable_depth_{0}; // inside arms `comptime` may prune
+    bool  reading_len_{false}; // lowering the object of a `.len`
 };
 
 } // namespace ghoti::uir::detail

@@ -91,6 +91,15 @@ auto analyzer::member_context_here() -> member_context {
 auto analyzer::analyze_capture(inst_id inst) -> result<operand> {
     const auto index{mod().data_of(inst).un.aux};
     if (index < env_values_.size() && env_values_[index]) { return *env_values_[index]; }
+
+    // A pack captured only for its length is its elements' types
+    for (const auto& [slot, values] : fn_ ? fn_->known_packs : decltype(fn_->known_packs){}) {
+        if (slot != index) { continue; }
+        std::vector<operand> elements;
+        for (const auto value : values) { elements.emplace_back(value); }
+        packs_.emplace_back(std::move(elements));
+        return operand{pack_ref{static_cast<u32>(packs_.size() - 1)}};
+    }
     if (fn_ && fn_->self_capture == index) { return function_ref{&*fn_}; }
     if (index >= captures_.size()) {
         return comp_.unsupported(u_, src_of(inst), "a capture of a runtime value");
@@ -113,7 +122,7 @@ auto analyzer::analyze_closure(inst_id inst) -> result<operand> {
     member.captures.clear();
     for (u32 i{0}; i < count; ++i) {
         const auto value_ref{*rec.ref_field()};
-        const auto by_ref{rec.u32_field()};
+        const auto by_ref{rec.u32_field() & flags::CAPTURE_BY_REF};
         rec.skip_str();
         const auto value{TRY(resolve_value(value_ref, src))};
         const auto index{comptime_value(value)};
@@ -268,6 +277,23 @@ auto analyzer::receiver_type(const operand& object) -> stdx::option<gs::type&> {
     return stdx::none;
 }
 
+auto analyzer::interface_wrapper(gs::type&        owner,
+                                 std::string_view name,
+                                 usize            written,
+                                 const source&    src) -> result<stdx::option<instance&>> {
+    for (const auto applied : TRY(comp_.impls_of(owner))) {
+        const auto iface{applied->interface ? comp_.nominal_of(*applied->interface) : stdx::none};
+        if (!iface) { continue; }
+        const auto wrapper{comp_.defaulted_method(*iface, name, written)};
+        if (wrapper == name) { continue; }
+        const auto member{TRY(comp_.impl_member(*applied, wrapper, src))};
+        const auto fn{member ? member->as_opt<function_ref>() : stdx::none};
+        if (fn && fn->fn->self_modifier) { return stdx::option<instance&>{*fn->fn}; }
+    }
+
+    return stdx::option<instance&>{};
+}
+
 auto analyzer::call_method(gs::type&            owner,
                            ref                  object_ref,
                            std::string_view     name,
@@ -309,6 +335,13 @@ auto analyzer::call_method(gs::type&            owner,
                 other && other->fn->self_modifier) {
                 chosen = other->fn.get();
             }
+        }
+    }
+
+    // An impl's method takes its defaults from the interface, whose wrapper the impl inherits
+    if (args.size() + 1 < chosen->params.size()) {
+        if (const auto other{TRY(interface_wrapper(owner, name, args.size(), src))}) {
+            chosen = &*other;
         }
     }
 

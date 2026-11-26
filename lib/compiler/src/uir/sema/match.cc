@@ -739,7 +739,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     auto  scrutinee{TRY([&] -> result<operand> {
         if (!comptime_match || is_comptime()) { return resolve_value(operand_ref, src); }
         const auto scope{comptime_scope()};
-        return at_comptime_boundary(reevaluate(operand_ref, src));
+        return at_comptime_boundary(reevaluate(operand_ref, src), src);
     }())};
     auto& scrutinee_type{type_of(scrutinee)};
     if (scrutinee_type.is_poison()) { return stdx::err{stop::POISON}; }
