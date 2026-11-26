@@ -134,7 +134,7 @@ TEST_CASE("analyze --sema=uir runs UIR's Sema") {
 
     SECTION("A construct UIR Sema doesn't analyze yet is named, with where it is") {
         tempfile src_file{"test_analyze_uir_embed.gh"};
-        write_source(src_file, "pub const f = fn(): usize { return @embed(\"data.bin\").len; };\n");
+        write_source(src_file, "pub const f = fn(): usize { return @embed(\"a\", \"b\").len; };\n");
 
         std::ostringstream errors;
         cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, false, errors};

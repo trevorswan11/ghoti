@@ -142,6 +142,40 @@ auto analyzer::checks_overflow(semantics::int_op op, const gs::type& t) const ->
                semantics::runtime_checks(op, {.bits = 1, .is_signed = gs::is_signed_integer(t)}));
 }
 
+auto analyzer::reading_binary(gsl::span<const inst_id> body, inst_id call) const
+    -> stdx::option<inst_id> {
+    const auto from{std::ranges::find(body, call)};
+    for (auto at{from}; at != body.end(); ++at) {
+        switch (mod().tag_of(*at)) {
+        case tag::add:
+        case tag::sub:
+        case tag::mul:
+        case tag::div:
+        case tag::mod:
+        case tag::add_wrap:
+        case tag::sub_wrap:
+        case tag::mul_wrap:
+        case tag::add_sat:
+        case tag::sub_sat:
+        case tag::mul_sat:
+        case tag::bit_and:
+        case tag::bit_or:
+        case tag::bit_xor:
+        case tag::cmp_eq:
+        case tag::cmp_ne:
+        case tag::cmp_lt:
+        case tag::cmp_le:
+        case tag::cmp_gt:
+        case tag::cmp_ge:
+            if (mod().data_of(*at).bin.lhs == inst_ref(call)) { return *at; }
+            break;
+        default: break;
+        }
+    }
+
+    return stdx::none;
+}
+
 auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     const auto& d{mod().data_of(inst)};
     const auto& src{src_of(inst)};
@@ -154,14 +188,20 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         return type.get_kind() == gs::type_kind::REFERENCE && !is_comptime() &&
                !gs::pointee_of(type)->get_data().is<gs::types::union_t>();
     }};
-    if (reads_through(lhs)) {
+    const auto early{early_reads_.find(inst)};
+    const bool read_early{early != early_reads_.end()};
+    if (read_early) {
+        reference_reads_.insert_or_assign(inst, early->second.first);
+        lhs = early->second.second;
+        early_reads_.erase(early);
+    } else if (reads_through(lhs)) {
         const auto address{TRY(as_runtime(lhs, src))};
         reference_reads_.insert_or_assign(inst, address);
         lhs = TRY(read_through_reference(address, src));
     }
 
     auto rhs{TRY(resolve_value(d.bin.rhs, src))};
-    if (reference_reads_.contains(inst)) {
+    if (reference_reads_.contains(inst) && !read_early) {
         const auto made{as_inst(d.bin.lhs).and_then([&](inst_id i) {
             const auto found{reference_segments_.find(i)};
             return found == reference_segments_.end()
@@ -231,6 +271,20 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
     }
 
+    // An untyped array literal takes a vector's type, or waits for the vector it is used as
+    const auto array_literal{[&](const operand& op) {
+        const auto init{op.as_opt<anon_init>()};
+        return init && mod().tag_of(init->inst) == tag::init_array;
+    }};
+    for (auto [side, other] : {std::pair{&lhs, &rhs}, std::pair{&rhs, &lhs}}) {
+        if (!array_literal(*side) || array_literal(*other)) { continue; }
+        if (vector_read(type_of(*other))) {
+            *side = TRY(coerce_to(*side, type_of(*other), src, {.what = use_site::kind::STORE}));
+        } else if (gs::is_numeric(type_of(*other).get_kind()) || other->is<cast_ref>()) {
+            return cast_ref{inst};
+        }
+    }
+
     if (cast_meets(lhs, rhs)) {
         lhs = TRY(coerce_to(lhs, type_of(rhs), src, {.what = use_site::kind::STORE}));
     } else if (cast_meets(rhs, lhs)) {
@@ -297,6 +351,9 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
             return gir::value{builder_.emit_binary(info.kind, at, by, ptr_type), ptr_type};
         }
     }
+
+    // Two known strings concatenate with `+` and compare by their bytes
+    if (const auto folded{string_binary(info, lhs, rhs)}) { return operand{*folded}; }
 
     // Operators on strings, arrays and other aggregates arrive with their own phases
     const auto plain{[](const gs::type& type) {
@@ -389,6 +446,44 @@ auto analyzer::compare_out_of_range(const binary_info& info, const operand& lhs,
     return stdx::none;
 }
 
+auto analyzer::string_binary(const binary_info& info, const operand& lhs, const operand& rhs)
+    -> stdx::option<ip::index> {
+    auto&      ctx{comp_.ctx()};
+    auto&      byte{ctx.get_int(8, false)};
+    const auto text_of{[&](const operand& op) -> stdx::option<std::string> {
+        const auto arr{type_of(op).get_data().as_opt<gs::types::array>()};
+        const auto known{comptime_value(op)};
+        if (!arr || !known || !gs::is_same_unqualified(arr->underlying, byte)) {
+            return stdx::none;
+        }
+        return known_text(*known);
+    }};
+    const auto l{text_of(lhs)};
+    const auto r{l ? text_of(rhs) : stdx::none};
+    if (!r) { return stdx::none; }
+
+    auto& pool{comp_.constants()};
+    if (info.kind == instruction_kind::ADD && !info.wrapping && !info.saturating) {
+        auto  joined{*l + *r};
+        auto& type{ctx.get_array(gs::types::mut::CONSTANT, true, joined.size(), byte)};
+        return pool.intern(std::move(joined), type);
+    }
+
+    const auto         order{*l <=> *r};
+    stdx::option<bool> result;
+    switch (info.kind) {
+    case instruction_kind::EQ: result = order == 0; break;
+    case instruction_kind::NE: result = order != 0; break;
+    case instruction_kind::LT: result = order < 0; break;
+    case instruction_kind::LE: result = order <= 0; break;
+    case instruction_kind::GT: result = order > 0; break;
+    case instruction_kind::GE: result = order >= 0; break;
+    default:                   return stdx::none;
+    }
+
+    return pool.intern(*result, builtin(gs::type_kind::BOOL));
+}
+
 auto analyzer::binary_as(inst_id inst, gs::type& target, const source& src) -> result<operand> {
     // Both sides take the target, then the operator applies to them where they were analyzed
     const auto& d{mod().data_of(inst)};
@@ -404,6 +499,12 @@ auto analyzer::binary_as(inst_id inst, gs::type& target, const source& src) -> r
         if (!side_inst) { continue; }
         const auto found{values_.find(*side_inst)};
         if (found == values_.end()) { continue; }
+        // A number meeting a vector is broadcast by the operator itself
+        if (gs::is_vector(target) && !found->second.is<cast_ref>() &&
+            !found->second.is<anon_init>() && gs::is_numeric(type_of(found->second).get_kind())) {
+            continue;
+        }
+
         const auto typed{
             TRY(coerce_to(found->second, target, src, {.what = use_site::kind::STORE}))};
         saved.emplace_back(*side_inst, found->second);
@@ -914,8 +1015,14 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
         if (!gs::is_numeric(type.get_kind())) { break; }
         return operand_value;
     case tag::bool_not: {
-        // `!p` of a pointer tests it against null
-        if (type.get_kind() == gs::type_kind::POINTER && !comptime_value(operand_value)) {
+        // `!p` of a pointer tests it against null, at runtime even when the pointer is known
+        if (const auto known{comptime_value(operand_value)};
+            type.get_kind() == gs::type_kind::POINTER && known && is_comptime()) {
+            const bool null{pool.value_at(*known).data.is<ip::nullptr_value>()};
+            return operand{pool.intern(null, builtin(gs::type_kind::BOOL))};
+        }
+
+        if (type.get_kind() == gs::type_kind::POINTER) {
             TRY(require_runtime(src));
             auto&      bool_type{builtin(gs::type_kind::BOOL)};
             const auto v{TRY(as_runtime(operand_value, src))};
@@ -924,7 +1031,13 @@ auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
                               bool_type};
         }
 
-        if (!is_bool(type)) { break; }
+        if (!is_bool(type)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::OPERATOR_TYPE_MISMATCH,
+                                fmt::format("operator '!' expects a 'bool' operand; found '{}'",
+                                            comp_.ctx().type_display_name(type)));
+        }
         if (const auto folded{fold_unary(t, operand_value, type)}) { return *folded; }
 
         TRY(require_runtime(src));
@@ -1019,17 +1132,25 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
         return vector_binary(info, lhs, *out.yielded, src);
     }
 
-    if (!is_bool(type_of(lhs))) { return comp_.unsupported(u_, src, "`and` / `or` on a non-bool"); }
+    // A pointer side holds when it isn't null
+    const auto is_pointer{
+        [&](const operand& op) { return type_of(op).get_kind() == gs::type_kind::POINTER; }};
+    const auto as_bool{[&](const operand& op) -> result<operand> {
+        if (is_pointer(op) && !is_comptime()) { return operand{TRY(condition(op, src))}; }
+        return coerce_to(op, bool_type, src, {.what = use_site::kind::STORE});
+    }};
+    if (!is_bool(type_of(lhs)) && (!is_pointer(lhs) || is_comptime())) {
+        return comp_.unsupported(u_, src, "`and` / `or` on a non-bool");
+    }
     auto& pool{comp_.constants()};
 
     // A known left side decides alone, or leaves the right side as the result
-    if (const auto index{comptime_value(lhs)}) {
+    if (const auto index{is_pointer(lhs) ? stdx::none : comptime_value(lhs)}) {
         const bool known{*pool.value_at(*index).data.as_opt<bool>()};
         if (known != is_and) { return lhs; }
         const auto out{TRY(analyze_body(rhs_body))};
         if (!out.yielded) { return comp_.unsupported(u_, src, "a right side that leaves"); }
-        const auto rhs{
-            TRY(coerce_to(*out.yielded, bool_type, src, {.what = use_site::kind::STORE}))};
+        const auto rhs{TRY(as_bool(*out.yielded))};
         if (is_comptime() || !gir_fn_ || comptime_value(rhs)) { return rhs; }
 
         // A runtime body still keeps the result in its slot, as the old emitter does
@@ -1039,7 +1160,7 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
     }
 
     TRY(require_runtime(src));
-    const auto cond{TRY(as_runtime(lhs, src))};
+    const auto cond{is_pointer(lhs) ? TRY(condition(lhs, src)) : TRY(as_runtime(lhs, src))};
     const auto slot{bool_slot(inst, is_and)};
     const auto rhs_seg{new_segment()};
     const auto merge{new_segment()};
@@ -1059,7 +1180,7 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
         return comp_.unsupported(u_, src, "a right side that leaves");
     }
 
-    const auto rhs{TRY(coerce_to(*out->yielded, bool_type, src, {.what = use_site::kind::STORE}))};
+    const auto rhs{TRY(as_bool(*out->yielded))};
     builder_.emit_store(slot, TRY(as_runtime(rhs, src)));
     emit_goto(merge);
     switch_to(merge);

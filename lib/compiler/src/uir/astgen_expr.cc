@@ -249,6 +249,8 @@ auto astgen::identifier(source src, source_location at, std::string_view name, u
                 return {capture_ref(*hit, u, src), is_place && !loaded};
             }
             if (is_place && u == use::VALUE) { return {add_un(tag::load, b.value, 0, src), false}; }
+            const auto inst{as_inst(b.value)};
+            if (inst && out_.tag_of(*inst) == tag::param) { ++param_reads_; }
             return {b.value, is_place};
         }
         }
@@ -383,6 +385,21 @@ auto astgen::optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref
     return expr(*h);
 }
 
+auto astgen::field_builtin_name(ast::node_id id) const -> stdx::option<std::string_view> {
+    const auto call{ast_.get_as_opt<ast::call_expr>(id)};
+    if (!call || call->arguments.size() != 2) { return stdx::none; }
+    const ast::node_id callee{call->function};
+    if (callee.get_builtin() != syntax::builtin_t::FIELD || !callee.is<ast::identifier_expr>()) {
+        return stdx::none;
+    }
+
+    const auto object{call->arguments[0].as_opt<ast::expr_handle>()};
+    const auto name{call->arguments[1].as_opt<ast::expr_handle>()};
+    const auto text{name ? ast_.get_as_opt<ast::string_expr>(*name) : stdx::none};
+    if (!object || !text) { return stdx::none; }
+    return text->value;
+}
+
 auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
     const ast::node_id id{h};
     const auto         inner{u == use::MUTATE ? use::MUTATE : use::PLACE};
@@ -408,6 +425,19 @@ auto astgen::place(ast::expr_handle h, use u, bool assigned) -> place_result {
                            .ref_field(object.value)
                            .ref_field(at)
                            .u32_field((object.is_place ? flags::PLACE : 0U) | mutated),
+                       id),
+                true};
+    }
+    // `@field(x, "name")` names the field as `x.name` does
+    if (const auto name{field_builtin_name(id)}) {
+        const auto& call{ast_.get_as<ast::call_expr>(id)};
+        const auto  object{place(call.arguments[0].as<ast::expr_handle>(), inner)};
+        return {add_pl(tag::field_ptr,
+                       writer()
+                           .ref_field(object.value)
+                           .str_field(*name)
+                           .u32_field((object.is_place ? flags::PLACE : 0U) |
+                                      (assigned ? flags::ASSIGNED : 0U) | mutated),
                        id),
                 true};
     }

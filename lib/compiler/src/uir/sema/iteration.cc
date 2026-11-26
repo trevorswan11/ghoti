@@ -131,11 +131,6 @@ auto analyzer::comptime_slice(ref               object_ref,
     auto& pool{comp_.constants()};
     auto& ctx{comp_.ctx()};
 
-    // A function's `const` slice is one the old pipeline builds at runtime
-    if (gir_fn_ && const_inits_ > 0) {
-        return comp_.unsupported(u_, src, "a slice in a function's `const` initializer");
-    }
-
     const auto bound{[&](stdx::option<ref> r, usize fallback) -> result<usize> {
         if (!r) { return fallback; }
         const auto value{TRY(resolve_value(*r, src))};
@@ -645,19 +640,6 @@ auto analyzer::for_capture_type(const source&      src,
                       loop.captures[at].payload);
 }
 
-auto analyzer::jumped_to(inst_id loop) const -> bool {
-    // A loop's body is lowered after it, so every jump to it follows it
-    for (u32 i{std::to_underlying(loop) + 1}; i < mod().instruction_count(); ++i) {
-        const auto t{mod().tag_of(inst_id{i})};
-        if (t != tag::break_to && t != tag::repeat) { continue; }
-        const auto& d{mod().data_of(inst_id{i})};
-        const auto  target{t == tag::break_to ? d.bin.lhs : d.un.operand};
-        if (target == inst_ref(loop)) { return true; }
-    }
-
-    return false;
-}
-
 auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -667,9 +649,6 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     const auto body{rec.body_field()};
     const auto else_body{rec.body_field()};
     const bool unrolled{(loop_flags & flags::UNROLL) != 0};
-    if (unrolled && !is_comptime() && jumped_to(inst)) {
-        return comp_.unsupported(u_, src, "a runtime `break` or `continue` in an `unroll for`");
-    }
 
     // The names the body binds, by the iterable each comes from
     std::vector<stdx::option<inst_id>> binds(iterables.size());
@@ -688,7 +667,11 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     }
 
     // An unrolled loop runs its body once per element where it stands, at runtime too
-    if (is_comptime() || unrolled) {
+    if (is_comptime()) {
+        return run_for(inst, iterables, {.binds = binds, .modifiers = modifiers}, body, else_body);
+    }
+    if (unrolled) {
+        const auto unrolled_guard{unrolling(inst)};
         return run_for(inst, iterables, {.binds = binds, .modifiers = modifiers}, body, else_body);
     }
 

@@ -822,15 +822,9 @@ auto analyzer::analyze_global(decl_id                        decl,
         as_well_known(mod().data_of(init_body.back()).un.operand) == well_known::undefined};
     const bool is_undefined{data.is<ip::undefined_value>() && written_undefined};
     const bool text_array{data.is<std::string>() && type.get_kind() == gs::type_kind::ARRAY};
+    // An address holds its global's symbol, empty for a value with no storage
     const auto address{data.as_opt<ip::address_value>()};
-    if (address && !address->pointee.empty()) {
-        return comp_.unsupported(
-            u_, src, "a global holding the address of a value with no storage");
-    }
-
-    const auto init_index{address && address->pointee.empty()
-                              ? pool.intern(std::string{address->symbol}, type)
-                              : index};
+    const auto init_index{address ? pool.intern(std::string{address->symbol}, type) : index};
     auto       symbol_name{TRY(global_symbol(decl, src))};
     auto& global{comp_.gir().add_global(std::move(symbol_name),
                                         type,

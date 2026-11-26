@@ -412,11 +412,21 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"an inline aggregate type in value position has no runtime value"},
     // The address of an untyped constant points at a `comptime_int` slot
     std::string_view{"address of a scalar static member constant"},
-    // The old emitter spills a `match` of untyped arms as `comptime_int`
+    // The old emitter spills a `match` or `if` of untyped arms as `comptime_int`
     std::string_view{"Top-level runtime patterns stay lazy and in order"},
+    std::string_view{"A pointer is truthy as an 'and' / 'or' operand"},
     // The old pipeline accepts a local `const` a runtime call initializes when it is an aggregate
     std::string_view{
         "A return inside a function literal runs none of the enclosing function's defers"},
+    // The old pipeline accepts a local `const` slice of a runtime array
+    std::string_view{"Slices match their length and strings their bytes"},
+    std::string_view{"a subscript range cannot count down"},
+    // `@as` narrows a runtime integer unchecked, where `@intCast` is the builtin for it
+    std::string_view{"Aggregates past the by-pointer threshold cross the C ABI"},
+    // The resolver types `!x` as `bool` whatever `x` is
+    std::string_view{"Unary expression resolution"},
+    // Two concatenated strings keep the left one's array type
+    std::string_view{"Const eval string concatenation and comparison folding"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
@@ -431,6 +441,9 @@ constexpr std::array FOLDED_LOCAL_AGGREGATE_TESTS{
     // per argument type
     std::string_view{
         "`eql`-shaped comptime fn: early length mismatch and content mismatch both fold correctly"},
+    std::string_view{
+        "a slice `auto` pattern takes an array or a reference to one, as a `[]T` does"},
+    std::string_view{"@[discardable] on an interface member covers its implementations"},
 };
 
 // Tests where the old emitter's GIR only has another shape: a known value left to runtime, a

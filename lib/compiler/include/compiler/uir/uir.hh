@@ -290,6 +290,9 @@ enum : u32 {
     // a capture's `by_ref` word
     CAPTURE_BY_REF   = 1U << 0,
     CAPTURE_LEN_ONLY = 1U << 1, // only its `.len` is read, which a pack knows without its values
+
+    // attribute
+    ATTR_READS_PARAMS = 1U << 0, // its arguments read the function's parameters
 };
 
 } // namespace flags

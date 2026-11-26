@@ -68,6 +68,8 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     case builtin_t::SIZE_OF:                  return builtin_layout(args, src, true);
     case builtin_t::BIT_SIZE_OF:              return builtin_bit_size(args, src);
     case builtin_t::TYPE_NAME:                return builtin_type_name(args, src);
+    case builtin_t::EMBED:                    return builtin_embed(args, src);
+    case builtin_t::DYN_CAST:                 return builtin_dyn_cast(args, src);
     case builtin_t::TAG_NAME:                 return builtin_tag_name(args, src);
     case builtin_t::FIELD:                    return builtin_field(args, src);
     case builtin_t::HAS_FIELD:
@@ -471,6 +473,36 @@ auto analyzer::builtin_type_name(gsl::span<const ref> args, const source& src) -
     return comp_.constants().intern(std::move(name), array);
 }
 
+auto analyzer::builtin_embed(gsl::span<const ref> args, const source& src) -> result<operand> {
+    if (args.size() != 1) { return comp_.unsupported(u_, src, "an `@embed` of this arity"); }
+    const auto arg_at{arg_src(src, 0).value_or(src)};
+    const auto path{[&]() -> result<stdx::option<std::string>> {
+        const auto scope{comptime_scope()};
+        const auto known{comptime_value(TRY(resolve_value(args.front(), arg_at)))};
+        return known ? known_text(*known) : stdx::none;
+    }()};
+    if (!path && path.error() != stop::RUNTIME) { return stdx::err{path.error()}; }
+    if (!path || !*path) {
+        return comp_.report(u_,
+                            arg_at,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "@embed argument must be a compile-time string");
+    }
+
+    auto&      ctx{comp_.ctx()};
+    const auto full{u_.source->make_path_absolute(**path)};
+    const auto content{ctx.read_embed_file(full)};
+    if (!content) {
+        return comp_.report(u_,
+                            arg_at,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            fmt::format("failed to read embedded file '{}'", full.string()));
+    }
+    auto& array{
+        ctx.get_array(gs::types::mut::CONSTANT, true, content->size(), ctx.get_int(8, false))};
+    return comp_.constants().intern(std::string{*content}, array);
+}
+
 auto analyzer::builtin_tag_name(gsl::span<const ref> args, const source& src) -> result<operand> {
     if (args.size() != 1) { return comp_.unsupported(u_, src, "a `@tagName` of this arity"); }
     const auto value{TRY(resolve_value(args.front(), src))};
@@ -652,14 +684,42 @@ auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> resu
         return coerce_to(value, target, src, {.what = use_site::kind::STORE});
     }
 
+    // A known value may narrow when it fits, and is still cast where it is used. A runtime one
+    // narrows through the builtin that says how
     if (!gs::is_same_unqualified(from, target) && !gs::is_implicit_widenable(from, target)) {
-        return comp_.unsupported(u_, src, "an `@as` that narrows");
+        if (!comptime_value(value)) {
+            return comp_.report(u_, src, gs::error::TYPE_MISMATCH, narrowing_as(from, target));
+        }
+
+        DISCARD(TRY(coerce_to(value, target, src, {.what = use_site::kind::STORE})));
     }
 
     // Emit the cast even the value is already of the target type
     const auto operand{TRY(as_runtime(value, src))};
     return gir::value{builder_.emit_cast(gir::instruction_kind::WIDEN_CAST, operand, target),
                       target};
+}
+
+auto analyzer::narrowing_as(const gs::type& from, const gs::type& target) -> std::string {
+    auto&      ctx{comp_.ctx()};
+    const auto from_name{ctx.type_display_name(from)};
+    const auto target_name{ctx.type_display_name(target)};
+    const bool to_float{gs::is_float(target.get_kind())};
+    const bool from_float{gs::is_float(from.get_kind())};
+    if (to_float && !from_float) {
+        return fmt::format("`@as` cannot convert '{}' to '{}' exactly; use `@floatFromInt` instead",
+                           from_name,
+                           target_name);
+    }
+
+    if (from_float && !to_float) {
+        return "`@as` cannot convert a float to an integer; use `@intFromFloat` instead";
+    }
+
+    return fmt::format("`@as` cannot narrow '{}' to '{}'; use `{}`",
+                       from_name,
+                       target_name,
+                       to_float ? "@floatCast" : "@intCast");
 }
 
 auto analyzer::builtin_this(const source& src) -> result<operand> {

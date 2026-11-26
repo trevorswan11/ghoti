@@ -308,6 +308,14 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             is_call && made && made->type && made->type->get_kind() == gs::type_kind::REFERENCE &&
             !is_comptime()) {
             reference_segments_.insert_or_assign(inst, builder_.get_segment()->get_id());
+
+            // An operator reads its left side as soon as the call returns, before its right side
+            const auto pointee{gs::pointee_of(*made->type)};
+            const auto user{reading_binary(body, inst)};
+            if (user && !pointee->get_data().is<gs::types::union_t>()) {
+                const auto read{TRY(read_through_reference(*made, src_of(inst)))};
+                early_reads_.insert_or_assign(*user, std::pair{*made, read});
+            }
         }
 
         values_.insert_or_assign(inst, std::move(*value));

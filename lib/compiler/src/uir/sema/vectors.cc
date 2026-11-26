@@ -229,6 +229,13 @@ auto analyzer::vector_binary(const binary_info& info,
     const auto len{lhs_vec ? lhs_vec->len : rhs_vec->len};
     auto&      lane{lhs_vec ? lhs_vec->underlying : rhs_vec->underlying};
     const auto l{TRY(vector_operand(lhs, lane, len, src))};
+    // A known vector is built before a runtime scalar is broadcast against it, as the old
+    // emitter does
+    stdx::option<gir::value> built_l;
+    if (!rhs_vec && !rhs.is<anon_init>() && !comptime_value(rhs) && lanes_of(l, len)) {
+        TRY(require_runtime(src));
+        built_l = TRY(runtime_lanes(lhs, l, src));
+    }
     const auto r{TRY(vector_operand(rhs, lane, len, src))};
     const bool is_comparison{info.cls == op_class::EQUALITY || info.cls == op_class::ORDERING};
     auto&      shape{ctx.get_vector(gs::types::mut::CONSTANT, len, lane)};
@@ -251,7 +258,7 @@ auto analyzer::vector_binary(const binary_info& info,
     }
 
     TRY(require_runtime(src));
-    const auto lv{TRY(runtime_lanes(lhs, l, src))};
+    const auto lv{built_l ? *built_l : TRY(runtime_lanes(lhs, l, src))};
     const auto rv{TRY(runtime_lanes(rhs, r, src))};
     if (is_comparison) {
         return gir::value{builder_.emit_binary(info.kind, lv, rv, result_type), result_type};

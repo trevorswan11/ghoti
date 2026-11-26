@@ -15,6 +15,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/uir/uir.hh"
@@ -306,6 +307,45 @@ auto analyzer::field_default_value(gs::type& type, usize index, const source& sr
     return comptime_value(*value);
 }
 
+auto analyzer::generic_attributes(generic_fn& g, const source& src)
+    -> result<gs::resolved_attributes> {
+    if (g.attributes) { return *g.attributes; }
+    const auto&   m{*g.owner->uir};
+    record_reader rec{m, m.data_of(g.func).pl.extra};
+    rec.skip_body().skip_body();
+    const auto body{rec.body_field()};
+    rec.skip_u32().skip_u32();
+    const auto attrs{rec.body_field()};
+
+    // Outside an instance a parameter-dependent attribute has no value
+    for (const auto inst : attrs) {
+        if (m.tag_of(inst) != tag::attribute) { continue; }
+        record_reader item{m, m.data_of(inst).pl.extra};
+        const auto    kind{static_cast<ast::attribute_kind>(item.u32_field())};
+        if ((item.skip_refs().u32_field() & flags::ATTR_READS_PARAMS) == 0) { continue; }
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_ATTRIBUTE,
+                            fmt::format("Attribute '{}' depends on the function's parameters, so "
+                                        "it has a value only within an instantiation",
+                                        ast::attribute_spec_of(kind).name));
+    }
+
+    analyzer sig{comp_, *g.owner};
+    sig.enter(member_context{.captures = g.captures, .self_type = g.self_type, .scope = g.scope});
+    const auto& d{m.decl_at(g.decl)};
+    auto        folded{TRY(sig.fold_attributes(attrs,
+                                               {.target      = ast::attribute_target::FN,
+                                                .declared_by = declares_literal(m, d, g.func)
+                                                                   ? stdx::option<const decl&>{d}
+                                                                   : stdx::none}))};
+
+    // A body that starts with `@branchHint(.cold)` makes its function cold
+    folded.cold = sig.branch_hint_of(body) == ast::branch_hint::COLD;
+    g.attributes.emplace(folded);
+    return folded;
+}
+
 auto analyzer::builtin_type_info(gsl::span<const ref> args, const source& src) -> result<operand> {
     if (args.size() != 1) { return comp_.unsupported(u_, src, "a `@typeInfo` of this arity"); }
     const auto value{TRY(resolve_value(args.front(), src))};
@@ -319,8 +359,17 @@ auto analyzer::builtin_type_info(gsl::span<const ref> args, const source& src) -
         return operand{TRY(type_info(*fn->fn->type, *fn->fn->attributes, src))};
     }
 
-    if (value.is<generic_ref>()) {
-        return comp_.unsupported(u_, src, "the `@typeInfo` of a generic function");
+    // A generic inside its own instance reflects that instance's attributes
+    if (const auto generic{value.as_opt<generic_ref>()}) {
+        auto&      g{*generic->fn};
+        const bool own_instance{fn_ && fn_->owner.get() == g.owner.get() && fn_->func == g.func};
+        if (own_instance && fn_->attributes) {
+            return operand{TRY(type_info(*fn_->type, *fn_->attributes, src))};
+        }
+
+        const auto attrs{TRY(generic_attributes(g, arg_src(src, 0).value_or(src)))};
+        auto&      type{*TRY(comp_.generic_value_type(g))};
+        return operand{TRY(type_info(type, attrs, src))};
     }
 
     auto& type{*TRY(denoted_type(value, src))};

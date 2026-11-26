@@ -719,8 +719,6 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
 
     auto value{[&] {
         const auto scope{comptime_scope()};
-        ++const_inits_;
-        const auto done{gsl::finally([&] { --const_inits_; })};
         return analyze_body(body);
     }()};
     if (!value && value.error() == stop::RUNTIME) {

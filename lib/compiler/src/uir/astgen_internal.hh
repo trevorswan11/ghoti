@@ -273,6 +273,8 @@ class astgen {
     // None when the operand is absent
     [[nodiscard]] auto optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref>;
     [[nodiscard]] auto place(ast::expr_handle h, use u, bool assigned = false) -> place_result;
+    // The field `@field(x, "name")` names, when its name is a string literal
+    [[nodiscard]] auto field_builtin_name(ast::node_id id) const -> stdx::option<std::string_view>;
     [[nodiscard]] auto identifier(source src, source_location at, std::string_view name, use u)
         -> place_result;
     [[nodiscard]] auto identifier_node(ast::node_id id, use u) -> place_result;
@@ -430,6 +432,7 @@ class astgen {
         false};               // the next `if` or `match` is a statement, whose arms have no value
     usize prunable_depth_{0}; // inside arms `comptime` may prune
     bool  reading_len_{false}; // lowering the object of a `.len`
+    u32   param_reads_{0};     // reads of the current function's own parameters
 };
 
 } // namespace ghoti::uir::detail

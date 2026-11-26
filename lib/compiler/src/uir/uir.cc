@@ -58,6 +58,7 @@ constexpr auto FN_FLAGS{std::to_array<std::string_view>({"variadic",
                                                          "type_expr",
                                                          "testing",
                                                          "bodyless"})};
+constexpr auto ATTR_FLAGS{std::to_array<std::string_view>({"reads_params"})};
 constexpr auto AGG_FLAGS{std::to_array<std::string_view>({"extern", "packed"})};
 constexpr auto ENUM_FLAGS{std::to_array<std::string_view>({"non_exhaustive"})};
 constexpr auto PARAM_FLAGS{std::to_array<std::string_view>(
@@ -217,7 +218,9 @@ constexpr std::array FUNC{field{BODY, "params"},
                           field{BODY, "attrs"},
                           field{LIST, "impl_bounds", IMPL_BOUND_ITEMS}};
 constexpr std::array CLOSURE{field{REF, "func"}, field{LIST, "captures", CAPTURE_ITEMS}};
-constexpr std::array ATTRIBUTE{field{U32, "kind", {}, {}, describe_attribute}, field{REFS, "args"}};
+constexpr std::array ATTRIBUTE{field{U32, "kind", {}, {}, describe_attribute},
+                               field{REFS, "args"},
+                               field{U32, "flags", {}, ATTR_FLAGS}};
 constexpr std::array IMPL_DECL{field{BODY, "params"},
                                field{BODY, "interface"},
                                field{BODY, "target"},
