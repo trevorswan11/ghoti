@@ -838,8 +838,6 @@ auto analyzer::analyze_global(decl_id                        decl,
     const auto address{data.as_opt<ip::address_value>()};
     const auto init_index{address ? pool.intern(std::string{address->symbol}, type) : index};
 
-    // A callable holding a function is typed by that function, which codegen pairs with the
-    // trampoline the callable type calls through
     auto& init_type{callable_init_type(pool.value_at(index), type)};
     auto  symbol_name{TRY(global_symbol(decl, src))};
     auto& global{comp_.gir().add_global(
