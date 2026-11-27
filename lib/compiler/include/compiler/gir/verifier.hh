@@ -13,8 +13,7 @@ struct violation {
     std::string message;
 };
 
-// Checks the invariants Sema guarantees and codegen relies on: well-formed control flow, locals
-// defined before every use, and operands typed for their instruction
+// Checks the invariants Sema guarantees and codegen relies on
 [[nodiscard]] auto verify(const module_t& mod) -> std::vector<violation>;
 
 // Formats each violation on a line of its own
