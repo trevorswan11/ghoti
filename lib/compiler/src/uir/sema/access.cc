@@ -987,9 +987,12 @@ auto analyzer::pointer_place(const operand& ptr, const source& src) -> result<pl
                                         comp_.ctx().type_display_name(type)));
     }
 
+    // The address is typed by what it points at, which a field's offset is computed into
     const auto value{TRY(as_runtime(ptr, src))};
     TRY(check_not_null(value, src));
-    return place{.address = value, .pointee = referent.get(), .is_mutable = writable_through(type)};
+    return place{.address    = gir::value{value.data, *referent},
+                 .pointee    = referent.get(),
+                 .is_mutable = writable_through(type)};
 }
 
 auto analyzer::comptime_deref(const operand& ptr) -> stdx::option<operand> {

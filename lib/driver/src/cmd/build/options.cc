@@ -385,7 +385,7 @@ auto compilation::linker_options() const -> codegen::extra_linker_options {
         .library_paths = opts_.library_paths,
         .libraries     = opts_.libraries,
     };
-    if (opts_.compiler_rt) { linker_opts.compiler_rt.emplace(); }
+    if (opts_.compiler_rt) { linker_opts.compiler_rt.emplace().sema_uir = opts_.sema_uir; }
     return linker_opts;
 }
 

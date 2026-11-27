@@ -668,9 +668,10 @@ auto run_uir_sema(std::string_view source, const pipeline_settings& settings)
 
 auto run_uir_sema_files(mod::source_loader&          loader,
                         const std::filesystem::path& root_path,
-                        const pipeline_settings&     settings) -> stdx::box<uir_sema_run> {
+                        const pipeline_settings&     settings,
+                        library_list                 libraries) -> stdx::box<uir_sema_run> {
     auto run{stdx::make_box<uir_sema_run>()};
-    run->modules  = stdx::make_box<mod::module_manager>(loader);
+    run->modules  = make_manager(loader, libraries);
     run->analyzer = stdx::make_box<sema::analyzer>(*run->modules, std::cerr, false);
     const auto root{run->modules->try_get_file_module(root_path)};
     REQUIRE(root);
@@ -687,6 +688,9 @@ auto run_uir_sema_files(mod::source_loader&          loader,
                                 .testing        = settings.testing,
                                 .modules        = *run->modules};
     run->lowered = uir::lower_reachable(**root, {.cfg = cfg, .modules = *run->modules});
+    if (settings.entry) {
+        REQUIRE(uir::lower_start({.cfg = cfg, .modules = *run->modules}, run->lowered));
+    }
     for (const auto& item : run->lowered) { REQUIRE(item.result.diagnostics.empty()); }
     run->out.emplace(uir::sema::analyze(run->analyzer->get_ctx(),
                                         {.root = root->get(), .modules = run->lowered}));

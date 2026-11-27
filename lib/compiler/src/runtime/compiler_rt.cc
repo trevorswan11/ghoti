@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <mutex>
+#include <ostream>
 #include <ranges>
 #include <sstream>
 #include <string>
@@ -29,11 +30,15 @@
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/module.hh"
 #include "compiler/module/file_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/uir/astgen.hh"
+#include "compiler/uir/sema/sema.hh"
 #include "support/env.hh"
 #include "support/tempfile.hh"
 
@@ -62,16 +67,18 @@ struct archive_memo {
 
 [[nodiscard]] auto memo_key(const codegen::target_options& target_opts,
                             const llvm::Triple&            triple,
-                            const std::filesystem::path&   root) -> std::string {
+                            const std::filesystem::path&   root,
+                            bool                           sema_uir) -> std::string {
     const auto reloc{target_opts.reloc ? static_cast<i32>(*target_opts.reloc) : -1};
     const auto code{target_opts.code ? static_cast<i32>(*target_opts.code) : -1};
-    return fmt::format("{}|{}|{}|{}|{}|{}",
+    return fmt::format("{}|{}|{}|{}|{}|{}|{}",
                        triple.str(),
                        target_opts.cpu,
                        target_opts.features,
                        reloc,
                        code,
-                       root.string());
+                       root.string(),
+                       sema_uir ? "uir" : "legacy");
 }
 
 [[nodiscard]] auto build_failed(const llvm::Triple& triple, std::string_view details)
@@ -90,11 +97,78 @@ struct archive_memo {
     return label.starts_with('.') || label.starts_with('L') || label.starts_with('$');
 }
 
+// compiler_rt's GIR from the old pipeline, none when it reported errors into `diagnostics`
+[[nodiscard]] auto legacy_module(sema::analyzer&              analyzer,
+                                 mod::module_manager&         manager,
+                                 const std::filesystem::path& root,
+                                 std::ostream& diagnostics) -> stdx::option<gir::module_t> {
+    // The analyzer already reported the root module's own errors, as the driver relies on
+    auto       gir_mod{analyzer.analyze(root)};
+    const auto module{manager.try_get_file_module(root)};
+    if (!gir_mod) {
+        if (const auto message{gir_mod.error().get_message()}) { diagnostics << *message << '\n'; }
+        return stdx::none;
+    }
+    if (!module || (*module)->is_poisoned() || (*module)->is_errored()) { return stdx::none; }
+
+    // A module compiler_rt imports is parsed lazily and may fail on its own
+    if (manager.any_errored()) {
+        manager.print_all_diagnostics(diagnostics);
+        return stdx::none;
+    }
+
+    return std::move(*gir_mod);
+}
+
+// compiler_rt's GIR from UIR Sema, none when it reported errors into `diagnostics`
+[[nodiscard]] auto uir_module(sema::analyzer&              analyzer,
+                              mod::module_manager&         manager,
+                              const std::filesystem::path& root,
+                              std::ostream& diagnostics) -> stdx::option<gir::module_t> {
+    const auto module{manager.try_get_file_module(root)};
+    if (!module || (*module)->is_errored()) {
+        manager.print_all_diagnostics(diagnostics);
+        return stdx::none;
+    }
+
+    const auto cfg{sema::cfg_context::from(analyzer.get_ctx())};
+    const auto lowered{uir::lower_reachable(**module, {.cfg = cfg, .modules = manager})};
+    const auto write{[&](const sema::diagnostics& list) {
+        for (const auto& d : list) { diagnostics << d.get_message().value_or("") << '\n'; }
+    }};
+    for (const auto& item : lowered) {
+        if (!item.result.diagnostics.empty()) {
+            write(item.result.diagnostics);
+            return stdx::none;
+        }
+    }
+
+    auto out{uir::sema::analyze(analyzer.get_ctx(), {.root = module->get(), .modules = lowered})};
+    if (out.stopped_at) {
+        const auto& at{*out.stopped_at};
+        const auto  where{at.where.transform([](const source_location& l) {
+            const auto one{l.one_based()};
+            return fmt::format(":{}:{}", one.line, one.column);
+        })};
+        diagnostics << fmt::format("--sema=uir doesn't analyze {} yet ({}{})\n",
+                                   at.what,
+                                   at.path.string(),
+                                   where.value_or(std::string{}));
+        return stdx::none;
+    }
+    if (!out.succeeded()) {
+        write(out.diagnostics);
+        return stdx::none;
+    }
+
+    return std::move(*out.gir);
+}
+
 [[nodiscard]] auto build_archive(const std::filesystem::path&   root,
                                  const codegen::target_options& target_opts,
                                  const llvm::Triple&            triple,
-                                 const std::filesystem::path&   archive)
-    -> stdx::result<void, codegen::diagnostic> {
+                                 const std::filesystem::path&   archive,
+                                 bool sema_uir) -> stdx::result<void, codegen::diagnostic> {
     PROFILE_FUNCTION();
     std::ostringstream  diagnostics;
     mod::file_loader    loader;
@@ -116,22 +190,9 @@ struct archive_memo {
     analyzer.set_optimize_mode(sema::optimize_mode::RELEASE_FAST);
     analyzer.set_library_keeps_handlers(false);
 
-    // The analyzer already reported the root module's own errors, as the driver relies on
-    auto       gir_mod{analyzer.analyze(root)};
-    const auto module{manager.try_get_file_module(root)};
-    if (!gir_mod) {
-        if (const auto message{gir_mod.error().get_message()}) { diagnostics << *message << '\n'; }
-        return stdx::err{build_failed(triple, diagnostics.str())};
-    }
-    if (!module || (*module)->is_poisoned() || (*module)->is_errored()) {
-        return stdx::err{build_failed(triple, diagnostics.str())};
-    }
-
-    // A module compiler_rt imports is parsed lazily and may fail on its own
-    if (manager.any_errored()) {
-        manager.print_all_diagnostics(diagnostics);
-        return stdx::err{build_failed(triple, diagnostics.str())};
-    }
+    auto gir_mod{sema_uir ? uir_module(analyzer, manager, root, diagnostics)
+                          : legacy_module(analyzer, manager, root, diagnostics)};
+    if (!gir_mod) { return stdx::err{build_failed(triple, diagnostics.str())}; }
 
     const codegen::optimizer_options opt_opts{.level = codegen::opt_level::O2};
     const auto                       asm_text{
@@ -265,7 +326,7 @@ auto resolve_compiler_rt(const codegen::target_options&      target_opts,
     if (!root) { return stdx::none; }
 
     const auto triple{codegen::resolve_target_triple(target_opts.triple_str)};
-    const auto key{memo_key(target_opts, triple, *root)};
+    const auto key{memo_key(target_opts, triple, *root, options.sema_uir)};
     auto&      state{memo()};
 
     const std::scoped_lock lock{state.mutex};
@@ -279,7 +340,7 @@ auto resolve_compiler_rt(const codegen::target_options&      target_opts,
 
     ++state.builds;
     archive_entry entry;
-    if (auto built{build_archive(*root, target_opts, triple, archive)}; built) {
+    if (auto built{build_archive(*root, target_opts, triple, archive, options.sema_uir)}; built) {
         entry.archive = archive;
     } else {
         entry.error = std::move(built.error());

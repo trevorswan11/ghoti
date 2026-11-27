@@ -85,12 +85,12 @@ struct uir_sema_run {
 // Lowers and analyzes `source` through UIR Sema alone
 [[nodiscard]] auto run_uir_sema(std::string_view source, const pipeline_settings& settings = {})
     -> stdx::box<uir_sema_run>;
-// Lowers and analyzes the program rooted at `root` through UIR Sema alone. `loader` must outlive
-// the run
+// Lowers and analyzes the program rooted at `root` through UIR Sema alone, with its entry code
+// when `settings.entry` asks for it. `loader` must outlive the run
 [[nodiscard]] auto run_uir_sema_files(mod::source_loader&          loader,
                                       const std::filesystem::path& root,
-                                      const pipeline_settings&     settings = {})
-    -> stdx::box<uir_sema_run>;
+                                      const pipeline_settings&     settings = {},
+                                      library_list libraries = {}) -> stdx::box<uir_sema_run>;
 // The normalized GIR of a program UIR Sema must accept
 [[nodiscard]] auto uir_gir(std::string_view source) -> std::string;
 

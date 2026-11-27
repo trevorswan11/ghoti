@@ -92,9 +92,11 @@ auto internalize_library(gir::module_t& mod, bool keep_handlers) -> void {
     for (auto fn : mod.get_functions()) {
         if (fn->get_linkage() == gir::linkage::INTERNAL) { continue; }
         const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
-        if (keep_handlers && std::ranges::contains(handlers, symbol)) {
+        const bool handler{std::ranges::contains(handlers, symbol)};
+        if (keep_handlers && handler) {
             fn->set_weak(true);
-        } else if (fn->get_linkage() == gir::linkage::PUBLIC) {
+        } else if (fn->get_linkage() == gir::linkage::PUBLIC ||
+                   (handler && fn->get_linkage() == gir::linkage::EXPORT)) {
             fn->set_linkage(gir::linkage::INTERNAL);
         }
     }

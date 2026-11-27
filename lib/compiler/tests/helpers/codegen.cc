@@ -48,6 +48,7 @@
 #include "ghoti/config.h"
 #include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "helpers/uir_diff.hh"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
@@ -84,6 +85,65 @@ namespace {
 auto entry_target(helpers::sema_test_context& test_ctx, stdx::option<std::string> triple) -> void {
     if (triple) { test_ctx.analyzer.get_ctx().target_opts.triple_str = std::move(triple); }
 }
+
+// A temporary path for the program UIR Sema builds
+[[nodiscard]] auto uir_exe_path() -> std::filesystem::path {
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    return fmt::format("{}{}", tempfile::make_temp_path("uir_run").string(), extension);
+}
+
+// Emits a UIR Sema run's program into `exe`, linking builtins UIR Sema built too
+[[nodiscard]] auto emit_uir_executable(uir_sema_run&                        run,
+                                       bool                                 for_tests,
+                                       const codegen::extra_linker_options& linker_opts,
+                                       const std::filesystem::path&         exe) -> bool {
+    auto uir_linker_opts{linker_opts};
+    if (uir_linker_opts.compiler_rt) { uir_linker_opts.compiler_rt->sema_uir = true; }
+
+    llvm::LLVMContext context;
+    const auto&       target_opts{run.analyzer->get_ctx().target_opts};
+    const auto emitted{for_tests
+                           ? run.analyzer->emit_test_executable(
+                                 *run.out->gir, context, target_opts, {}, exe, uir_linker_opts)
+                           : run.analyzer->emit_executable(
+                                 *run.out->gir, context, target_opts, {}, exe, uir_linker_opts)};
+    if (!emitted) {
+        FAIL_CHECK(fmt::format("UIR Sema's program didn't build:\n{}", emitted.error()));
+        return false;
+    }
+
+    return true;
+}
+
+#ifdef GHOTI_TEST_SEMA_UIR
+// Builds the program again through UIR Sema into `exe`, so a miscompile the GIR dump hides shows
+// when it runs. False when UIR Sema doesn't emit the program, which the GIR diff already reports
+[[nodiscard]] auto build_with_uir(helpers::sema_test_context&          test_ctx,
+                                  bool                                 for_tests,
+                                  const codegen::extra_linker_options& linker_opts,
+                                  const std::filesystem::path&         exe) -> bool {
+    const auto& ctx{test_ctx.analyzer.get_ctx()};
+    const auto  run{run_uir_sema_files(*test_ctx.loader,
+                                       test_ctx.root_path,
+                                       {.target_opts    = ctx.target_opts,
+                                        .runtime_safety = ctx.runtime_safety,
+                                        .testing        = for_tests,
+                                        .build_mode     = ctx.build_mode,
+                                        .entry          = true},
+                                       test_ctx.libraries)};
+    return run->out->succeeded() && emit_uir_executable(*run, for_tests, linker_opts, exe);
+}
+
+template <typename T> auto check_same_run(std::string_view what, const T& uir, const T& legacy) {
+    if (uir != legacy) {
+        FAIL_CHECK(fmt::format("the program UIR Sema built gives another {}: {} where the old "
+                               "pipeline's gives {}",
+                               what,
+                               uir,
+                               legacy));
+    }
+}
+#endif
 
 } // namespace
 
@@ -235,7 +295,37 @@ auto compile_and_run(std::string_view                     source,
     REQUIRE(emitted);
 
     const mock_argv args{exe_file.path.string()};
-    return portable_exit_code(UNWRAP(spawn_child(args)));
+    const auto      code{portable_exit_code(UNWRAP(spawn_child(args)))};
+#ifdef GHOTI_TEST_SEMA_UIR
+    if (const tempfile uir{std::in_place, uir_exe_path()};
+        build_with_uir(test_ctx, false, linker_opts, uir.path)) {
+        check_same_run("exit code",
+                       portable_exit_code(UNWRAP(spawn_child(mock_argv{uir.path.string()}))),
+                       code);
+    }
+#endif
+    return code;
+}
+
+auto uir_compile_and_run(std::string_view source, const std::vector<mock_file>& imports) -> u32 {
+    constexpr std::string_view ROOT{"test.gh"};
+    mod::memory_loader         loader;
+    loader.add(ROOT, std::string{source});
+    std::vector<std::pair<std::string, std::filesystem::path>> libraries;
+    for (const auto& mock : imports) {
+        loader.add(mock.path, std::string{mock.source});
+        if (mock.name) { libraries.emplace_back(std::string{*mock.name}, mock.path); }
+    }
+
+    const auto run{run_uir_sema_files(loader, ROOT, {.entry = true}, libraries)};
+    if (run->out->stopped_at) { FAIL("UIR Sema stopped at " << run->out->stopped_at->what); }
+    if (!run->out->succeeded()) {
+        FAIL("UIR Sema reported:\n" << fmt::format("{}", run->out->diagnostics));
+    }
+
+    const tempfile exe{std::in_place, uir_exe_path()};
+    REQUIRE(emit_uir_executable(*run, false, default_linker_options(), exe.path));
+    return portable_exit_code(UNWRAP(spawn_child(mock_argv{exe.path.string()})));
 }
 
 auto missing_builtins(std::string_view source, const codegen::target_options& target_opts)
@@ -285,12 +375,25 @@ auto compile_and_run_captured(std::string_view source, const std::vector<mock_fi
     if (!emitted) { fmt::println("{}", emitted.error()); }
     REQUIRE(emitted);
 
-    piped_process proc{mock_argv{exe_file.path.string()}};
-    return run_output{
-        .exit_code = portable_exit_code(UNWRAP(proc.close_stdin_and_wait())),
-        .out       = string_utils::read_stream(proc.stdout_stream()),
-        .err       = string_utils::read_stream(proc.stderr_stream()),
-    };
+    const auto run{[](const std::filesystem::path& exe) {
+        piped_process proc{mock_argv{exe.string()}};
+        return run_output{
+            .exit_code = portable_exit_code(UNWRAP(proc.close_stdin_and_wait())),
+            .out       = string_utils::read_stream(proc.stdout_stream()),
+            .err       = string_utils::read_stream(proc.stderr_stream()),
+        };
+    }};
+    auto       output{run(exe_file.path)};
+#ifdef GHOTI_TEST_SEMA_UIR
+    if (const tempfile uir{std::in_place, uir_exe_path()};
+        build_with_uir(test_ctx, false, default_linker_options(), uir.path)) {
+        const auto uir_output{run(uir.path)};
+        check_same_run("exit code", uir_output.exit_code, output.exit_code);
+        check_same_run("stdout", uir_output.out, output.out);
+        check_same_run("stderr", uir_output.err, output.err);
+    }
+#endif
+    return output;
 }
 
 auto compile_and_run_tests(std::string_view                source,
@@ -308,9 +411,19 @@ auto compile_and_run_tests(std::string_view                source,
     if (!emitted) { fmt::println("{}", emitted.error()); }
     REQUIRE(emitted);
 
-    std::vector<std::string> child_argv{exe_file.path.string()};
-    child_argv.insert(child_argv.end(), extra_args.begin(), extra_args.end());
-    return portable_exit_code(UNWRAP(spawn_child(mock_argv{std::move(child_argv)})));
+    const auto run{[&](const std::filesystem::path& exe) {
+        std::vector<std::string> child_argv{exe.string()};
+        child_argv.insert(child_argv.end(), extra_args.begin(), extra_args.end());
+        return portable_exit_code(UNWRAP(spawn_child(mock_argv{std::move(child_argv)})));
+    }};
+    const auto code{run(exe_file.path)};
+#ifdef GHOTI_TEST_SEMA_UIR
+    if (const tempfile uir{std::in_place, uir_exe_path()};
+        build_with_uir(test_ctx, true, default_linker_options(), uir.path)) {
+        check_same_run("test exit code", run(uir.path), code);
+    }
+#endif
+    return code;
 }
 
 } // namespace ghoti::tests::helpers

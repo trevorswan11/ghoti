@@ -946,6 +946,8 @@ class compilation {
     // Records the first construct this phase doesn't analyze and returns the unsupported stop
     [[nodiscard]] auto unsupported(const unit& u, const source& src, std::string what)
         -> stdx::err<stop>;
+    // The function instance emitted under `symbol`
+    [[nodiscard]] auto function_named(std::string_view symbol) -> stdx::option<instance&>;
     // A use of a deprecated name, a warning or an error by the deprecation policy, once a site
     auto report_deprecated(const unit& u, const source& src, std::string message) -> void;
 
@@ -2736,6 +2738,8 @@ class analyzer {
                                       stdx::option<gs::type&>        declared,
                                       const gs::resolved_attributes& attrs,
                                       const source&                  src) -> result<operand>;
+    // The type a global's initializer is given: the function's own when a callable holds one
+    [[nodiscard]] auto callable_init_type(const ip::value& init, gs::type& type) -> gs::type&;
     // Folds a module-level declaration's own attributes once its value is known
     [[nodiscard]] auto decl_attributes(const decl& d, const operand& value)
         -> result<gs::resolved_attributes>;

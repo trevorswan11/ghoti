@@ -216,8 +216,15 @@ auto compilation::comptime_function(const instance& fn, gsl::span<const named_ca
     }
 
     std::ranges::sort(parts);
-    const auto symbol{
-        fmt::format("closureconst.cl.{}.{}", node->get_index(), fmt::join(parts, "."))};
+    auto symbol{fmt::format("closureconst.cl.{}.{}", node->get_index(), fmt::join(parts, "."))};
+
+    // AST nodes are numbered per module, so another module's literal may already hold the name
+    if (const auto taken{const_functions_.find(symbol)};
+        taken != const_functions_.end() && taken->second->owner.get() != fn.owner.get()) {
+        symbol = fmt::format(
+            "closureconst.cl.{}.m{}.{}", node->get_index(), u.index, fmt::join(parts, "."));
+    }
+
     if (!const_functions_.contains(symbol)) {
         member_context member{
             .captures  = fn.captures,
@@ -240,8 +247,13 @@ auto compilation::comptime_function(const instance& fn, gsl::span<const named_ca
 auto compilation::named_function(const function_names& names, ip::index value)
     -> stdx::option<instance&> {
     if (constants().is_type(value)) { return stdx::none; }
-    const auto text{constants().value_at(value).data.as_opt<std::string>()};
+    const auto& known{constants().value_at(value)};
+    const auto  text{known.data.as_opt<std::string>()};
     if (!text) { return stdx::none; }
+
+    // A string that happens to spell a function's symbol is still a string
+    const auto kind{known.type.transform([](const gs::type& t) { return t.get_kind(); })};
+    if (kind != gs::type_kind::FUNCTION && kind != gs::type_kind::CLOSURE) { return stdx::none; }
     const auto found{names.find(*text)};
     if (found == names.end()) { return stdx::none; }
     return *found->second;
