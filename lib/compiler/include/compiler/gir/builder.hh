@@ -45,8 +45,8 @@ class builder {
     [[nodiscard]] constexpr auto is_splicing() const noexcept -> bool { return splice_; }
 
     auto emit_instruction(instruction inst) -> instruction&;
-    // Tags the most recent `CALL` in the active segment with `@call`'s modifier
-    auto mark_last_call(ast::call_modifier modifier) -> void;
+    // Tags the most recent `CALL` in the active segment with `@call`'s modifier and returns it
+    auto mark_last_call(ast::call_modifier modifier) -> stdx::option<instruction&>;
     auto emit_alloca(sema::type&       type,
                      std::string_view  name      = {},
                      bool              is_const  = false,

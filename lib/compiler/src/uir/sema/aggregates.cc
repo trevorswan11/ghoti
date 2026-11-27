@@ -122,10 +122,12 @@ auto compilation::declare_nominal(const unit&            u,
                                   inst_id                inst,
                                   gs::type_kind          kind,
                                   std::vector<ip::index> identity) -> nominal& {
+    // Only a call begun inside the declaration being resolved owns what it declares
+    const bool  in_call{calls_.size() > call_floor_};
     nominal_key key{
         .unit = u.index,
         .inst = inst,
-        .args = calls_.empty() ? std::vector<ip::index>{} : call_identity(calls_.back()),
+        .args = in_call ? call_identity(calls_.back()) : std::vector<ip::index>{},
     };
     key.args.insert(key.args.end(), identity.begin(), identity.end());
     if (const auto found{nominal_ids_.find(key)}; found != nominal_ids_.end()) {
@@ -142,13 +144,13 @@ auto compilation::declare_nominal(const unit&            u,
         .type        = &type,
         .name        = std::string{default_name(kind)},
         .state       = nominal_state::DECLARED,
-        .in_call     = !calls_.empty(),
+        .in_call     = in_call,
         .enum_values = {},
     }))};
     nominal_ids_.emplace(std::move(key), id);
 
     // A ctor instance's type is named for the call, and its members under the call's symbol
-    if (!calls_.empty()) {
+    if (in_call) {
         const auto& call{*calls_.back().key->fn};
         n.symbol_prefix = call.symbol;
         n.name          = instance_display_name(call);

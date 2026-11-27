@@ -1,16 +1,25 @@
 #include <algorithm>
 #include <functional>
+#include <iterator>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
 #include <gsl/span>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/codegen/target.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/module.hh"
+#include "compiler/gir/segment.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -96,7 +105,12 @@ auto analyzer::with_modifier(stdx::option<ref>                       modifier,
     }
 
     auto result{TRY(call())};
-    if (!is_comptime()) { builder_.mark_last_call(*how); }
+    if (is_comptime()) { return result; }
+    if (const auto marked{builder_.mark_last_call(*how)}) {
+        comp_.note_modified_call(
+            modified_call{.owner = &u_, .at = src, .caller = gir_fn_.get(), .call = &*marked});
+    }
+
     return result;
 }
 
@@ -484,6 +498,114 @@ auto analyzer::call_with(instance&            target,
     }
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
+}
+
+namespace {
+
+// Whether `musttail` can replace a call from `caller` to `callee`: the same parameters, result, and
+// calling convention
+[[nodiscard]] auto same_prototype(const gs::types::function& caller,
+                                  const gs::types::function& callee) -> bool {
+    if (caller.params.size() != callee.params.size() || caller.is_variadic != callee.is_variadic ||
+        caller.conv != callee.conv ||
+        !gs::is_same_unqualified(caller.return_type, callee.return_type)) {
+        return false;
+    }
+
+    for (usize i{0}; i < caller.params.size(); ++i) {
+        if (!gs::is_same_unqualified(*caller.params[i], *callee.params[i])) { return false; }
+    }
+    return true;
+}
+
+// Whether `call` is directly returned by the instruction after it in its segment
+[[nodiscard]] auto is_returned(const gir::function& caller, const gir::instruction& call) -> bool {
+    for (const auto& seg : caller.get_segments()) {
+        const auto& instructions{seg->get_instructions()};
+        const auto  at{std::ranges::find(instructions, &call)};
+        if (at == instructions.end()) { continue; }
+        if (std::next(at) == instructions.end()) { return false; }
+
+        const auto& next{**std::next(at)};
+        if (next.kind != gir::instruction_kind::RET) { return false; }
+        if (next.operands.empty()) { return !call.result || !call.type; }
+        const auto id{next.operands.front().data.as_opt<gir::local_id>()};
+        return call.result && id && *id == *call.result;
+    }
+
+    return false;
+}
+
+} // namespace
+
+auto compilation::check_call_modifiers() -> void {
+    for (const auto& site : modified_calls_) { check_call_modifier(site); }
+}
+
+auto compilation::check_call_modifier(const modified_call& site) -> void {
+    const auto& call{*site.call};
+    const auto  modifier{*call.call_modifier};
+    const auto  callee{[&] -> stdx::option<gir::function&> {
+        if (!call.callee_name) { return stdx::none; }
+        for (const auto fn : gir_.get_functions()) {
+            if (fn->get_name() == *call.callee_name) { return *fn; }
+        }
+        return stdx::none;
+    }()};
+    const auto  fail{[&](std::string_view why) {
+        DISCARD(
+            report(*site.owner,
+                   site.at,
+                   gs::error::IMPOSSIBLE_CALL_MODIFIER,
+                   fmt::format("'@call(.{}, ...)': {}", ast::call_modifier_name(modifier), why)));
+    }};
+    const auto  inlining{callee ? callee->get_attributes().inlining : stdx::none};
+
+    switch (modifier) {
+    case ast::call_modifier::NEVER_INLINE:
+        if (inlining == ast::inline_mode::ALWAYS) { fail("the function is `@[inline(.always)]`"); }
+        break;
+    case ast::call_modifier::ALWAYS_INLINE:
+        if (!callee) {
+            fail("only a call that names its function can be inlined, not one through a value");
+        } else if (callee->get_linkage() == gir::linkage::EXTERN) {
+            fail("an `extern` function has no body here to inline");
+        } else if (callee->get_attributes().naked) {
+            fail("a `@[naked]` function can't be inlined");
+        } else if (inlining == ast::inline_mode::NEVER) {
+            fail("the function is `@[inline(.never)]`");
+        }
+        break;
+    case ast::call_modifier::ALWAYS_TAIL: {
+        if (!is_returned(*site.caller, call)) {
+            fail("the call must be returned directly (`return @call(.always_tail, f, ...)`), with "
+                 "no `defer` left to run after it");
+            break;
+        }
+
+        const auto caller_sig{site.caller->get_type().get_data().as_opt<gs::types::function>()};
+        const auto callee_sig{callee ? callee->get_type().get_data().as_opt<gs::types::function>()
+                                     : stdx::none};
+        if (caller_sig && callee_sig && !same_prototype(*caller_sig, *callee_sig)) {
+            fail("a tail call needs the same parameters, result, and calling convention as the "
+                 "function it returns from");
+            break;
+        }
+
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        if (triple.isWasm()) {
+            const auto cpu{codegen::resolve_target_cpu(ctx_.target_opts)};
+            if (!cpu || !std::ranges::contains(cpu->enabled, "tail_call")) {
+                fail("WebAssembly makes tail calls only with the `tail_call` feature "
+                     "(`--features +tail-call`)");
+            }
+        }
+        break;
+    }
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::NEVER_TAIL:
+    case ast::call_modifier::COMPILE_TIME: break;
+    }
 }
 
 } // namespace ghoti::uir::sema

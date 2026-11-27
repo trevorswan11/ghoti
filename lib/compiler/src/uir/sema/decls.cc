@@ -64,6 +64,10 @@ auto compilation::analyze_decl(const unit& u, decl_id decl, const source& use) -
     // A member of a type declared outside any call reads the type's namespace
     const auto owner{u.uir->decl_at(decl).owner};
     const auto scope{owner ? existing_nominal(u, *owner) : stdx::none};
+
+    // The declaration resolves the same in every call, so no call in progress owns its types
+    const auto floor{std::exchange(call_floor_, calls_.size())};
+    const auto restore{gsl::finally([&] { call_floor_ = floor; })};
     return resolve_decl(
         u,
         decl,
