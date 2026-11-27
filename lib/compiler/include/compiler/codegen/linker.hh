@@ -17,6 +17,8 @@ namespace ghoti::codegen {
 struct compiler_rt_options {
     // The root `compiler_rt.gh`; `GHOTI_COMPILER_RT` default, then `lib/compiler_rt`
     stdx::option<std::filesystem::path> root{};
+    // Built through UIR Sema, as a `--sema=uir` program is
+    bool sema_uir{false};
 };
 
 // A symbol a program imports from an `extern("lib", ...)` library

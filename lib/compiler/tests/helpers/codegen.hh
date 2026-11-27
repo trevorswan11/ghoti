@@ -86,6 +86,10 @@ compile_and_run(std::string_view                     source,
                 const std::vector<mock_file>&        imports     = {},
                 const codegen::extra_linker_options& linker_opts = default_linker_options()) -> u32;
 
+// The exit code of `source`'s program built through UIR Sema alone, its builtins included
+[[nodiscard]] auto uir_compile_and_run(std::string_view              source,
+                                       const std::vector<mock_file>& imports = {}) -> u32;
+
 // Every symbol an archive's index says it defines, without the target's global prefix
 [[nodiscard]] auto archive_definitions(const std::filesystem::path&   archive,
                                        const codegen::target_options& target_opts = {})

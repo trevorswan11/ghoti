@@ -654,7 +654,11 @@ auto analyzer::coerce_to(const operand&  op,
 
     if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
         if (const auto erased{TRY(as_erased_callable(op, target, src))}) { return *erased; }
-        return comp_.unsupported(u_, src, "a conversion between function types");
+        return comp_.unsupported(u_,
+                                 src,
+                                 fmt::format("a conversion between function types ('{}' to '{}')",
+                                             ctx.type_display_name(from),
+                                             ctx.type_display_name(target)));
     }
 
     if (from.get_kind() == gs::type_kind::VECTOR || target.get_kind() == gs::type_kind::VECTOR) {

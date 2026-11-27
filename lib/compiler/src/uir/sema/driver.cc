@@ -389,6 +389,14 @@ auto compilation::report(const unit&                          u,
     return stdx::err{stop::POISON};
 }
 
+auto compilation::function_named(std::string_view symbol) -> stdx::option<instance&> {
+    for (const auto fn : instances_) {
+        if (fn->symbol == symbol) { return *fn; }
+    }
+
+    return stdx::none;
+}
+
 auto compilation::report_deprecated(const unit& u, const source& src, std::string message) -> void {
     if (ctx_.deprecated_policy == gs::deprecation_policy::ALLOW) { return; }
     const auto at{location_of(u, src)};

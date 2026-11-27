@@ -729,6 +729,18 @@ auto analyzer::declares_type(const decl& d) const -> bool {
     }
 }
 
+auto analyzer::callable_init_type(const ip::value& init, gs::type& type) -> gs::type& {
+    if (!gs::is_erased_fn(type) && !gs::is_fat_callable(type)) { return type; }
+    const auto address{init.data.as_opt<ip::address_value>()};
+    const auto text{init.data.as_opt<std::string>()};
+    const auto symbol{address ? stdx::option<std::string_view>{address->symbol}
+                      : text  ? stdx::option<std::string_view>{*text}
+                              : stdx::none};
+    if (!symbol) { return type; }
+    const auto fn{comp_.function_named(*symbol)};
+    return fn ? *fn->type : type;
+}
+
 auto analyzer::analyze_global(decl_id                        decl,
                               const operand&                 value,
                               stdx::option<gs::type&>        declared,
@@ -825,14 +837,16 @@ auto analyzer::analyze_global(decl_id                        decl,
     // An address holds its global's symbol, empty for a value with no storage
     const auto address{data.as_opt<ip::address_value>()};
     const auto init_index{address ? pool.intern(std::string{address->symbol}, type) : index};
-    auto       symbol_name{TRY(global_symbol(decl, src))};
-    auto& global{comp_.gir().add_global(std::move(symbol_name),
-                                        type,
-                                        !is_mutable,
-                                        is_undefined || is_aggregate
-                                            ? stdx::none
-                                            : stdx::option<gir::value>{constant(init_index, type)},
-                                        compilation::linkage_of(d))};
+
+    auto& init_type{callable_init_type(pool.value_at(index), type)};
+    auto  symbol_name{TRY(global_symbol(decl, src))};
+    auto& global{comp_.gir().add_global(
+        std::move(symbol_name),
+        type,
+        !is_mutable,
+        is_undefined || is_aggregate ? stdx::none
+                                     : stdx::option<gir::value>{constant(init_index, init_type)},
+        compilation::linkage_of(d))};
     if (is_aggregate) { global.const_init.emplace(index); }
     if (d.link_name.len != 0) { global.link_name = std::string{mod().string(d.link_name)}; }
     global.is_thread_local = d.has(decl_flags::THREADLOCAL);
