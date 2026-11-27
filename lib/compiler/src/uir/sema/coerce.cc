@@ -662,8 +662,12 @@ auto analyzer::coerce_to(const operand&  op,
         return operand{constant(value, target)};
     }
 
-    if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
+    // Only a callable converts to a callable, so anything else is a plain mismatch
+    const bool from_callable{callable(from) || op.is<function_ref>() || op.is<generic_ref>()};
+    if (from_callable || callable(target)) {
         if (const auto erased{TRY(as_erased_callable(op, target, src))}) { return *erased; }
+    }
+    if (from_callable && callable(target)) {
         return comp_.unsupported(u_,
                                  src,
                                  fmt::format("a conversion between function types ('{}' to '{}')",

@@ -73,6 +73,12 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
         return comp_.report(
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
+    if (type && type->get_kind() == gs::type_kind::NORETURN) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "'noreturn' has no values, so nothing can be stored with this type");
+    }
 
     if (!type) {
         if (alignment) { return comp_.unsupported(u_, src, "an aligned `let mut` with no type"); }
@@ -1064,7 +1070,11 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
 
         // A global's initializer may take another global's address
         if (!gir_fn_ && as_place) { return value; }
-        return comp_.unsupported(u_, src, "a compile-time use of a `let mut` global");
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "A `let mut` global changes at runtime, so it isn't known at compile "
+                            "time");
     }
 
     auto&       type{*global->type};

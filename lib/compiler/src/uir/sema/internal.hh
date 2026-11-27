@@ -1069,6 +1069,8 @@ class compilation {
     [[nodiscard]] auto speculating() const noexcept -> bool { return speculating_ > 0; }
     // Drops the value errors reported since `from`, which an arm that never runs can't have
     [[nodiscard]] auto diagnostic_count() const noexcept -> usize { return diagnostics_.size(); }
+    // Every report made, a repeat of an earlier one included
+    [[nodiscard]] auto report_count() const noexcept -> usize { return reports_; }
     auto drop_value_errors(usize from) -> bool;
     // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
     auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
@@ -1225,6 +1227,7 @@ class compilation {
         generic_versions_;
     std::vector<function_export> exports_;
     std::vector<modified_call>   modified_calls_;
+    usize                        reports_{0};
     u32                          tests_{0};
     u32                          anonymous_tests_{0};
 };

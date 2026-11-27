@@ -83,16 +83,20 @@ auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const sou
     // Both bounds are known at compile time
     auto&      pool{comp_.constants()};
     const auto bound{[&](ref r) -> result<operand> {
-        const auto scope{comptime_scope()};
-        const auto value{TRY(resolve_value(r, src))};
-        if (!comptime_value(value) || !int_of(pool.value_at(*comptime_value(value)))) {
+        const auto value{[&] {
+            const auto scope{comptime_scope()};
+            return resolve_value(r, src);
+        }()};
+        if (!value && value.error() != stop::RUNTIME) { return stdx::err{value.error()}; }
+        if (!value || !comptime_value(*value) || !int_of(pool.value_at(*comptime_value(*value)))) {
             return comp_.report(u_,
                                 src,
-                                gs::error::COMPTIME_EVALUATION_FAILED,
-                                "a range used as a value needs bounds known at compile time");
+                                gs::error::ILLEGAL_OPEN_RANGE,
+                                "A range used as a value needs bounds known at compile time; only "
+                                "a `for` loop or a subscript takes runtime bounds");
         }
 
-        return value;
+        return *value;
     }};
     const auto lo{TRY(bound(*bounds.lo))};
     const auto hi{TRY(bound(*bounds.hi))};
@@ -801,7 +805,13 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                 .is_slice   = true,
             });
         } else {
-            return comp_.unsupported(u_, src, "a `for` over this type");
+            if (container_type.is_poison()) { return stdx::err{stop::POISON}; }
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A `for` iterates over ranges, arrays and slices, not "
+                                            "a '{}'",
+                                            ctx.type_display_name(container_type)));
         }
 
         auto& elem{*infos.back().elem};

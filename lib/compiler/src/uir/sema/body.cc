@@ -215,7 +215,7 @@ auto analyzer::analyze_function() -> result<void> {
     // `@setEval*Limit` in the body scopes over the rest of it
     const auto saved{comp_.limits()};
     const auto restore{gsl::finally([&] { comp_.limits() = saved; })};
-    const auto reported{comp_.diagnostic_count()};
+    const auto reported{comp_.report_count()};
     const auto out{analyze_body(body)};
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
@@ -238,7 +238,7 @@ auto analyzer::analyze_function() -> result<void> {
         const auto reachable{gir_fn_->reachable_segments()};
         const bool falls_off{here < reachable.size() && reachable[here]};
         // A body that already failed reports why instead
-        const bool failed{!out || comp_.diagnostic_count() != reported};
+        const bool failed{!out || comp_.report_count() != reported};
         if (!failed && falls_off && ret.get_kind() != gs::type_kind::NORETURN &&
             !ret.is_generic_value() && !ret.is_poison()) {
             return comp_.report(u_,

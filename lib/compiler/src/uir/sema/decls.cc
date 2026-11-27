@@ -439,6 +439,19 @@ auto compilation::declare_function(const unit&           u,
     const auto    attrs{rec.body_field()};
     const auto    bound_count{rec.count()};
 
+    // A bodyless method is only an interface's, which declares it without analyzing it here
+    const bool takes_self{std::ranges::any_of(params, [&](inst_id param) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_SELF) != 0;
+    })};
+    if ((fn_flags & flags::BODYLESS) != 0 && takes_self) {
+        return report(u,
+                      src,
+                      gs::error::FUNCTION_DECLARATION_MISSING_BODY,
+                      "A method needs a body; only interface methods may omit it");
+    }
+
     // A bodyless literal written as a value is the function type it spells
     const bool type_expr{(fn_flags & flags::BODYLESS) != 0 && (fn_flags & flags::TYPE_EXPR) != 0};
     if (type_expr && bound_count == 0 && !is_generic(u, func)) {
@@ -446,7 +459,10 @@ auto compilation::declare_function(const unit&           u,
     }
 
     if ((fn_flags & flags::BODYLESS) != 0) {
-        return unsupported(u, src, "a function without a body");
+        return report(u,
+                      src,
+                      gs::error::FUNCTION_DECLARATION_MISSING_BODY,
+                      "A function needs a body, unless it is an `extern` declaration");
     }
 
     // `@[testing]` only lets the body use the test builtins
@@ -459,7 +475,10 @@ auto compilation::declare_function(const unit&           u,
     // A C-variadic function takes its extra arguments as a C function does
     const bool variadic{(fn_flags & flags::VARIADIC) != 0};
     if (variadic && (bound_count != 0 || is_generic(u, func))) {
-        return unsupported(u, src, "a generic C-variadic function");
+        return report(u,
+                      src,
+                      gs::error::MALFORMED_PACK_USE,
+                      "A generic function can't be C-variadic; take a parameter pack instead");
     }
 
     if (bound_count != 0 || is_generic(u, func)) { return declare_generic(u, decl, func, member); }
@@ -757,7 +776,11 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
         }()};
         const auto erased{TRY(held)};
         if (!erased) {
-            return comp_.unsupported(u_, src, "a function declaration with an explicit type");
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A function can't be stored as '{}'",
+                                            comp_.ctx().type_display_name(*declared)));
         }
 
         // A constant one is folded where it is read, with no storage

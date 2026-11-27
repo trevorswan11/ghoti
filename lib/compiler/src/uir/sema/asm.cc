@@ -66,7 +66,14 @@ auto analyzer::analyze_asm(inst_id inst) -> result<operand> {
     std::vector<gir::value> values;
     values.reserve(inputs.size());
     for (const auto& [text, value] : inputs) {
-        if (!value) { return comp_.unsupported(u_, src, "an `asm` input without a value"); }
+        if (!value) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_INLINE_ASM,
+                                fmt::format("asm input '{}' needs a value; only an output can be "
+                                            "'_'",
+                                            text));
+        }
         const auto given{TRY(resolve_value(*value, src))};
         values.emplace_back(TRY(as_runtime(given, src)));
     }

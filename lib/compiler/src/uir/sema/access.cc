@@ -327,7 +327,13 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     }
 
     if (type.get_kind() != gs::type_kind::STRUCT && type.get_kind() != gs::type_kind::UNION) {
-        return comp_.unsupported(u_, src, fmt::format("a field of a `{}`", type.to_string()));
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("A value of type '{}' has no field named '{}'",
+                                        ctx.type_display_name(type),
+                                        name));
     }
 
     const auto index{TRY(field_index(type, name, src))};
@@ -446,7 +452,23 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
         return comptime_field(g->value, name, src);
     }
 
-    if (object.is<function_ref>()) { return comp_.unsupported(u_, src, "a field of a function"); }
+    if (object.is<function_ref>() || object.is<generic_ref>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("A function has no field named '{}'; call it to use what "
+                                        "it returns",
+                                        name));
+    }
+
+    if (object.is<enum_literal>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("An enum literal has no field named '{}'; patterns in a "
+                                        "list are separated by commas",
+                                        name));
+    }
     TRY(require_runtime(src));
 
     // A bit-packed value's field is its bits, read without storing the value

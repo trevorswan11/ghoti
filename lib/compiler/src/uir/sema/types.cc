@@ -207,7 +207,13 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
         return comp_.unsupported(u_, src, "a volatile type");
     }
     if (elem.get_kind() == gs::type_kind::INTERFACE) {
-        return comp_.unsupported(u_, src, "a pointer to an interface type");
+        return comp_.report(u_,
+                            src,
+                            gs::error::INTERFACE_NOT_A_VALUE,
+                            fmt::format("'{}' is an interface, not a value type; point at a 'dyn "
+                                        "{}' instead",
+                                        comp_.ctx().type_display_name(elem),
+                                        comp_.ctx().type_display_name(elem)));
     }
 
     auto&      ctx{comp_.ctx()};

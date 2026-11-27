@@ -652,13 +652,19 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         }
         return false;
     }()};
-    if (sequence_field || aggregate_field) {
+    // A type with no namespace of its own has nothing to reach through it, unlike `type` itself
+    const bool namespaceless{!n && owner.get_kind() != gs::type_kind::TYPE};
+    if (sequence_field || aggregate_field || namespaceless) {
         return comp_.report(u_,
                             src,
                             gs::error::TYPE_USED_AS_VALUE,
-                            fmt::format("'{}' is a field of each '{}' value, not of the type",
-                                        name,
-                                        comp_.ctx().type_display_name(owner)));
+                            namespaceless && !sequence_field
+                                ? fmt::format("Type '{}' has no members, so '{}' names nothing",
+                                              comp_.ctx().type_display_name(owner),
+                                              name)
+                                : fmt::format("'{}' is a field of each '{}' value, not of the type",
+                                              name,
+                                              comp_.ctx().type_display_name(owner)));
     }
 
     return comp_.report(u_,

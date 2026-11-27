@@ -430,6 +430,7 @@ auto compilation::report(const unit&                          u,
                          std::string                          message,
                          const stdx::option<diagnostic_note>& note) -> stdx::err<stop> {
     const auto span{span_of(u, src)};
+    ++reports_;
 
     // A body run at compile time and analyzed for runtime reports its errors once
     const bool repeated{std::ranges::any_of(diagnostics_, [&](const gs::diagnostic& seen) {

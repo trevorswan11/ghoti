@@ -355,6 +355,18 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     if (offsets && !info.wrapping && !info.saturating) {
         const auto& ptr{lhs_ptr ? lhs : rhs};
         const auto& count{lhs_ptr ? rhs : lhs};
+        // A step is one pointee, which an opaque pointee has no size for
+        auto& stepped{type_of(ptr)};
+        if (const auto pointee{gs::pointee_of(stepped)};
+            pointee && pointee->get_kind() == gs::type_kind::OPAQUE) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::OPERATOR_TYPE_MISMATCH,
+                                fmt::format("Pointer arithmetic requires a pointee of known size; "
+                                            "'{}' has none",
+                                            comp_.ctx().type_display_name(stepped)));
+        }
+
         if (is_int_like(type_of(count))) {
             TRY(require_runtime(src));
             const auto at{TRY(as_runtime(ptr, src))};
