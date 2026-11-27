@@ -2376,8 +2376,7 @@ class analyzer {
         -> stdx::option<ast::symbol_visibility>;
     [[nodiscard]] auto attribute_features(const attribute_item& item) -> std::vector<std::string>;
     auto               check_deprecation_message(const attribute_item& item) -> void;
-    // Warns that `name`, declared with `attributes` in `owner`, is deprecated, unless the code
-    // naming it is deprecated too
+    // Warns that `name`, declared with `attributes` in `owner`, is deprecated, unless nested
     auto warn_deprecated(const mod::module_t&                     owner,
                          const stdx::option<ast::attribute_list>& attributes,
                          std::string_view                         name,
