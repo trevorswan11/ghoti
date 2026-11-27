@@ -436,7 +436,7 @@ TEST_CASE("Masked loads and stores, gathers, and scatters touch only the lanes t
     CHECK(helpers::compile_and_run(R"(
         const V = @Vector(4, i32);
         pub const main = fn(): i32 {
-            let buf: [6]mut i32 = .{ 1, 2, 3, 4, 5, 6 };
+            let mut buf: [6]mut i32 = .{ 1, 2, 3, 4, 5, 6 };
             let mask: @Vector(4, bool) = .{ true, true, false, true };
             let loaded = @maskedLoad(^buf[1], mask, @as(V, @splat(-1)));
             @maskedStore(^mut buf[2], @as(V, .{ 10, 20, 30, 40 }), mask);

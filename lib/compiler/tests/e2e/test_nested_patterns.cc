@@ -51,8 +51,8 @@ TEST_CASE("Slices match their length and strings their bytes") {
             };
             pub const main = fn(): i32 {
                 let mut buf = [3]u8{ 1, 2, 3 };
-                const empty = R{ .ok = O{ .some = buf[0..0] } };
-                const full = R{ .ok = O{ .some = buf[0..3] } };
+                let empty = R{ .ok = O{ .some = buf[0..0] } };
+                let full = R{ .ok = O{ .some = buf[0..3] } };
                 return @intCast(i32, f(empty) + f(full));
             };
         )") == 3);

@@ -119,7 +119,7 @@ TEST_CASE("macOS targets link against libSystem from any host") {
         extern("System", "write") const sys_write: fn(fd: i32, buf: ^u8, count: usize): isize;
         pub const main = fn(): i32 {
             let msg = "hi";
-            return @as(i32, sys_write(1, msg.ptr, msg.len));
+            return @intCast(i32, sys_write(1, msg.ptr, msg.len));
         };
     )";
 
@@ -223,7 +223,7 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
 
     constexpr auto input = R"(
         pub const main = fn(args: [][:0]u8): i32 {
-            return @as(i32, args.len);
+            return @intCast(i32, args.len);
         };
     )";
 

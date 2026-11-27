@@ -310,7 +310,7 @@ TEST_CASE("an inline aggregate type in value position has no runtime value") {
         pub const main = fn(): i32 {
             _ = struct {};
             enum { a };
-            let T = blk: { break :blk union(enum) { a: i32 }; };
+            const T = blk: { break :blk union(enum) { a: i32 }; };
             return 7;
         };
     )") == 7);
