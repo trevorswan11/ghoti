@@ -86,8 +86,10 @@ TEST_CASE("a helper like Zig's `symbol` exports whatever function it's handed") 
                                                 {"add.gh", R"(
         import "common.gh" as common;
         const addtf3 = fn(a: i32, b: i32): i32 { return a + b; };
-        common.symbol(addtf3, "__ghoti_addtf3");
-        common.symbol(addtf3, "__aeabi_ghoti_addtf3");
+        comptime {
+            common.symbol(addtf3, "__ghoti_addtf3");
+            common.symbol(addtf3, "__aeabi_ghoti_addtf3");
+        }
     )"}})};
     auto        llvm_mod{UNWRAP(helpers::emit_llvm_ir_executable(*ctx, context))};
     const auto* primary{llvm_mod->getFunction("__ghoti_addtf3")};

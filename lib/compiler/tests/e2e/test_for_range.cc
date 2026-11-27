@@ -201,7 +201,7 @@ TEST_CASE("a subscript range cannot count down") {
     )",
                           sema::error::ILLEGAL_OPEN_RANGE));
     CHECK(helpers::compile_and_run(R"(
-        pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; const s = a[2..=1]; return @intCast(s.len); };
+        pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; let s = a[2..=1]; return @intCast(s.len); };
     )") == 0);
 }
 

@@ -73,6 +73,58 @@ TEST_CASE("A top-level type first reached in a compile-time call isn't that call
     )"));
 }
 
+TEST_CASE("A known array's or string's `.ptr` reads its elements", "[uir]") {
+    CHECK(helpers::uir_compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let a = [3]u8{ 1, 2, 3 };
+            let p = a.ptr;
+            return @intCast(i32, p[1]);
+        };
+    )") == 2);
+    CHECK(helpers::uir_compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let msg = "hi";
+            let p = msg.ptr;
+            return @intCast(i32, p[1]);
+        };
+    )") == 'i');
+    CHECK(helpers::uir_compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let msg: []u8 = "hi";
+            let p = msg.ptr;
+            return @intCast(i32, p[0]);
+        };
+    )") == 'h');
+}
+
+TEST_CASE("A `match` arm's @branchHint weights the test leading to it", "[uir]") {
+    const auto run{helpers::uir_accepted(R"(
+        pub const classify = fn(x: i32): i32 {
+            let mut out: i32 = 20;
+            match (x) {
+                0 => {
+                    @branchHint(.unlikely);
+                    out = 10;
+                },
+                _ => {},
+            };
+            return out;
+        };
+    )")};
+    bool       weighted{false};
+    for (const auto fn : run.out().gir->get_functions()) {
+        for (const auto seg : fn->get_segments()) {
+            for (const auto inst : seg->get_instructions()) {
+                if (inst->branch_weights) {
+                    weighted = true;
+                    CHECK(inst->branch_weights->first < inst->branch_weights->second);
+                }
+            }
+        }
+    }
+    CHECK(weighted);
+}
+
 TEST_CASE("A string spelling a function's symbol is still a string", "[uir]") {
     DISCARD(helpers::uir_accepted(R"(
         const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {

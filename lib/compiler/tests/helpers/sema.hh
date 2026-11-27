@@ -34,6 +34,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/error.hh"
 #include "helpers/common.hh"
+#include "helpers/uir_diff.hh"
 
 namespace ghoti::tests::helpers {
 
@@ -73,6 +74,8 @@ struct sema_test_context {
     // What a fresh manager needs to load the same program again, for the `-Dsema=uir` check
     std::filesystem::path                                      root_path;
     std::vector<std::pair<std::string, std::filesystem::path>> libraries;
+    // The UIR Sema analysis the emit helpers built the program from, which its GIR points into
+    stdx::option<stdx::box<uir_sema_run>> program;
 
     // The root is automatically added to the internal loader and can be immediately analyzed
     explicit sema_test_context(const std::vector<mock_file>&  imports,

@@ -1390,6 +1390,15 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
     auto&       i32_type{comp_.ctx().get_int(32, true)};
     auto&       pool{comp_.constants()};
     const auto& d{m.tree.nodes[node]};
+
+    // A test's branch weights follow the arm it leads straight to
+    const auto hint{[&](gir::instruction& branch, usize target) {
+        const auto& next{m.tree.nodes[target]};
+        if (next.kind == pattern::decision_kind::LEAF) {
+            apply_branch_hints(branch, m.arms[next.arm].body, {});
+        }
+    }};
+
     switch (d.kind) {
     case pattern::decision_kind::FAIL: builder_.emit_unreachable(); return {};
     case pattern::decision_kind::LEAF: {
@@ -1434,7 +1443,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
         const auto test{TRY(opaque_test(subject, opaque_patterns_.at(d.test->get_index())))};
         const auto on_true{new_segment()};
         const auto on_false{new_segment()};
-        builder_.emit_cond_goto(test, on_true, on_false);
+        hint(builder_.emit_cond_goto(test, on_true, on_false), d.on_true);
         switch_to(on_true);
         TRY(emit_decision(m, d.on_true));
         switch_to(on_false);
@@ -1499,7 +1508,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
         }()};
         const auto on_match{new_segment()};
         const auto on_miss{new_segment()};
-        builder_.emit_cond_goto(matched, on_match, on_miss);
+        hint(builder_.emit_cond_goto(matched, on_match, on_miss), test.target);
         switch_to(on_match);
         TRY(emit_decision(m, test.target));
         switch_to(on_miss);

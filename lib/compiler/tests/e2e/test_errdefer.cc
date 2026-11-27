@@ -334,7 +334,7 @@ TEST_CASE("A return inside a function literal runs none of the enclosing functio
         const work = fn(log: ^mut i32): R {
             defer *log += 1;
             errdefer *log += 100;
-            const doubled = apply(fn(x: i32): i32 {
+            let doubled = apply(fn(x: i32): i32 {
                 if (x > 100) { return 0; }
                 return x * 2;
             }, 20);
@@ -343,7 +343,7 @@ TEST_CASE("A return inside a function literal runs none of the enclosing functio
         };
         pub const main = fn(): i32 {
             let mut log: i32 = 0;
-            const r = work(^mut log);
+            let r = work(^mut log);
             return if (r == .ok and log == 1) 0 else 1;
         };
     )") == 0);

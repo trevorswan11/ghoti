@@ -329,7 +329,7 @@ TEST_CASE("Windows entry wrapper with an args parameter emits valid, verifiable 
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const main = fn(args: [][:0]u8): i32 {
-            return @as(i32, args.len);
+            return @intCast(i32, args.len);
         };
     )")};
     REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));

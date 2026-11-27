@@ -1253,14 +1253,16 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
         return un->payload.front();
     }
 
-    // A known slice's address holds its elements, so equal slices share one
-    if (const auto slice{type.get_data().as_opt<gs::types::slice>()}; slice && name == "ptr") {
-        auto& ptr_type{comp_.ctx().get_pointer(gs::types::mut::CONSTANT, slice->underlying)};
+    // A known slice's or array's address holds its elements, so equal ones share one
+    const bool sequence{type.get_kind() == gs::type_kind::SLICE ||
+                        type.get_kind() == gs::type_kind::ARRAY};
+    if (const auto elem{sequence ? element_type_of(type) : stdx::none}; elem && name == "ptr") {
+        auto&                  ptr_type{comp_.ctx().get_pointer(gs::types::mut::CONSTANT, *elem)};
         std::vector<ip::index> pointee;
         if (const auto text{value.data.as_opt<std::string>()}) {
             const std::string bytes{*text};
             for (const char c : bytes) {
-                pointee.emplace_back(pool.intern(u64{static_cast<u8>(c)}, slice->underlying));
+                pointee.emplace_back(pool.intern(u64{static_cast<u8>(c)}, *elem));
             }
         } else if (const auto agg{value.data.as_opt<ip::aggregate_value>()}) {
             for (const auto element : agg->elements) {
@@ -1312,6 +1314,20 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
     const auto  text{value.data.as_opt<std::string>()};
     const auto  index{int_of(pool.value_at(at))};
     const auto  elem_type{value.type ? element_type_of(*value.type) : stdx::none};
+
+    // A known address of a sequence's elements, like a known slice's `.ptr`, reads one of them
+    const auto address{value.data.as_opt<ip::address_value>()};
+    const auto pointer{value.type ? value.type->get_data().as_opt<gs::types::pointer>()
+                                  : stdx::none};
+    if (address && pointer && address->symbol.empty() && index) {
+        const auto small{index->to_i128()};
+        if (!small || *small < 0 || *small >= static_cast<i128>(address->pointee.size())) {
+            return comp_.report(
+                u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
+        }
+        return address->pointee[static_cast<usize>(*small)];
+    }
+
     if ((!agg && !text) || !index || !elem_type) {
         return comp_.unsupported(u_, src, "indexing this comptime value");
     }

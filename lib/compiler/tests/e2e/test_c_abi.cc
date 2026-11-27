@@ -236,7 +236,7 @@ pub const main = fn(): i32 {
     let big = make_big(100);
     if (big.values[0] != 100 or big.values[39] != 139) { failed += 1; }
     let mut expected: i64 = 0;
-    for (0..40) |k| { expected += (100 + @as(i64, k)) * (@as(i64, k) + 1); }
+    for (0..40) |k| { expected += (100 + @intCast(i64, k)) * (@intCast(i64, k) + 1); }
     if (sum_big(big) != expected) { failed += 2; }
     return failed;
 };
