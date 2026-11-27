@@ -1503,8 +1503,9 @@ auto normalize_gir(std::string_view dump) -> std::string {
             for (auto& inst : seg.instructions) {
                 inst = without_value_volatility(as_direct_call(without_address_mutability(inst)));
 
-                // Returning a `void` value returns nothing
+                // Returning a `void` value returns nothing, and a `noreturn` one is never reached
                 if (inst == "ret void void") { inst = "ret void"; }
+                if (inst.starts_with("ret noreturn ")) { inst = "unreachable"; }
             }
         }
         drop_identity_casts(fn);

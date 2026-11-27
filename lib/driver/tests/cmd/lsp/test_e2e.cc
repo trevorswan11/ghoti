@@ -25,14 +25,9 @@ namespace ghoti::tests {
 
 namespace {
 
-// `ghoti lsp`, analyzing through UIR Sema in a `-Dsema=uir` build
 [[nodiscard]] auto lsp_argv(std::string debounce_ms) -> mock_argv {
-    std::vector<std::string> args{
-        ghoti_binary_path().string(), "lsp", "--debounce-ms", std::move(debounce_ms)};
-#ifdef GHOTI_TEST_SEMA_UIR
-    args.emplace_back("--sema=uir");
-#endif
-    return mock_argv{std::move(args)};
+    return mock_argv{std::vector<std::string>{
+        ghoti_binary_path().string(), "lsp", "--debounce-ms", std::move(debounce_ms)}};
 }
 
 } // namespace
@@ -393,13 +388,9 @@ pub const main = fn(): i32 {
 
     // The call site names the declaration, defaults and all
     CHECK(hover_at(2, 3, 12) == "fn(w: i32, h: i32 = w * scale): i32");
-    // A name inside a default resolves like any other use. UIR Sema shows an untyped constant as
-    // its own type, where the old pipeline shows the type the expression around it computes in
-#ifdef GHOTI_TEST_SEMA_UIR
+    // A name inside a default resolves like any other use, and an untyped constant shows its own
+    // type
     CHECK(hover_at(3, 1, 39) == "comptime_int");
-#else
-    CHECK(hover_at(3, 1, 39) == "i32");
-#endif
 
     lsp::write_message(proc.stdin_stream(),
                        {

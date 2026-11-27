@@ -285,7 +285,19 @@ constexpr std::pair<std::string_view, std::string_view> MATH_MISMATCHES[]{
     {"@log10", "f80"},
 };
 
+#ifdef __APPLE__
+// TODO(#456): macOS's libm, which the runtime calls there, rounds these an ulp apart
+constexpr std::pair<std::string_view, std::string_view> APPLE_MATH_MISMATCHES[]{
+    {"@sin", "f32"},
+    {"@cos", "f64"},
+    {"@tan", "f64"},
+};
+#endif
+
 [[nodiscard]] auto awaits_456(std::string_view name, std::string_view type) -> bool {
+#ifdef __APPLE__
+    if (std::ranges::contains(APPLE_MATH_MISMATCHES, std::pair{name, type})) { return true; }
+#endif
     return std::ranges::contains(MATH_MISMATCHES, std::pair{name, type});
 }
 

@@ -148,7 +148,7 @@ auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
                     "Maximum number of files to discover during workspace-wide file discovery")
         ->default_val(lsp_workspace_file_cap_)
         ->check(CLI::NonNegativeNumber);
-    sub->add_option("--sema", lsp_sema_, "The semantic analysis pipeline: legacy (default), or uir")
+    sub->add_option("--sema", lsp_sema_, "The semantic analysis pipeline: uir (default), or legacy")
         ->default_val(lsp_sema_)
         ->check(CLI::IsMember({"legacy", "uir"}));
     return sub;

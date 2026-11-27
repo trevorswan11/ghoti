@@ -134,6 +134,46 @@ namespace {
 [[nodiscard]] auto without_unused_on_demand(std::string_view legacy_text, std::string_view uir_text)
     -> std::string;
 
+// How many times `text` names `@symbol`, as a whole name
+[[nodiscard]] auto references(std::string_view text, std::string_view symbol) -> usize {
+    const auto ident{[](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '.' || c == '#';
+    }};
+    const auto needle{fmt::format("@{}", symbol)};
+    usize      n{0};
+    for (auto at{text.find(needle)}; at != std::string_view::npos; at = text.find(needle, at + 1)) {
+        const auto after{at + needle.size()};
+        if (after < text.size() && ident(text[after])) { continue; }
+        ++n;
+    }
+    return n;
+}
+
+// The old dump without the globals and types UIR never emitted and nothing it keeps names
+[[nodiscard]] auto without_unused_items(std::string_view legacy_text, std::string_view uir_text)
+    -> std::string {
+    std::string kept;
+    for (usize at{0}; at < legacy_text.size();) {
+        const auto line_end{legacy_text.find('\n', at)};
+        const auto end{line_end == std::string_view::npos ? legacy_text.size() : line_end + 1};
+        const auto line{stdx::string::substr(legacy_text, at, end - at)};
+        at = end;
+        const bool global{line.starts_with("const ")};
+        if (!global && !line.starts_with("type ")) {
+            kept += line;
+            continue;
+        }
+
+        const auto name_start{line.find(' ') + 1};
+        const auto name{stdx::string::substr(
+            line, name_start, line.find_first_of(global ? ":" : " =", name_start) - name_start)};
+        const bool in_uir{uir_text.find(line) != std::string_view::npos};
+        if (in_uir || (global && references(legacy_text, name) != 0)) { kept += line; }
+    }
+    return kept;
+}
+
 // The old dump pruned until nothing it keeps is called only from what it dropped
 [[nodiscard]] auto without_all_unused(std::string_view legacy_text, std::string_view uir_text)
     -> std::string {
@@ -142,7 +182,7 @@ namespace {
          next = without_unused_on_demand(kept, uir_text)) {
         kept = std::move(next);
     }
-    return kept;
+    return without_unused_items(kept, uir_text);
 }
 
 // Every `fn <prefix><digits>.<member>(` header of a dump, as its qualifier and member
@@ -226,10 +266,11 @@ namespace {
                              mangled != std::string_view::npos};
         // A function nothing calls or takes the address of is one the old emitter emits eagerly
         const bool absent{uir_text.find(name) == std::string_view::npos};
-        const bool referenced{name.size() > 3 &&
-                              legacy_text.find(fmt::format("@{}", name.substr(3))) !=
-                                  std::string_view::npos};
-        const bool unused{!function.starts_with("test \"") && absent && (on_demand || !referenced)};
+        // A function calling another of the same name doesn't count as using it
+        const bool referenced{name.size() > 3 && references(legacy_text, name.substr(3)) >
+                                                     references(function, name.substr(3))};
+        // The globals and types before the first function are left to `without_unused_items`
+        const bool unused{function.starts_with("fn ") && absent && (on_demand || !referenced)};
         // Instances whose names normalize alike count as unused when UIR has fewer of them
         const auto header{fmt::format("\n{}(", name)};
         const auto count{[&](std::string_view text) {
@@ -692,9 +733,10 @@ auto run_uir_sema_files(mod::source_loader&          loader,
         REQUIRE(uir::lower_start({.cfg = cfg, .modules = *run->modules}, run->lowered));
     }
     for (const auto& item : run->lowered) { REQUIRE(item.result.diagnostics.empty()); }
-    run->out.emplace(uir::sema::analyze(run->analyzer->get_ctx(),
-                                        {.root = root->get(), .modules = run->lowered},
-                                        {.check_all = true, .index = settings.index}));
+    run->out.emplace(
+        uir::sema::analyze(run->analyzer->get_ctx(),
+                           {.root = root->get(), .modules = run->lowered},
+                           {.check_all = settings.check_all, .index = settings.index}));
     if (settings.index) {
         for (auto& item : run->lowered) { uir::index_names(item); }
     }

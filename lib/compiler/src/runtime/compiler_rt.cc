@@ -132,18 +132,40 @@ struct archive_memo {
     }
 
     const auto cfg{sema::cfg_context::from(analyzer.get_ctx())};
-    const auto lowered{uir::lower_reachable(**module, {.cfg = cfg, .modules = manager})};
-    const auto write{[&](const sema::diagnostics& list) {
-        for (const auto& d : list) { diagnostics << d.get_message().value_or("") << '\n'; }
+    auto       lowered{uir::lower_reachable(**module, {.cfg = cfg, .modules = manager})};
+
+    // Each diagnostic is printed with its own module's, naming the file it is in
+    const auto write{[&](sema::diagnostics list) {
+        for (auto& d : list) {
+            auto&             owner{d.origin()
+                                        .and_then([&](const mod::module_t& m) {
+                                return manager.find_file_module(m.path);
+                                        })
+                                        .value_or(**module)};
+            sema::diagnostics single{};
+            single.push_back(std::move(d));
+            owner.absorb_sema_diagnostics(std::move(single));
+        }
+        manager.print_all_diagnostics(diagnostics);
     }};
-    for (const auto& item : lowered) {
-        if (!item.result.diagnostics.empty()) {
-            write(item.result.diagnostics);
-            return stdx::none;
+    bool       failed{false};
+    for (auto& item : lowered) {
+        if (item.result.diagnostics.empty()) { continue; }
+        failed = true;
+        if (auto mod{manager.find_file_module(item.source->path)}) {
+            mod->absorb_sema_diagnostics(std::move(item.result.diagnostics));
         }
     }
 
-    auto out{uir::sema::analyze(analyzer.get_ctx(), {.root = module->get(), .modules = lowered})};
+    // A module that failed to parse is skipped by lowering, but still fails the build
+    if (failed || manager.any_errored()) {
+        manager.print_all_diagnostics(diagnostics);
+        return stdx::none;
+    }
+
+    // Only what the archive exports is analyzed
+    auto out{uir::sema::analyze(
+        analyzer.get_ctx(), {.root = module->get(), .modules = lowered}, {.check_all = false})};
     if (out.stopped_at) {
         const auto& at{*out.stopped_at};
         const auto  where{at.where.transform([](const source_location& l) {
@@ -157,7 +179,7 @@ struct archive_memo {
         return stdx::none;
     }
     if (!out.succeeded()) {
-        write(out.diagnostics);
+        write(std::move(out.diagnostics));
         return stdx::none;
     }
 

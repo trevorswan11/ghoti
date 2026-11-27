@@ -58,7 +58,8 @@ struct raw_options {
     std::string emit_llvm_ir_path;
     std::string emit_asm_path;
     std::string emit_uir_path;
-    std::string sema{"legacy"};
+    std::string sema{"uir"};
+    bool        check_all{false};
 };
 
 struct options {
@@ -83,7 +84,9 @@ struct options {
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};
     stdx::option<std::filesystem::path> emit_asm_path{};
     stdx::option<std::filesystem::path> emit_uir_path{};
-    bool                                sema_uir{false};
+    bool                                sema_uir{true};
+    // Analyzes every declaration, not only what the build's roots reach
+    bool check_all{false};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,

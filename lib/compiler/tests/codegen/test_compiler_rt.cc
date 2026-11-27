@@ -126,14 +126,7 @@ TEST_CASE("compiler_rt builds once per target, however many programs link it") {
     const auto         before{runtime::compiler_rt_builds()};
     CHECK(helpers::compile_and_run(f128_program, {}, rt.linker_options()) == 7);
     CHECK(helpers::compile_and_run(f128_program, {}, rt.linker_options()) == 7);
-
-    // Under `-Dsema=uir` the program is built again through UIR Sema, whose builtins build apart
-#ifdef GHOTI_TEST_SEMA_UIR
-    constexpr usize PIPELINES{2};
-#else
-    constexpr usize PIPELINES{1};
-#endif
-    CHECK(runtime::compiler_rt_builds() == before + PIPELINES);
+    CHECK(runtime::compiler_rt_builds() == before + 1);
 }
 
 TEST_CASE("compiler_rt isn't built for a program that calls no runtime libcall") {

@@ -210,6 +210,7 @@ auto options::process_raw(const raw_options&   raw,
         .emit_asm_path     = std::move(emit_asm_path),
         .emit_uir_path     = std::move(emit_uir_path),
         .sema_uir          = raw.sema == "uir",
+        .check_all         = raw.check_all,
     };
 }
 
@@ -324,7 +325,8 @@ auto compilation::run_astgen(bool for_test_executable)
             mod->absorb_sema_diagnostics(std::move(item.result.diagnostics));
         }
     }
-    if (failed) {
+    // A module that failed to parse is skipped by lowering, but still fails the build
+    if (failed || manager_.any_errored()) {
         manager_.print_all_diagnostics(error_stream_);
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
@@ -337,7 +339,8 @@ auto compilation::analyze_uir(gsl::span<const uir::lowered_module> lowered,
     auto& ctx{analyzer_.get_ctx()};
     ctx.testing = ctx.testing || for_test_executable;
     auto root{*manager_.try_get_file_module(opts_.input_path)};
-    auto out{uir::sema::analyze(ctx, {.root = root.get(), .modules = lowered})};
+    auto out{uir::sema::analyze(
+        ctx, {.root = root.get(), .modules = lowered}, {.check_all = opts_.check_all})};
 
     // Each warning is its own module's, printed before any error
     for (auto& w : out.warnings) {
@@ -524,15 +527,15 @@ auto setup_analysis_flags(CLI::App* subcmd, raw_options& opts) -> void {
                      opts.emit_uir_path,
                      "Write the UIR every module of the program lowers to, to the given file path")
         ->type_name("FILE");
-#ifdef GHOTI_UIR
+    subcmd->add_flag("--check-all",
+                     opts.check_all,
+                     "Analyze every declaration, not only what main, exports and tests reach");
     subcmd
         ->add_option("--sema",
                      opts.sema,
-                     "The semantic analysis pipeline: legacy (default), or uir, the new one, "
-                     "which stops at what it doesn't analyze yet")
+                     "The semantic analysis pipeline: uir (default), or legacy, the old one")
         ->check(CLI::IsMember({"legacy", "uir"}))
         ->default_val(opts.sema);
-#endif
 }
 
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)

@@ -31,6 +31,14 @@ namespace {
 constexpr helpers::pipeline_settings EXECUTABLE{.entry = true};
 constexpr helpers::pipeline_settings TESTS{.testing = true, .entry = true};
 
+// Each OS's entry path, whatever the host
+[[nodiscard]] auto on_each_os(helpers::pipeline_settings settings) -> helpers::pipeline_settings {
+    settings.target_opts.triple_str = GENERATE(std::string{"x86_64-unknown-linux-gnu"},
+                                               std::string{"x86_64-pc-windows-msvc"},
+                                               std::string{"aarch64-apple-darwin"});
+    return settings;
+}
+
 } // namespace
 
 TEST_CASE("An executable's entry code calls `main`, whatever it returns", "[uir]") {
@@ -40,8 +48,10 @@ TEST_CASE("An executable's entry code calls `main`, whatever it returns", "[uir]
         pub const main = fn(args: [][:0]u8): i32 { return @intCast(i32, args.len); };
     )"},
                                std::string_view{"pub const main = fn(): noreturn { @trap(); };"})};
-    const auto diff{diff_source(source, EXECUTABLE)};
+    const auto settings{on_each_os(EXECUTABLE)};
+    const auto diff{diff_source(source, settings)};
     INFO(source);
+    INFO(*settings.target_opts.triple_str);
     INFO(diff.detail);
     INFO(helpers::uir_diff_status_name(diff.status));
     CHECK(agrees(diff));
@@ -70,8 +80,10 @@ TEST_CASE("A test executable's entry code runs the tests through the runner", "[
         };
         test "one" {}
     )"})};
-    const auto diff{diff_source(source, TESTS)};
+    const auto settings{on_each_os(TESTS)};
+    const auto diff{diff_source(source, settings)};
     INFO(source);
+    INFO(*settings.target_opts.triple_str);
     INFO(diff.detail);
     INFO(helpers::uir_diff_status_name(diff.status));
     CHECK(agrees(diff));

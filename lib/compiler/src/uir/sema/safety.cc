@@ -17,12 +17,7 @@
 
 namespace ghoti::uir::sema {
 
-namespace {
-
-constexpr std::string_view PANIC_HANDLER{"panic_handler"};
-constexpr std::string_view SOURCE_LOCATION{"SourceLocation"};
-
-} // namespace
+namespace { constexpr std::string_view SOURCE_LOCATION{"SourceLocation"}; } // namespace
 
 auto analyzer::usize_constant(u64 value) -> gir::value {
     auto& usize_type{builtin(gs::type_kind::USIZE)};
