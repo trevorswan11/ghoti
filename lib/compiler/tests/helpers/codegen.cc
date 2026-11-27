@@ -65,8 +65,7 @@ auto ir_text(llvm::Module& mod) -> std::string { return codegen::llvm_lowering::
 
 namespace {
 
-// The context's program, analyzed by UIR Sema as the driver builds it. The context keeps the
-// analysis, which the GIR points into
+// The context's program, analyzed by UIR Sema as the driver builds it
 [[nodiscard]] auto analyze_program(helpers::sema_test_context& test_ctx,
                                    bool                        entry,
                                    bool                        for_tests,
