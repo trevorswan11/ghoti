@@ -14,10 +14,6 @@ import "allocator_test_suite.gh" as allocator_test_suite;
 @cfg (std.os.HAS_BACKEND) {
     import "page_allocator.gh" as page_alloc;
 
-    test {
-        import "page_allocator.gh";
-    }
-
     pub const PageAllocator = page_alloc.PageAllocator;
 
     let mut page_alloc_impl: PageAllocator = .{};
@@ -27,7 +23,15 @@ import "allocator_test_suite.gh" as allocator_test_suite;
 
     import "arena_allocator.gh" as arena_alloc;
 
+    pub const ArenaAllocator = arena_alloc.ArenaAllocator;
+
+    import "general_purpose_allocator.gh" as general_alloc;
+
+    pub const GeneralPurposeAllocator = general_alloc.GeneralPurposeAllocator;
+
     test {
+        import "page_allocator.gh";
         import "arena_allocator.gh";
+        import "general_purpose_allocator.gh";
     }
 }

@@ -1,0 +1,44 @@
+//! A general purpose memory allocator
+import std;
+
+const mem = std.mem;
+const Allocator = mem.Allocator;
+const Alignment = mem.Alignment;
+
+pub const GeneralPurposeAllocator = struct {};
+
+impl mem.AllocatorVTable for GeneralPurposeAllocator {
+    pub const alloc = fn(
+        &mut self,
+        len: usize,
+        alignment: std.mem.Alignment,
+    ): std.Option(^mut u8) {
+        unreachable;
+    };
+
+    pub const resize = fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): bool {
+        unreachable;
+    };
+
+    pub const remap = fn(
+        &mut self,
+        memory: []mut u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8) {
+        unreachable;
+    };
+
+    pub const free = fn(
+        &mut self,
+        memory: []mut u8,
+        _: std.mem.Alignment,
+    ): void {
+        unreachable;
+    };
+}
