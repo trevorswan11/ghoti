@@ -2,21 +2,24 @@
 
 #include <algorithm>
 #include <sstream>
-#include <stdx/profiler.hh>
-#include <stdx/types.hh>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/function.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/types.hh>
 
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/dumper.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
@@ -92,8 +95,8 @@ auto module_t::get_library_imports() const -> std::vector<extern_import> {
     return imports;
 }
 
-auto module_t::mark_import_boundary(const std::function<bool(const function&)>&    fn_is_root,
-                                    const std::function<bool(const global_decl&)>& global_is_root)
+auto module_t::mark_import_boundary(const stdx::function<bool(const function&)>&    fn_is_root,
+                                    const stdx::function<bool(const global_decl&)>& global_is_root)
     -> void {
     const auto fns{std::ranges::stable_partition(
         functions_, [&](gsl::not_null<function*> fn) { return fn_is_root(*fn); })};

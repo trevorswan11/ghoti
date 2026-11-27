@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +12,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
+#include <stdx/function.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
@@ -114,10 +114,9 @@ class module_t {
         import_boundary_marked_ = true;
     }
 
-    // Moves the root module's functions and globals ahead of the imported ones, then marks the
-    // split, for a module that wasn't emitted root module first
-    auto mark_import_boundary(const std::function<bool(const function&)>&    fn_is_root,
-                              const std::function<bool(const global_decl&)>& global_is_root)
+    // Moves the root module's functions and globals ahead of the imported ones
+    auto mark_import_boundary(const stdx::function<bool(const function&)>&    fn_is_root,
+                              const stdx::function<bool(const global_decl&)>& global_is_root)
         -> void;
 
     // Drops every unreferenced `extern` decl and every unreachable imported decl

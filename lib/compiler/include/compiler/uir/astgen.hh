@@ -4,8 +4,10 @@
 #include <vector>
 
 #include <gsl/pointers>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 
+#include "compiler/ast/id.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/error.hh"
