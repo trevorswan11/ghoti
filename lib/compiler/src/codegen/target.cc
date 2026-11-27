@@ -35,6 +35,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
+#include <llvm/TargetParser/ARMTargetParser.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/SubtargetFeature.h>
 #include <llvm/TargetParser/Triple.h>
@@ -421,6 +422,14 @@ struct machine_baseline {
     return {llvm::sys::getHostCPUName().str(), std::move(features), {}};
 }
 
+// The FPU a hard-float ARM ABI assumes: an unversioned triple is the armhf distros' ARMv7-A with
+// VFPv3-D16 and no NEON, a v7 or later one VFPv3-D16, and an older one (ARMv6 Raspbian) VFPv2
+[[nodiscard]] auto arm_hard_float_defaults(const llvm::Triple& triple) -> std::string_view {
+    const auto version{llvm::ARM::parseArchVersion(triple.getArchName())};
+    if (version == 0) { return "+armv7-a,+vfp3d16,-neon,-d32"; }
+    return version >= 7 ? "+vfp3d16" : "+vfp2";
+}
+
 [[nodiscard]] auto machine_baseline_for(const llvm::Triple& triple, const target_options& options)
     -> machine_baseline {
     if (options.cpu == "native") {
@@ -446,6 +455,14 @@ struct machine_baseline {
         base.cpu      = triple.isRISCV64() ? "generic-rv64" : "generic-rv32";
         base.features = with_defaults("+m,+a,+f,+d,+c");
         base.abi      = triple.isRISCV64() ? "lp64d" : "ilp32d";
+        break;
+    // A hard-float ABI passes floats in VFP registers, which a bare `arm` triple's ARMv4 lacks
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+        if (!triple.isHardFloatABI()) { break; }
+        base.features = with_defaults(arm_hard_float_defaults(triple));
         break;
     default: break;
     }

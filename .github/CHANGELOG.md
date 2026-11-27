@@ -1075,6 +1075,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - An error in a declaration nothing uses no longer fails the build; `--check-all` analyzes every declaration, as `ghoti analyze` and the LSP always do
     - A `pub` function no root reaches isn't compiled into an object or library; `@export` it to keep its symbol
     - An executable's `main` must still be `pub`, unless a function is exported as `main`
+- Fixed: a hard-float ARM target (`arm-linux-gnueabihf`, `-musleabihf`, `-eabihf`) with the default CPU passed floats in integer registers, so it couldn't call or be called by hard-float code (#439)
+    - With the default CPU, an unversioned triple now targets the armhf distros' baseline: ARMv7-A with VFPv3-D16 and no NEON
+    - A v7 or later triple gets VFPv3-D16, and an older one, like ARMv6 Raspbian, VFPv2
 - Fixed `GHOTI_STDLIB`, `GHOTI_START`, and `GHOTI_COMPILER_RT` being ignored when their value is quoted, as cmd.exe's `set VAR="..."` leaves it, which silently fell back to the `lib` next to the executable (#420)
     - Relative values are resolved against the working directory
 

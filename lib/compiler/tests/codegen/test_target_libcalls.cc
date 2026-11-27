@@ -145,6 +145,21 @@ TEST_CASE("RISC-V Linux defaults to RV64GC with the hard-float ABI") {
     CHECK(elf.contains("__muldf3"));
 }
 
+TEST_CASE("Hard-float ARM passes floats in VFP registers (#439)") {
+    constexpr std::string_view source{R"(
+        export const add = fn(a: f32, b: f64): f64 { return @floatCast(f64, a) + b; };
+    )"};
+    const auto hard{emit_for(source, "arm-unknown-linux-gnueabihf", codegen::opt_level::O2, true)};
+    CHECK(hard.contains("vadd.f64\td0"));
+    CHECK(hard.contains("s0"));
+    CHECK_FALSE(hard.contains("__aeabi_dadd"));
+    CHECK_FALSE(hard.contains(".fpu\tneon"));
+
+    // The soft-float ABI still passes them in core registers and calls the runtime
+    const auto soft{emit_for(source, "arm-unknown-linux-gnueabi", codegen::opt_level::O2, true)};
+    CHECK(soft.contains("__aeabi_dadd"));
+}
+
 TEST_CASE("A big-endian arch is its base arch with a big endian") {
     const auto [triple, arch]{GENERATE(std::pair{"armebv7-unknown-linux-gnueabihf", "arm"},
                                        std::pair{"thumbeb-none-eabi", "thumb"},
