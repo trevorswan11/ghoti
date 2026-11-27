@@ -50,6 +50,9 @@ namespace ghoti::uir::sema {
 
 namespace gs = ::ghoti::sema;
 
+// The prelude function a program may override to handle panics
+constexpr std::string_view PANIC_HANDLER{"panic_handler"};
+
 // Why an analysis step stopped
 enum class stop : u8 {
     POISON,      // A reported error
@@ -1134,6 +1137,10 @@ class compilation {
                                      const stdx::option<body_ref>& body,
                                      const operand& value) -> stdx::option<gs::type&>;
     auto               drain_queue() -> void;
+    // A module-level declaration a lazy build analyzes whether or not anything uses it
+    [[nodiscard]] auto is_lazy_root(const unit& u, const decl& d) const -> bool;
+    // Reports an executable's `main` that isn't `pub`
+    auto check_main_visibility() -> void;
     [[nodiscard]] auto analyze_body(instance& fn) -> result<void>;
     // A declaration whose whole value is `@compileError(...)`, which fires where it is used
     [[nodiscard]] auto is_deferred_error(const unit& u, const decl& d) const -> bool;

@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -273,6 +274,55 @@ TEST_CASE("build_exe command execution") {
         CHECK(cmd.get_opts().library_paths.size() == 2);
         CHECK(cmd.get_opts().libraries.size() == 2);
     }
+}
+
+TEST_CASE("build_exe analyzes only what main reaches unless --check-all is given") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_exe_lazy.gh"};
+    tempfile            exe_file{"test_exe_lazy_out"};
+
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, R"(
+            const unused = fn(): i32 {{ return true; }};
+            pub const main = fn(): i32 {{ return 0; }};
+        )");
+    }
+
+    SECTION("An unused declaration's error doesn't stop the build") {
+        std::ostringstream errors;
+        cmd::build_exe     cmd{{.input_path = src_file, .output_path = exe_file}, errors};
+        REQUIRE(cmd.execute());
+        CHECK(errors.view().empty());
+    }
+
+    SECTION("--check-all reports it") {
+        std::ostringstream errors;
+        cmd::build_exe     cmd{{.input_path = src_file, .output_path = exe_file, .check_all = true},
+                               errors};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+        CHECK(errors.view().contains("TYPE_MISMATCH"));
+    }
+}
+
+TEST_CASE("build_exe reports an error in what main reaches") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_exe_lazy_used.gh"};
+    tempfile            exe_file{"test_exe_lazy_used_out"};
+
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, R"(
+            const helper = fn(): i32 {{ return true; }};
+            const middle = fn(): i32 {{ return helper(); }};
+            pub const main = fn(): i32 {{ return middle(); }};
+        )");
+    }
+
+    std::ostringstream errors;
+    cmd::build_exe     cmd{{.input_path = src_file, .output_path = exe_file}, errors};
+    CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+    CHECK(errors.view().contains("TYPE_MISMATCH"));
 }
 
 } // namespace ghoti::tests

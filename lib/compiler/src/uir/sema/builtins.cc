@@ -1081,7 +1081,7 @@ auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool
     }
 
     // The handler is emitted for the call codegen lowers the builtin to
-    DISCARD(TRY(comp_.prelude_function(verify ? "panic_handler" : "assert_handler", u_, src)));
+    DISCARD(TRY(comp_.prelude_function(verify ? PANIC_HANDLER : "assert_handler", u_, src)));
     const auto checked{TRY(condition(cond, src))};
 
     auto&      pool{comp_.constants()};

@@ -122,6 +122,7 @@ auto compilation::run() -> outcome {
     PROFILE_FUNCTION();
     analyze_roots();
     if (!stopped_at_) { drain_queue(); }
+    if (!stopped_at_) { check_main_visibility(); }
     apply_exports();
 
     outcome out{
@@ -150,7 +151,6 @@ auto compilation::analyze_roots() -> void {
         }
     }
 
-    // TODO: Every non-generic declaration of every module is a root until lazy builds land
     const auto tested{ctx_.testing ? test_units() : std::vector<bool>(units_.size(), false)};
     for (const auto& u : units_) {
         if (prelude_unit_ && u.index == *prelude_unit_) { continue; }
@@ -159,9 +159,10 @@ auto compilation::analyze_roots() -> void {
             switch (d.kind) {
             case decl_kind::VALUE: {
                 // A declaration that is only `@compileError(...)` reports where it is used
-                if (is_deferred_error(u, d)) { break; }
+                if (is_deferred_error(u, d) || (!opts_.check_all && !is_lazy_root(u, d))) { break; }
+
                 const auto value{analyze_decl(u, decl, *d.node)};
-                if (!value) { break; }
+                if (!value || !opts_.check_all) { break; }
                 if (const auto type{declared_type(u, d.value_body, *value)}) {
                     analyze_members(u, *type);
                 }
@@ -172,7 +173,9 @@ auto compilation::analyze_roots() -> void {
             case decl_kind::TEST:
                 if (ctx_.testing && tested[u.index]) { analyze_test(u, decl); }
                 break;
-            case decl_kind::IMPL:     analyze_impl_roots(u, decl); break;
+            case decl_kind::IMPL:
+                if (opts_.check_all) { analyze_impl_roots(u, decl); }
+                break;
             case decl_kind::COMPTIME: {
                 // A top-level statement is checked but never run
                 const auto body{u.uir->body(d.value_body)};
@@ -190,6 +193,37 @@ auto compilation::analyze_roots() -> void {
 
             if (stopped_at_) { return; }
         }
+    }
+}
+
+auto compilation::is_lazy_root(const unit& u, const decl& d) const -> bool {
+    // Top-level statements stay roots, since `@export` is written in them
+    if (d.has(decl_flags::EXPORT)) { return true; }
+    if (!is_root(u) || d.owner) { return false; }
+    const auto name{u.uir->string(d.name)};
+    return name == ctx_.user_main_name || name == PANIC_HANDLER;
+}
+
+auto compilation::check_main_visibility() -> void {
+    // Only an executable's `main` must be `pub`, and one exported as `main` needn't be
+    if (ctx_.testing || !start_unit() || root_unit().source->is_start) { return; }
+    const bool exported{std::ranges::any_of(
+        exports_, [](const function_export& e) { return e.name == "main" && !e.from_start; })};
+    if (exported) { return; }
+
+    const auto& u{root_unit()};
+    for (const auto decl : u.uir->root_namespace().decls) {
+        const auto& d{u.uir->decl_at(decl)};
+        if (d.kind != decl_kind::VALUE || d.owner || u.uir->string(d.name) != ctx_.user_main_name ||
+            d.has(decl_flags::PUBLIC)) {
+            continue;
+        }
+
+        DISCARD(report(u,
+                       source{*d.node},
+                       gs::error::TYPE_MISMATCH,
+                       fmt::format("'{}' function must be declared 'pub'", ctx_.user_main_name)));
+        return;
     }
 }
 

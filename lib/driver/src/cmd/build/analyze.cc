@@ -14,6 +14,8 @@ namespace ghoti::cmd {
 auto analyze_cmd::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
+    // Checking a program covers every declaration, as the LSP does
+    opts_.check_all = true;
     build::compilation compilation{opts_, error_stream_};
     auto [module, gir_mod]{TRY(compilation.analyze(as_test_))};
     auto& analyzer{compilation.get_analyzer()};

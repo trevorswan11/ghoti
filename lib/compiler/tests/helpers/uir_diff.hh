@@ -33,6 +33,8 @@ struct pipeline_settings {
     sema::deprecation_policy deprecated_policy{sema::deprecation_policy::WARN};
     // Records names and types into the modules' LSP tables, as the language server asks
     bool index{false};
+    // Every declaration is analyzed, not only what the program's roots reach
+    bool check_all{true};
 };
 
 enum class uir_diff_status : u8 {

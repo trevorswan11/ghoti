@@ -112,7 +112,7 @@ const max_int = std.math.max_int;
     }
 
     // 8. Dupe slice
-    let original = [5uz]mut i32{ 10, 20, 30, 40, 50 };
+    let mut original = [5uz]mut i32{ 10, 20, 30, 40, 50 };
     match (allocator.dupe(i32, original)) {
         .ok => |dup| {
             defer allocator.free(dup);

@@ -57,9 +57,7 @@ pub fn build(b: *std.Build) !void {
     }
 
     const Sema = enum { legacy, uir };
-    const uir = b.option(bool, "uir", "Compile in the `--sema=uir` flag (default: false)") orelse false;
-    const test_sema = b.option(Sema, "sema", "The pipeline black-box tests run through (default: legacy)") orelse .legacy;
-    if (uir or test_sema == .uir) compiler_flags.appendSlice(&.{"-DGHOTI_UIR"});
+    const test_sema = b.option(Sema, "sema", "The pipeline black-box tests run through (default: uir)") orelse .uir;
     if (test_sema == .uir) compiler_flags.appendSlice(&.{"-DGHOTI_TEST_SEMA_UIR"});
 
     const install_tests_only = b.option(

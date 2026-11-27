@@ -292,6 +292,7 @@ TEST_CASE("build_obj command execution") {
                 pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
+                @export(add, .{{ .name = "add" }});
             )");
         }
 
@@ -356,9 +357,10 @@ TEST_CASE("build_obj reports an assembler error in inline asm instead of exiting
     {
         std::ofstream out{src_file.path};
         fmt::print(out, R"(
-            pub const f = fn(): void {{
+            const f = fn(): void {{
                 asm {{ template: "definitely_not_an_instruction", options: (volatile) }};
             }};
+            @export(f, .{{ .name = "f" }});
         )");
     }
 
