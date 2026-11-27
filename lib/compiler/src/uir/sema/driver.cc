@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -18,6 +20,7 @@
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/gir/verifier.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
@@ -122,7 +125,10 @@ auto compilation::run() -> outcome {
     PROFILE_FUNCTION();
     analyze_roots();
     if (!stopped_at_) { drain_queue(); }
-    if (!stopped_at_) { check_main_visibility(); }
+    if (!stopped_at_) {
+        check_main_visibility();
+        check_call_modifiers();
+    }
     apply_exports();
 
     outcome out{
@@ -139,6 +145,13 @@ auto compilation::run() -> outcome {
     }
 
     mark_root_items();
+#ifdef GHOTI_DEBUG
+    // Sema builds well-formed GIR by construction, so a violation is a compiler bug
+    if (const auto found{gir::verify(gir_)}; !found.empty()) {
+        fmt::print(stderr, "GIR verifier:\n{}", gir::format_violations(found));
+        std::abort();
+    }
+#endif
     out.gir.emplace(std::move(gir_));
     return out;
 }

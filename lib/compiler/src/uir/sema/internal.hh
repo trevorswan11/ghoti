@@ -713,6 +713,14 @@ struct function_export {
     bool from_start{false};
 };
 
+// A call `@call` gave a modifier, checked once every function it can name is analyzed
+struct modified_call {
+    gsl::not_null<const unit*>       owner;
+    source                           at;
+    gsl::not_null<gir::function*>    caller;
+    gsl::not_null<gir::instruction*> call;
+};
+
 class compilation {
   public:
     // What a speculative compile-time evaluation could leave behind, so it can be undone
@@ -953,6 +961,7 @@ class compilation {
     // Whether `u` is the program's root module, whose own items are kept whatever reaches them
     [[nodiscard]] auto is_root(const unit& u) const noexcept -> bool;
     auto note_root_global(std::string name) -> void { root_globals_.emplace(std::move(name)); }
+    auto note_modified_call(modified_call call) -> void { modified_calls_.emplace_back(call); }
     // Moves the root module's functions and globals first so pruning keeps them
     auto mark_root_items() -> void;
     // The function instance emitted under `symbol`
@@ -1141,6 +1150,9 @@ class compilation {
     [[nodiscard]] auto is_lazy_root(const unit& u, const decl& d) const -> bool;
     // Reports an executable's `main` that isn't `pub`
     auto check_main_visibility() -> void;
+    // Reports each `@call` modifier its call can't honor
+    auto check_call_modifiers() -> void;
+    auto check_call_modifier(const modified_call& site) -> void;
     [[nodiscard]] auto analyze_body(instance& fn) -> result<void>;
     // A declaration whose whole value is `@compileError(...)`, which fires where it is used
     [[nodiscard]] auto is_deferred_error(const unit& u, const decl& d) const -> bool;
@@ -1186,6 +1198,8 @@ class compilation {
     u32                                                                 ptr_bits_;
     std::vector<comptime_alloc>                                         allocs_;
     std::vector<comptime_frame>                                         calls_;
+    // How many of `calls_` began outside the declaration being resolved
+    usize call_floor_{0};
     ankerl::unordered_dense::map<memo_key, memo_entry, memo_key_hash>   memo_;
     eval_limits                                                         limits_;
     stdx::option<runtime_site>                                          runtime_site_;
@@ -1210,6 +1224,7 @@ class compilation {
     ankerl::unordered_dense::map<std::string, std::vector<std::pair<u32, inst_id>>>
         generic_versions_;
     std::vector<function_export> exports_;
+    std::vector<modified_call>   modified_calls_;
     u32                          tests_{0};
     u32                          anonymous_tests_{0};
 };

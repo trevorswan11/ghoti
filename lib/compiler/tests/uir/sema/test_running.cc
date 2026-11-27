@@ -37,6 +37,42 @@ TEST_CASE("A global holding a function as a callable is built with its trampolin
     )") == (2 + 3) + (4 + 5) + 10 + 12);
 }
 
+TEST_CASE("A top-level type first reached in a compile-time call isn't that call's", "[uir]") {
+    // Both types' methods were once named for `pick`, and the runtime calls met in one symbol
+    CHECK(helpers::uir_compile_and_run(R"(
+        const S = struct {
+            pub const get = fn(&self): i32 { return 1; };
+        };
+        const T = struct {
+            pub const get = fn(&self): i32 { return 2; };
+        };
+        const pick = fn(): comptime_int {
+            const s: S = .{};
+            const t: T = .{};
+            return s.get() + t.get();
+        };
+        pub const main = fn(): i32 {
+            const n = pick();
+            let s: S = .{};
+            let t: T = .{};
+            return s.get() * 10 + t.get() + n;
+        };
+    )") == 12 + 3);
+
+    // One function passed to a compile-time call twice stays one function
+    DISCARD(helpers::uir_accepted(R"(
+        const Order = enum : i32 { lt = -1, eq = 0, gt = 1 };
+        const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
+            @export(func, .{ .name = name, .linkage = .weak, .visibility = .hidden });
+        };
+        const ge = fn(a: i32, b: i32): Order { return if (a < b) .lt else .gt; };
+        comptime {
+            symbol(ge, "gt");
+            symbol(ge, "ge");
+        }
+    )"));
+}
+
 TEST_CASE("A string spelling a function's symbol is still a string", "[uir]") {
     DISCARD(helpers::uir_accepted(R"(
         const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
