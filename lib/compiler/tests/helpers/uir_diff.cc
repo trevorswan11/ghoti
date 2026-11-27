@@ -427,6 +427,10 @@ constexpr std::array LEGACY_BUG_TESTS{
     std::string_view{"Unary expression resolution"},
     // Two concatenated strings keep the left one's array type
     std::string_view{"Const eval string concatenation and comparison folding"},
+    // A top-level template first reached from another instance's body is named as that
+    // instance's local generic
+    std::string_view{
+        "a template first reached from another template's body stays a top-level function"},
 };
 
 // Tests where the old emitter builds a local `const` aggregate, or a compile-time capture or
@@ -459,12 +463,30 @@ constexpr std::array OLD_SHAPE_TESTS{
     std::string_view{"A `@TypeOf(x)` parameter follows a comptime_int `x`"},
     // A block's range value is copied into one more slot
     std::string_view{"a range nested inside a `for` iterable or subscript is a range value"},
+    // A string literal stored into a `[]u8` element is copied into a mutable stack array first
+    std::string_view{"Array copy of pointer and slice elements still aliases their pointees"},
+    // A `defer` body's captures follow the captures of the code after it, since AstGen lowers
+    // the body at each exit
+    std::string_view{"A generic closure body runs its `defer`s on each return"},
+};
+
+// Tests where the old emitter folds a whole `let` whose initializer is known, which UIR builds
+// at runtime and reads, as the `let` rule decides
+constexpr std::array WHOLE_LET_FOLD_TESTS{
+    std::string_view{"Same-named `const` aggregates in two modules keep their own storage"},
+    std::string_view{"@typeInfo and @Union carry a union's tag enum"},
+    std::string_view{"Range copies and element writes through a range fold at compile time"},
+    std::string_view{"a folded generic member call sees its own instance's `@This()`"},
+    std::string_view{"A union tagged by an enum reads as that enum"},
+    std::string_view{"scoped expressions work as member-access objects and initializer types"},
+    std::string_view{"Vector unary, bitwise, shift, wrapping, and saturating operators"},
 };
 
 [[nodiscard]] auto folds_local_aggregate() -> bool {
     const auto name{Catch::getResultCapture().getCurrentTestName()};
     return std::ranges::contains(FOLDED_LOCAL_AGGREGATE_TESTS, std::string_view{name}) ||
-           std::ranges::contains(OLD_SHAPE_TESTS, std::string_view{name});
+           std::ranges::contains(OLD_SHAPE_TESTS, std::string_view{name}) ||
+           std::ranges::contains(WHOLE_LET_FOLD_TESTS, std::string_view{name});
 }
 
 [[nodiscard]] auto shows_legacy_bug() -> bool {
@@ -501,6 +523,7 @@ auto configure(sema::analyzer& analyzer, const pipeline_settings& settings) -> v
     analyzer.set_testing(settings.testing);
     analyzer.set_optimize_mode(settings.build_mode);
     analyzer.set_entry_point(settings.entry && !settings.testing);
+    analyzer.set_deprecation_policy(settings.deprecated_policy);
 }
 
 [[nodiscard]] auto make_manager(mod::source_loader& loader, library_list libraries)

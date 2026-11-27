@@ -40,6 +40,8 @@ struct outcome {
     stdx::option<gir::module_t> gir;
     ghoti::sema::diagnostics    diagnostics;
     stdx::option<unsupported>   stopped_at;
+    // Warnings, which leave the program's GIR in place
+    ghoti::sema::diagnostics warnings{};
     // The comptime value of each root-module declaration that resolved to one, by name
     ankerl::unordered_dense::map<std::string, ip::index> root_values{};
 

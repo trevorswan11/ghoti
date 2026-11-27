@@ -263,7 +263,11 @@ auto analyzer::field_index(gs::type& type, std::string_view name, const source& 
         if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}) { return ut->field_names; }
         return {};
     }()};
-    if (const auto found{index_of(names, name)}) { return *found; }
+    if (const auto found{index_of(names, name)}) {
+        warn_deprecated_field(type, *found, src);
+        return *found;
+    }
+
     return comp_.report(u_,
                         src,
                         gs::error::UNDECLARED_IDENTIFIER,
@@ -362,7 +366,18 @@ auto analyzer::analyze_field_val(inst_id inst) -> result<operand> {
     auto       rec{record(inst)};
     const auto object_ref{*rec.ref_field()};
     const auto name{rec.str_field()};
-    return field_value(object_ref, name, src_of(inst));
+    const auto value{TRY(field_value(object_ref, name, src_of(inst)))};
+
+    // A module's `@[testing]` function may only be named to be called
+    const auto object{TRY(resolve(object_ref, src_of(inst)))};
+    if (const auto m{object.as_opt<module_ref>()}) {
+        const auto decl{module_decl(*m, name)};
+        if (auto testing{decl ? testing_name(*m->target, *decl) : stdx::none}) {
+            testing_refs_.insert_or_assign(inst, std::move(*testing));
+        }
+    }
+
+    return value;
 }
 
 auto analyzer::field_value(ref object_ref, std::string_view name, const source& src, bool checked)

@@ -29,7 +29,8 @@ struct pipeline_settings {
     bool                    testing{false};
     sema::optimize_mode     build_mode{sema::optimize_mode::DEBUG};
     // The program's entry code is attached, for an executable or, with `testing`, its tests
-    bool entry{false};
+    bool                     entry{false};
+    sema::deprecation_policy deprecated_policy{sema::deprecation_policy::WARN};
 };
 
 enum class uir_diff_status : u8 {

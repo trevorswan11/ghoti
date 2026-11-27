@@ -252,7 +252,12 @@ auto astgen::lower_pending(const pending_decl& item) -> void {
 
 auto astgen::lower_decl_bodies(decl_id id, const ast::decl_stmt& decl) -> void {
     functions_.emplace_back();
-    const auto pop_state{gsl::finally([this] { functions_.pop_back(); })};
+    const bool outer_deprecated{
+        std::exchange(deprecated_scope_, out_.decl_at(id).has(decl_flags::QUIET_DEPRECATION))};
+    const auto pop_state{gsl::finally([this, outer_deprecated] {
+        functions_.pop_back();
+        deprecated_scope_ = outer_deprecated;
+    })};
     const bool initializes_fn{decl.value && decl.value->is<ast::function_expr>()};
 
     std::vector<inst_id> type_instructions;
@@ -315,6 +320,10 @@ auto astgen::add_value_decl(const ast::decl_stmt& decl,
         .flags = decl_flags_of(decl),
         .owner = owner,
     };
+    if (deprecated_scope_ ||
+        (decl.attributes && decl.attributes->find(ast::attribute_kind::DEPRECATED))) {
+        d.flags |= decl_flags::QUIET_DEPRECATION;
+    }
     if (decl.extern_target) {
         d.extern_target = out_.intern(ast_.get_as<ast::string_expr>(*decl.extern_target).value);
     }

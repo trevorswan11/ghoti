@@ -494,6 +494,11 @@ auto analyzer::resolve(ref r, const source& src) -> result<operand> {
         return comp_.unsupported(u_, src, "a value from another body");
     }
 
+    // A `@[testing]` function may only be named to be called
+    if (!testing_refs_.empty() && resolving_callee_ != inst) {
+        TRY(check_testing_ref(inst, false));
+    }
+
     // A signature's runtime parameter is a placeholder whose type alone `@TypeOf` may ask
     if (only_types_ && found->second.is<gir::value>()) { return found->second; }
 

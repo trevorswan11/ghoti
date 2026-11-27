@@ -132,6 +132,18 @@ TEST_CASE("analyze --sema=uir runs UIR's Sema") {
         CHECK(errors.view().contains("RETURN_TYPE_MISMATCH"));
     }
 
+    SECTION("A deprecated use is printed as a warning, which leaves the analysis passing") {
+        tempfile src_file{"test_analyze_uir_deprecated.gh"};
+        write_source(src_file,
+                     "@[deprecated(\"use g\")] const f = fn(): i32 { return 1; };\n"
+                     "pub const main = fn(): i32 { return f(); };\n");
+
+        std::ostringstream errors;
+        cmd::analyze_cmd   cmd{{.input_path = src_file, .sema_uir = true}, false, errors};
+        REQUIRE(cmd.execute());
+        CHECK(errors.view().contains("'f' is deprecated: use g"));
+    }
+
     SECTION("A construct UIR Sema doesn't analyze yet is named, with where it is") {
         tempfile src_file{"test_analyze_uir_embed.gh"};
         write_source(src_file, "pub const f = fn(): usize { return @embed(\"a\", \"b\").len; };\n");

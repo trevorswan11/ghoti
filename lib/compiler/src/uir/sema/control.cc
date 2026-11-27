@@ -173,18 +173,37 @@ auto analyzer::arm_address(const incoming& arm, const source& src) -> result<gir
     }
 
     // A value the arm just loaded is sliced where it was loaded from
-    auto&      insts{gir_fn_->get_segment(arm.seg)->get_instructions()};
-    const auto v{array.as_opt<gir::value>()};
-    const auto last{insts.size() >= 2 ? insts.end() - 2 : insts.end()};
-    if (v && last != insts.end() && (*last)->kind == gir::instruction_kind::LOAD &&
-        (*last)->result == v->data && !(*last)->operands.empty() &&
-        (*last)->operands.front().type) {
-        const auto from{(*last)->operands.front().data};
-        insts.erase(last);
-        return gir::value{from, type};
+    if (const auto v{array.as_opt<gir::value>()}) {
+        if (const auto from{unload(*gir_fn_->get_segment(arm.seg), *v, type)}) { return *from; }
     }
 
     return spill(TRY(as_runtime(array, src)), type, false).address;
+}
+
+auto analyzer::unload(gir::segment& seg, const gir::value& v, gs::type& type, bool only_global)
+    -> stdx::option<gir::value> {
+    auto&      insts{seg.get_instructions()};
+    const auto skip{seg.has_terminator() ? usize{2} : usize{1}};
+    if (insts.size() < skip) { return stdx::none; }
+    const auto last{insts.end() - static_cast<std::ptrdiff_t>(skip)};
+    if ((*last)->kind != gir::instruction_kind::LOAD || (*last)->result != v.data ||
+        (*last)->operands.empty() || !(*last)->operands.front().type) {
+        return stdx::none;
+    }
+
+    // A global's address comes right before the load that reads it
+    if (only_global) {
+        if (last == insts.begin()) { return stdx::none; }
+        const auto& address{**std::prev(last)};
+        if (address.kind != gir::instruction_kind::GLOBAL_ADDR ||
+            address.result != (*last)->operands.front().data) {
+            return stdx::none;
+        }
+    }
+
+    const auto from{(*last)->operands.front().data};
+    insts.erase(last);
+    return gir::value{from, type};
 }
 
 auto analyzer::array_slice(const incoming& arm, const source& src) -> result<operand> {

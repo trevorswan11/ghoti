@@ -327,6 +327,8 @@ enum class decl_flags : u32 {
     MUT         = 1U << 7,
     COMPTIME    = 1U << 8,
     SYNTHESIZED = 1U << 9,
+    // The declaration or one enclosing it is `@[deprecated]`
+    QUIET_DEPRECATION = 1U << 10,
 };
 MAKE_ENUM_OPERATORS(decl_flags)
 

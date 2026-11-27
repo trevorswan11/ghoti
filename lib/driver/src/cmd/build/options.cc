@@ -338,6 +338,17 @@ auto compilation::analyze_uir(gsl::span<const uir::lowered_module> lowered,
     ctx.testing = ctx.testing || for_test_executable;
     auto root{*manager_.try_get_file_module(opts_.input_path)};
     auto out{uir::sema::analyze(ctx, {.root = root.get(), .modules = lowered})};
+
+    // Each warning is its own module's, printed before any error
+    for (auto& w : out.warnings) {
+        auto& owner{
+            w.origin()
+                .and_then([&](const mod::module_t& m) { return manager_.find_file_module(m.path); })
+                .value_or(*root)};
+        owner.warnings.emplace_back(std::move(w));
+    }
+    manager_.print_all_warnings(error_stream_);
+
     if (out.stopped_at) {
         const auto& at{*out.stopped_at};
         const auto  where{at.where ? fmt::format("{}:{}:{}",

@@ -64,7 +64,19 @@ auto analyzer::analyze_import(inst_id inst) -> result<operand> {
 
 auto analyzer::module_member(const module_ref& m, std::string_view name, const source& src)
     -> result<operand> {
-    return comp_.module_member(m, name, u_, src);
+    const auto value{TRY(comp_.module_member(m, name, u_, src))};
+    if (const auto decl{module_decl(m, name)}) { warn_deprecated_decl(*m.target, *decl, src); }
+    return value;
+}
+
+auto analyzer::module_decl(const module_ref& m, std::string_view name) const
+    -> stdx::option<decl_id> {
+    const auto& uir{*m.target->uir};
+    for (const auto decl : uir.root_namespace().decls) {
+        if (uir.string(uir.decl_at(decl).name) == name) { return decl; }
+    }
+
+    return stdx::none;
 }
 
 } // namespace ghoti::uir::sema

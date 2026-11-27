@@ -13,6 +13,9 @@
 #include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
@@ -319,6 +322,101 @@ auto analyzer::report_misplaced(const attribute_item& item, const attribute_site
                          item.src,
                          gs::error::ILLEGAL_ATTRIBUTE,
                          fmt::format("Attribute '{}' cannot be applied to {}", name, what)));
+}
+
+auto analyzer::quiet_deprecation() const -> bool {
+    if (fn_) { return fn_->owner->uir->decl_at(fn_->decl).has(decl_flags::QUIET_DEPRECATION); }
+    const auto decl{declaring_ ? declaring_ : statement_};
+    return decl && mod().decl_at(*decl).has(decl_flags::QUIET_DEPRECATION);
+}
+
+auto analyzer::warn_deprecated(const mod::module_t&                     owner,
+                               const stdx::option<ast::attribute_list>& attributes,
+                               std::string_view                         name,
+                               const source&                            src) -> void {
+    const auto deprecation{attributes ? attributes->find(attribute_kind::DEPRECATED)
+                                      : stdx::option<const ast::attribute&>{}};
+    if (!deprecation || quiet_deprecation()) { return; }
+
+    // A message that isn't a string literal was already reported at the attribute itself
+    std::string message{fmt::format("'{}' is deprecated", name)};
+    if (const auto note{deprecation->args.empty()
+                            ? stdx::none
+                            : owner.ast.get_as_opt<ast::string_expr>(deprecation->args.front())}) {
+        message += fmt::format(": {}", note->value);
+    }
+
+    comp_.report_deprecated(u_, src, std::move(message));
+}
+
+auto analyzer::warn_deprecated_decl(const unit& owner, decl_id decl, const source& src) -> void {
+    const auto& d{owner.uir->decl_at(decl)};
+    if (!d.node) { return; }
+    if (const auto stmt{owner.source->ast.get_as_opt<ast::decl_stmt>(*d.node)}) {
+        warn_deprecated(*owner.source, stmt->attributes, owner.uir->string(d.name), src);
+    }
+}
+
+auto analyzer::warn_deprecated_field(gs::type& type, usize index, const source& src) -> void {
+    if (const auto st{type.get_data().as_opt<gs::types::struct_t>()};
+        st && index < st->ast_fields.size()) {
+        warn_deprecated(
+            st->enclosing, st->ast_fields[index].attributes, st->field_names[index], src);
+    } else if (const auto ut{type.get_data().as_opt<gs::types::union_t>()};
+               ut && index < ut->ast_fields.size()) {
+        warn_deprecated(
+            ut->enclosing, ut->ast_fields[index].attributes, ut->field_names[index], src);
+    }
+}
+
+auto analyzer::in_testing_context() const -> bool {
+    return fn_ && (fn_->is_test || (fn_->attributes && fn_->attributes->testing));
+}
+
+auto analyzer::testing_name(const unit& owner, decl_id decl) -> stdx::option<std::string> {
+    const auto& d{owner.uir->decl_at(decl)};
+    if (!d.node) { return stdx::none; }
+    const auto& tree{owner.source->ast};
+    const auto  stmt{tree.get_as_opt<ast::decl_stmt>(*d.node)};
+    if (!stmt) { return stdx::none; }
+
+    // The mark may be on the declaration or on the literal it is initialized with
+    const auto marked{[](const stdx::option<ast::attribute_list>& attributes) {
+        return attributes && attributes->find(attribute_kind::TESTING);
+    }};
+    const auto literal{stmt->value ? tree.get_as_opt<ast::function_expr>(*stmt->value)
+                                   : stdx::option<const ast::function_expr&>{}};
+    if (!marked(stmt->attributes) && !(literal && marked(literal->attributes))) {
+        return stdx::none;
+    }
+
+    return std::string{owner.uir->string(d.name)};
+}
+
+auto analyzer::check_testing_use(std::string_view name, bool called, const source& src)
+    -> result<void> {
+    if (!called) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TESTING_FN_OUTSIDE_TEST,
+            fmt::format("'{}' is a `@[testing]` function, which can only be called directly",
+                        name));
+    }
+
+    if (in_testing_context()) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::TESTING_FN_OUTSIDE_TEST,
+                        fmt::format("'{}' is a `@[testing]` function, so only a test or another "
+                                    "`@[testing]` function may call it",
+                                    name));
+}
+
+auto analyzer::check_testing_ref(inst_id inst, bool called) -> result<void> {
+    const auto found{testing_refs_.find(inst)};
+    if (found == testing_refs_.end()) { return {}; }
+    return check_testing_use(found->second, called, src_of(inst));
 }
 
 } // namespace ghoti::uir::sema

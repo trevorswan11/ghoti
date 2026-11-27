@@ -271,6 +271,19 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }
 
         if (!comptime_value(op)) {
+            // A global just read is sliced where it lives, not through a copy
+            const auto v{op.as_opt<gir::value>()};
+            const bool bound{v && std::ranges::any_of(values_, [&](const auto& entry) {
+                                 const auto held{entry.second.template as_opt<gir::value>()};
+                                 const auto t{mod().tag_of(entry.first)};
+                                 return held && *held == *v && (is_binding(t) || t == tag::load);
+                             })};
+            if (const auto stored{v && !bound ? unload(*builder_.get_segment(), *v, from, true)
+                                              : stdx::none}) {
+                TRY(require_runtime(src));
+                return array_as_slice(*stored, from, target);
+            }
+
             const auto base{TRY(operand_address(op, src))};
             return array_as_slice(base.address, from, target);
         }

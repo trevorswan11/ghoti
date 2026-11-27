@@ -1015,6 +1015,13 @@ auto analyzer::analyze_decl_val(inst_id inst, bool as_place) -> result<operand> 
     const bool in_scope{scope_ && d.owner == scope_->inst};
     const auto value{TRY(in_scope ? comp_.analyze_member(*scope_, decl, src)
                                   : comp_.analyze_decl(u_, decl, src))};
+    warn_deprecated_decl(u_, decl, src);
+    if (value.is<function_ref>() || value.is<generic_ref>()) {
+        if (auto name{testing_name(u_, decl)}) {
+            testing_refs_.insert_or_assign(inst, std::move(*name));
+        }
+    }
+
     return declaration_use(value, as_place, src);
 }
 
