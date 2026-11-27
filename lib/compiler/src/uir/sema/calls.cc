@@ -502,8 +502,7 @@ auto analyzer::call_with(instance&            target,
 
 namespace {
 
-// Whether `musttail` can replace a call from `caller` to `callee`: the same parameters, result, and
-// calling convention
+// Whether `musttail` can replace a call from `caller` to `callee`
 [[nodiscard]] auto same_prototype(const gs::types::function& caller,
                                   const gs::types::function& callee) -> bool {
     if (caller.params.size() != callee.params.size() || caller.is_variadic != callee.is_variadic ||
