@@ -36,7 +36,14 @@ pub fn build(b: *std.Build) !void {
     const cdb_gen: *CDBGenerator = .init(b);
 
     var compiler_flags: stdx.ArrayList([]const u8) = .fromSlice(b, &stdx.utils.base_cxx_flags);
-    compiler_flags.appendSlice(&.{ "-DMAGIC_ENUM_RANGE_MAX=255", "-DREPLXX_STATIC", "-fno-rtti" });
+    compiler_flags.appendSlice(&.{
+        "-DMAGIC_ENUM_RANGE_MAX=255",
+        "-DREPLXX_STATIC",
+        "-fno-rtti",
+        "-DINCBIN_PREFIX=g_",
+        "-DINCBIN_STYLE=1",
+        "-DINCBIN_SILENCE_BITCODE_WARNING",
+    });
     const dist_flags: []const []const u8 = &.{ "-DNDEBUG", "-DGHOTI_DIST" };
 
     var package_flags = compiler_flags.clone();
@@ -332,6 +339,9 @@ fn addArtifacts(b: *std.Build, config: struct {
     const boost_int128 = b.dependency("boost_int128", .{});
     const boost_int128_inc = boost_int128.path("include");
 
+    const incbin = b.dependency("incbin", .{});
+    const incbin_inc = incbin.path(".");
+
     const replxx_dep = replxx.build(b, .{
         .target = target,
         .optimize = config.optimize,
@@ -344,7 +354,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             .target = target,
             .optimize = config.optimize,
             .include_paths = &.{b.path(ProjectPaths.support.inc)},
-            .system_include_paths = &.{boost_int128_inc},
+            .system_include_paths = &.{ boost_int128_inc, incbin_inc },
             .cxx = .{
                 .files = try stdx.utils.collectFiles(b, ProjectPaths.support.src, .{}),
                 .flags = config.cxx_flags,
@@ -375,7 +385,7 @@ fn addArtifacts(b: *std.Build, config: struct {
 
     var compiler_system_includes: stdx.ArrayList(std.Build.LazyPath) = .fromSlice(b, llvm_includes.includes);
     compiler_system_includes.appendSlice(lld_includes.includes);
-    compiler_system_includes.append(boost_int128_inc);
+    compiler_system_includes.appendSlice(&.{ boost_int128_inc, incbin_inc });
     var compiler_config_headers: stdx.ArrayList(*std.Build.Step.ConfigHeader) = .fromSlice(b, llvm_includes.config_headers);
     compiler_config_headers.appendSlice(lld_includes.config_headers);
     compiler_config_headers.append(config_h);
@@ -417,7 +427,7 @@ fn addArtifacts(b: *std.Build, config: struct {
                 b.path(ProjectPaths.compiler.inc),
                 b.path(ProjectPaths.support.inc),
             },
-            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc, incbin_inc },
             .config_headers = &.{config_h},
             .link_libraries = &.{ libcompiler, libstdx, replxx_dep.artifact },
             .cxx = .{
@@ -443,7 +453,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             .files = &.{ProjectPaths.ghoti},
             .flags = config.cxx_flags,
         },
-        .system_include_paths = &.{ cli11_inc, boost_int128_inc },
+        .system_include_paths = &.{ cli11_inc, boost_int128_inc, incbin_inc },
         .link_libraries = &.{ libdriver, libstdx, replxx_dep.artifact },
     }, .{
         .name = "ghoti",
@@ -478,7 +488,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
             .link_libraries = &.{libsupport},
             .config_headers = &.{config_h},
-            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc, incbin_inc },
             .executable_config = .{
                 .name = "support",
                 .behavior = config.behavior orelse .{
@@ -573,7 +583,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
             .fail_on_leak = false,
             .config_headers = &.{config_h},
-            .system_include_paths = &.{ cli11_inc, boost_int128_inc },
+            .system_include_paths = &.{ cli11_inc, boost_int128_inc, incbin_inc },
             .executable_config = .{
                 .name = "driver",
                 .behavior = config.behavior orelse .{
