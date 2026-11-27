@@ -31,6 +31,8 @@ struct pipeline_settings {
     // The program's entry code is attached, for an executable or, with `testing`, its tests
     bool                     entry{false};
     sema::deprecation_policy deprecated_policy{sema::deprecation_policy::WARN};
+    // Records names and types into the modules' LSP tables, as the language server asks
+    bool index{false};
 };
 
 enum class uir_diff_status : u8 {

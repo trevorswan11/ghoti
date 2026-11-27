@@ -51,6 +51,10 @@ struct binding {
     bool                  mutable_decl{false}; // a `let mut` declaration, a place when written
     source_location       at{};
     u64                   seq{0}; // declaration order, which a defer copy's view is cut at
+    // Where the LSP finds a local's declaration: its name, statement, or annotation
+    stdx::option<ast::node_id>          name_node{};
+    stdx::option<ast::node_id>          decl_node{};
+    stdx::option<ast::explicit_type_id> annotation{};
 };
 
 enum class scope_kind : u8 {
@@ -269,6 +273,11 @@ class astgen {
     [[nodiscard]] auto outer_captures(const scope& boundary, source src) -> std::vector<ref>;
 
     // astgen_expr.cc
+    // Records what `use` resolved to for the LSP, or that it is a declared name
+    auto               note_name(source use, const binding& b) -> void;
+    auto               note_declared(ast::node_id                        name,
+                                     stdx::option<ast::node_id>          decl,
+                                     stdx::option<ast::explicit_type_id> annotation) -> void;
     [[nodiscard]] auto expr(ast::expr_handle h) -> ref;
     // None when the operand is absent
     [[nodiscard]] auto optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref>;
@@ -434,6 +443,7 @@ class astgen {
     bool  reading_len_{false}; // lowering the object of a `.len`
     u32   param_reads_{0};     // reads of the current function's own parameters
     bool  deprecated_scope_{false}; // lowering a deprecated declaration or one inside it
+    std::vector<name_use> names_;   // what each resolved name refers to, for the LSP
 };
 
 } // namespace ghoti::uir::detail

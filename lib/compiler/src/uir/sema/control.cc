@@ -79,6 +79,12 @@ auto analyzer::arrive(target& t, const operand& value, const source& src) -> voi
     emit_goto(*t.exit);
 }
 
+auto analyzer::merge_holds_literals(merge_ref m) const -> bool {
+    const auto& first{merges_[m.index].arrivals.front().value};
+    if (const auto inner{first.as_opt<merge_ref>()}) { return merge_holds_literals(*inner); }
+    return is_untyped_literal(first);
+}
+
 auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
                             gir::segment_id              merge,
                             const source&                src) -> result<operand> {
@@ -95,6 +101,17 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     bool all_untyped_literals{true};
     for (const auto& arrival : arrivals) {
         values.emplace_back(arrival.value);
+
+        // An inner merge still waiting for its type waits with this one
+        if (const auto inner{arrival.value.as_opt<merge_ref>()}) {
+            all_void = false;
+            if (merge_holds_literals(*inner)) {
+                all_untyped_constants = false;
+            } else {
+                all_untyped_literals = false;
+            }
+            continue;
+        }
 
         // An untyped literal has no type of its own to check here
         const bool literal{is_untyped_literal(arrival.value)};

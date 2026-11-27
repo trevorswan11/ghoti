@@ -60,7 +60,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
     if (const auto m{op.as_opt<merge_ref>()}) {
         const auto  kind{target.get_kind()};
         const auto& arrivals{merges_[m->index].arrivals};
-        const bool  literals{is_untyped_literal(arrivals.front().value)};
+        const bool  literals{merge_holds_literals(*m)};
         // An inferred cast takes whatever type it meets
         const bool casts{std::ranges::any_of(
             arrivals, [](const incoming& a) { return a.value.is<cast_ref>(); })};

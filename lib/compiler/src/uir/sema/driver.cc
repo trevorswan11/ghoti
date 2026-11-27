@@ -137,6 +137,7 @@ auto compilation::run() -> outcome {
         return out;
     }
 
+    mark_root_items();
     out.gir.emplace(std::move(gir_));
     return out;
 }
@@ -387,6 +388,21 @@ auto compilation::report(const unit&                          u,
     add_call_notes(d);
     diagnostics_.emplace_back(std::move(d));
     return stdx::err{stop::POISON};
+}
+
+auto compilation::is_root(const unit& u) const noexcept -> bool {
+    return u.source.get() == prog_.root.get();
+}
+
+auto compilation::mark_root_items() -> void {
+    ankerl::unordered_dense::set<std::string_view> root_fns;
+    for (const auto fn : instances_) {
+        if (is_root(*fn->owner)) { root_fns.insert(fn->symbol); }
+    }
+
+    gir_.mark_import_boundary(
+        [&](const gir::function& fn) { return root_fns.contains(fn.get_name()); },
+        [&](const gir::global_decl& g) { return root_globals_.contains(g.name); });
 }
 
 auto compilation::function_named(std::string_view symbol) -> stdx::option<instance&> {

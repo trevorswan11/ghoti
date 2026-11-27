@@ -30,9 +30,10 @@ namespace ghoti::lsp {
 analysis_snapshot::analysis_snapshot(u64                 revision,
                                      mod::overlay_loader files,
                                      std::ostream&       error_stream,
-                                     mod::parse_cache&   cache) noexcept
+                                     mod::parse_cache&   cache,
+                                     bool                sema_uir) noexcept
     : revision_{revision}, files_{std::move(files)},
-      session_{stdx::make_box<analysis_session>(files_, error_stream, cache)} {}
+      session_{stdx::make_box<analysis_session>(files_, error_stream, cache, sema_uir)} {}
 
 auto analysis_snapshot::build(analysis_inputs                        inputs,
                               mod::parse_cache&                      cache,
@@ -43,7 +44,7 @@ auto analysis_snapshot::build(analysis_inputs                        inputs,
     const auto cancelled{[cancel] { return cancel && cancel->load(std::memory_order_relaxed); }};
 
     auto  snapshot{stdx::make_box<analysis_snapshot>(
-        inputs.revision, std::move(inputs.files), error_stream, cache)};
+        inputs.revision, std::move(inputs.files), error_stream, cache, inputs.sema_uir)};
     auto& session{*snapshot->session_};
     if (cancel) { session.get_analyzer().set_cancellation(*cancel); }
 

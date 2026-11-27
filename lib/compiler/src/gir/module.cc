@@ -92,6 +92,24 @@ auto module_t::get_library_imports() const -> std::vector<extern_import> {
     return imports;
 }
 
+auto module_t::mark_import_boundary(const std::function<bool(const function&)>&    fn_is_root,
+                                    const std::function<bool(const global_decl&)>& global_is_root)
+    -> void {
+    const auto fns{std::ranges::stable_partition(
+        functions_, [&](gsl::not_null<function*> fn) { return fn_is_root(*fn); })};
+    const auto globals{std::ranges::stable_partition(
+        globals_, [&](gsl::not_null<global_decl*> g) { return global_is_root(*g); })};
+    import_boundary_fn_     = static_cast<usize>(fns.begin() - functions_.begin());
+    import_boundary_global_ = static_cast<usize>(globals.begin() - globals_.begin());
+    import_boundary_marked_ = true;
+
+    // `tests_` indexes into `functions_`, which moved
+    tests_.clear();
+    for (usize i{0}; i < functions_.size(); ++i) {
+        if (functions_[i]->get_is_test()) { tests_.emplace_back(i); }
+    }
+}
+
 auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> void {
     PROFILE_FUNCTION();
     if (!import_boundary_marked_) { return; }

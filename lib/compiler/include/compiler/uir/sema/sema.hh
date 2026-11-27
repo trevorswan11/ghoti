@@ -26,6 +26,8 @@ struct program {
 struct options {
     // Every non-generic declaration is a root, not only what `main`, exports and tests reach
     bool check_all{true};
+    // Records each name's type and what each member access reaches into the modules' LSP tables
+    bool index{false};
 };
 
 // A construct this phase of UIR Sema doesn't analyze yet, which stops the analysis

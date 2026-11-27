@@ -52,10 +52,11 @@ class lsp_server final : public command {
         std::ostream&             error_stream       = std::cerr,
         std::chrono::milliseconds debounce_interval  = lsp::DEFAULT_DEBOUNCE_INTERVAL,
         std::vector<std::string>  workspace_excludes = lsp::DEFAULT_WORKSPACE_EXCLUDES,
-        usize                     workspace_file_cap = lsp::DEFAULT_WORKSPACE_FILE_CAP) noexcept
+        usize                     workspace_file_cap = lsp::DEFAULT_WORKSPACE_FILE_CAP,
+        bool                      sema_uir           = false) noexcept
         : command{error_stream}, debounce_interval_{debounce_interval},
           workspace_excludes_{std::move(workspace_excludes)},
-          workspace_file_cap_{workspace_file_cap} {}
+          workspace_file_cap_{workspace_file_cap}, sema_uir_{sema_uir} {}
 
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
     [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
@@ -125,10 +126,12 @@ class lsp_server final : public command {
     // When the debounced analysis is due, if an edit is waiting for one
     stdx::option<std::chrono::steady_clock::time_point> rebuild_due_;
     // The revision the worker is analyzing, unless it was told to stop
-    stdx::option<u64>                  analyzing_revision_;
-    std::vector<parked_query>          parked_queries_;
-    std::vector<std::string>           workspace_excludes_;
-    usize                              workspace_file_cap_;
+    stdx::option<u64>         analyzing_revision_;
+    std::vector<parked_query> parked_queries_;
+    std::vector<std::string>  workspace_excludes_;
+    usize                     workspace_file_cap_;
+    // Analyzes through UIR Sema
+    bool                               sema_uir_{false};
     std::vector<std::filesystem::path> workspace_roots_;
 };
 

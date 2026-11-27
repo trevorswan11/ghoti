@@ -996,8 +996,23 @@ auto analyzer::fold_unary(tag t, const operand& value, gs::type& type) -> stdx::
 
 auto analyzer::analyze_unary(inst_id inst, tag t) -> result<operand> {
     const auto& d{mod().data_of(inst)};
-    const auto& src{src_of(inst)};
+    const auto  operand_value{TRY(resolve_value(d.un.operand, src_of(inst)))};
+
+    // An inferred cast's operand waits for the type the result is used as
+    if (operand_value.is<cast_ref>() && t != tag::bool_not) { return cast_ref{inst}; }
+    return unary_of(inst, t, operand_value);
+}
+
+auto analyzer::unary_as(inst_id inst, gs::type& target, const source& src) -> result<operand> {
+    const auto& d{mod().data_of(inst)};
     const auto  operand_value{TRY(resolve_value(d.un.operand, src))};
+    const auto  cast{operand_value.as_opt<cast_ref>()};
+    if (!cast) { return unary_of(inst, mod().tag_of(inst), operand_value); }
+    return unary_of(inst, mod().tag_of(inst), TRY(cast_target_inferred(*cast, target)));
+}
+
+auto analyzer::unary_of(inst_id inst, tag t, const operand& operand_value) -> result<operand> {
+    const auto& src{src_of(inst)};
     auto&       type{type_of(operand_value)};
     if (type.is_poison()) { return stdx::err{stop::POISON}; }
     auto& pool{comp_.constants()};

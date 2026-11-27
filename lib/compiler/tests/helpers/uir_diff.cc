@@ -693,7 +693,11 @@ auto run_uir_sema_files(mod::source_loader&          loader,
     }
     for (const auto& item : run->lowered) { REQUIRE(item.result.diagnostics.empty()); }
     run->out.emplace(uir::sema::analyze(run->analyzer->get_ctx(),
-                                        {.root = root->get(), .modules = run->lowered}));
+                                        {.root = root->get(), .modules = run->lowered},
+                                        {.check_all = true, .index = settings.index}));
+    if (settings.index) {
+        for (auto& item : run->lowered) { uir::index_names(item); }
+    }
     return run;
 }
 

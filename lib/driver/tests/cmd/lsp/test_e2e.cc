@@ -23,8 +23,22 @@
 
 namespace ghoti::tests {
 
+namespace {
+
+// `ghoti lsp`, analyzing through UIR Sema in a `-Dsema=uir` build
+[[nodiscard]] auto lsp_argv(std::string debounce_ms) -> mock_argv {
+    std::vector<std::string> args{
+        ghoti_binary_path().string(), "lsp", "--debounce-ms", std::move(debounce_ms)};
+#ifdef GHOTI_TEST_SEMA_UIR
+    args.emplace_back("--sema=uir");
+#endif
+    return mock_argv{std::move(args)};
+}
+
+} // namespace
+
 TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -108,7 +122,7 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
 }
 
 TEST_CASE("ghoti lsp answers malformed messages with JSON-RPC errors and keeps serving") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     constexpr std::string_view bad_body{"{not json"};
@@ -132,7 +146,7 @@ TEST_CASE("ghoti lsp answers malformed messages with JSON-RPC errors and keeps s
 }
 
 TEST_CASE("ghoti lsp hover surfaces a `///` doc comment on an enum variant and its uses") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -226,7 +240,7 @@ pub const main = fn(): i32 {
 }
 
 TEST_CASE("ghoti lsp hover surfaces the `builtin` module's doc comments") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -308,7 +322,7 @@ const mode = builtin.CallModifier.never_inline;
 }
 
 TEST_CASE("ghoti lsp shows default parameter values and hides their wrappers") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -379,8 +393,13 @@ pub const main = fn(): i32 {
 
     // The call site names the declaration, defaults and all
     CHECK(hover_at(2, 3, 12) == "fn(w: i32, h: i32 = w * scale): i32");
-    // A name inside a default resolves like any other use
+    // A name inside a default resolves like any other use. UIR Sema shows an untyped constant as
+    // its own type, where the old pipeline shows the type the expression around it computes in
+#ifdef GHOTI_TEST_SEMA_UIR
+    CHECK(hover_at(3, 1, 39) == "comptime_int");
+#else
     CHECK(hover_at(3, 1, 39) == "i32");
+#endif
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -402,7 +421,7 @@ pub const main = fn(): i32 {
 }
 
 TEST_CASE("ghoti lsp hover names a callable's parameters") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -491,7 +510,7 @@ pub const main = fn(): i32 { return 0; };
 }
 
 TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -582,7 +601,7 @@ TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child proc
 }
 
 TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -703,7 +722,7 @@ TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") 
 }
 
 TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same file") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -798,7 +817,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
 }
 
 TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -876,7 +895,7 @@ TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
 }
 
 TEST_CASE("ghoti lsp resolves go-to-definition and references across an import") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1093,7 +1112,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
 }
 
 TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1191,7 +1210,7 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
 
 TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-fresh") {
     // A large explicit window so every didChange in the rapid burst below must land inside it
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "5000"}};
+    piped_process proc{lsp_argv("5000")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1297,7 +1316,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
               "import \"helper.gh\" as helper;\n"
               "pub const x = helper.value;\n");
 
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     const auto workspace_uri{path_utils::path_to_uri(dir.path)};
@@ -1374,7 +1393,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
 }
 
 TEST_CASE("ghoti lsp formats an unformatted document over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1524,7 +1543,7 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
 }
 
 TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1602,7 +1621,7 @@ TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
 }
 
 TEST_CASE("ghoti lsp hover shows the peer type of a mixed-type binding") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1687,7 +1706,7 @@ namespace {
 
 // Renames the emoji identifier from its second use and returns the edits' start columns
 auto rename_emoji_columns(const nlohmann::json& client_capabilities) -> std::vector<i64> {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    piped_process proc{lsp_argv("0")};
     REQUIRE(proc.is_running());
     lsp::write_message(
         proc.stdin_stream(),
@@ -1754,8 +1773,7 @@ namespace {
 
 // An initialized child server that debounces edits by `debounce_ms`
 auto start_server(std::string_view debounce_ms) -> stdx::box<piped_process> {
-    auto proc{stdx::make_box<piped_process>(
-        mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", std::string{debounce_ms}})};
+    auto proc{stdx::make_box<piped_process>(lsp_argv(std::string{debounce_ms}))};
     REQUIRE(proc->is_running());
 
     lsp::write_message(proc->stdin_stream(),

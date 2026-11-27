@@ -613,6 +613,15 @@ auto analyzer::comptime_global(const decl& d, const source& src) -> result<opera
 }
 
 auto analyzer::analyze_decl(decl_id decl) -> result<operand> {
+    const auto value{decl_value(decl)};
+    if (value && comp_.indexing()) {
+        if (const auto node{mod().decl_at(decl).node}) { note_type_at(source{*node}, *value); }
+    }
+
+    return value;
+}
+
+auto analyzer::decl_value(decl_id decl) -> result<operand> {
     PROFILE_FUNCTION();
     const auto& d{mod().decl_at(decl)};
     ASSERT(d.node, "a module-level declaration has a source node");
@@ -854,6 +863,7 @@ auto analyzer::analyze_global(decl_id                        decl,
     global.visibility      = attrs.visibility;
     global.alignment       = attrs.alignment;
     comp_.note_storage(u_, decl);
+    if (comp_.is_root(u_)) { comp_.note_root_global(global.name); }
     // A string array is read where the global stores it, a volatile one at each read
     const bool is_volatile{type.is_volatile()};
     if (!is_mutable && !is_aggregate && !text_array && !is_volatile) { return stored; }
