@@ -304,6 +304,7 @@ auto compilation::analyze_test(const unit& u, decl_id decl) -> void {
         .analyzed    = true,
         .attributes  = gs::resolved_attributes{},
     }))};
+    fn.is_test = true;
     auto& gir_fn{gir_.add_function(fn.symbol, fn_type, true)};
     gir_fn.set_test_desc(d.name.len != 0 ? std::string{m.string(d.name)}
                                          : fmt::format("anonymous_test{}", anonymous_tests_++));

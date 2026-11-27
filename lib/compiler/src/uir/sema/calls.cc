@@ -30,7 +30,16 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
     const auto  restore{gsl::finally([&] { calling_ = outer; })};
     return with_modifier(modifier, src, [&] -> result<operand> {
         const auto callee_src{as_inst(callee_ref).transform([&](inst_id i) { return src_of(i); })};
-        const auto callee{TRY(resolve_value(callee_ref, src))};
+        const auto resolved{[&] {
+            const auto outer_callee{std::exchange(resolving_callee_, as_inst(callee_ref))};
+            const auto restore_callee{gsl::finally([&] { resolving_callee_ = outer_callee; })};
+            return resolve_value(callee_ref, src);
+        }()};
+        const auto callee{TRY(resolved)};
+        if (const auto callee_inst{as_inst(callee_ref)}) {
+            TRY(check_testing_ref(*callee_inst, true));
+        }
+
         const bool expands{std::ranges::any_of(pack_mask, [](u32 word) { return word != 0; })};
 
         // `.name(args)` calls the member of whatever type the call is used as
@@ -223,6 +232,11 @@ auto analyzer::field_call_unmodified(inst_id              inst,
     // A module's function is called like one declared here
     if (const auto m{object.as_opt<module_ref>()}) {
         const auto member{TRY(module_member(*m, name, src))};
+        const auto decl{module_decl(*m, name)};
+        if (const auto testing{decl ? testing_name(*m->target, *decl) : stdx::none}) {
+            TRY(check_testing_use(*testing, true, src));
+        }
+
         return call_expanding(member, args, pack_mask, src, src);
     }
 

@@ -433,6 +433,7 @@ class astgen {
     usize prunable_depth_{0}; // inside arms `comptime` may prune
     bool  reading_len_{false}; // lowering the object of a `.len`
     u32   param_reads_{0};     // reads of the current function's own parameters
+    bool  deprecated_scope_{false}; // lowering a deprecated declaration or one inside it
 };
 
 } // namespace ghoti::uir::detail

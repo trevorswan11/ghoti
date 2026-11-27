@@ -33,7 +33,7 @@ namespace {
 // The declaration flags this phase gives a meaning to
 constexpr auto HANDLED_FLAGS{decl_flags::PUBLIC | decl_flags::CONSTANT | decl_flags::LET |
                              decl_flags::MUT | decl_flags::COMPTIME | decl_flags::WEAK |
-                             decl_flags::SYNTHESIZED};
+                             decl_flags::SYNTHESIZED | decl_flags::QUIET_DEPRECATION};
 
 constexpr std::string_view GLOBAL_CONSTANT{
     "global variable initializer must be a constant expression"};

@@ -42,6 +42,14 @@ class uir_run {
         return found;
     }
 
+    [[nodiscard]] auto warnings() const -> std::vector<std::string> {
+        std::vector<std::string> found;
+        for (const auto& w : out().warnings) {
+            found.emplace_back(w.get_message().value_or(std::string{}));
+        }
+        return found;
+    }
+
     [[nodiscard]] auto codes() const -> std::vector<sema::error> {
         std::vector<sema::error> found;
         for (const auto& d : out().diagnostics) { found.emplace_back(d.get_error()); }

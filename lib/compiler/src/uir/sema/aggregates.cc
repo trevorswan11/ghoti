@@ -598,6 +598,7 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         const auto& owner_mod{*n->owner->uir};
         for (const auto decl : ns->decls) {
             if (owner_mod.string(owner_mod.decl_at(decl).name) == name) {
+                warn_deprecated_decl(*n->owner, decl, src);
                 const bool here{n->owner.get() == &u_};
                 return comp_.analyze_member(
                     *n, decl, here ? src : source{*owner_mod.decl_at(decl).node});

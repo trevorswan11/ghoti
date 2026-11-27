@@ -414,6 +414,8 @@ struct instance {
     stdx::option<u32> self_capture{};
     // Packs captured only for their length, by slot, as `undefined` values of their types
     std::vector<std::pair<u32, std::vector<ip::index>>> known_packs{};
+    // A `test` block's body, which may call `@[testing]` functions
+    bool is_test{false};
 };
 
 // One `@[...]` entry with the operands of its arguments
@@ -944,6 +946,8 @@ class compilation {
     // Records the first construct this phase doesn't analyze and returns the unsupported stop
     [[nodiscard]] auto unsupported(const unit& u, const source& src, std::string what)
         -> stdx::err<stop>;
+    // A use of a deprecated name, a warning or an error by the deprecation policy, once a site
+    auto report_deprecated(const unit& u, const source& src, std::string message) -> void;
 
     [[nodiscard]] auto location_of(const unit& u, const source& src) const -> source_location;
     [[nodiscard]] auto span_of(const unit& u, const source& src) const -> source_span;
@@ -1161,6 +1165,7 @@ class compilation {
     std::vector<gsl::not_null<instance*>>                               queue_;
     gir::module_t                                                       gir_;
     gs::diagnostics                                                     diagnostics_;
+    gs::diagnostics                                                     warnings_;
     stdx::option<sema::unsupported>                                     stopped_at_;
     u32                                                                 ptr_bits_;
     std::vector<comptime_alloc>                                         allocs_;
@@ -2210,12 +2215,19 @@ class analyzer {
     [[nodiscard]] auto analyze_import(inst_id inst) -> result<operand>;
     [[nodiscard]] auto module_member(const module_ref& m, std::string_view name, const source& src)
         -> result<operand>;
+    [[nodiscard]] auto module_decl(const module_ref& m, std::string_view name) const
+        -> stdx::option<decl_id>;
     [[nodiscard]] auto analyze_discard(inst_id inst) -> result<operand>;
 
     // Control flow (control.cc)
     // A runtime array arm as a slice of where it is stored, or of a slot holding it
     [[nodiscard]] auto array_slice(const incoming& arm, const source& src) -> result<operand>;
     [[nodiscard]] auto arm_address(const incoming& arm, const source& src) -> result<gir::value>;
+    // The address `v` was loaded from when that load ends the segment, which drops the load.
+    // `only_global` takes only a load of a global's address
+    [[nodiscard]] auto
+    unload(gir::segment& seg, const gir::value& v, gs::type& type, bool only_global = false)
+        -> stdx::option<gir::value>;
     [[nodiscard]] auto analyze_block(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_loop(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_condbr(inst_id inst) -> result<operand>;
@@ -2364,6 +2376,22 @@ class analyzer {
         -> stdx::option<ast::symbol_visibility>;
     [[nodiscard]] auto attribute_features(const attribute_item& item) -> std::vector<std::string>;
     auto               check_deprecation_message(const attribute_item& item) -> void;
+    // Warns that `name`, declared with `attributes` in `owner`, is deprecated, unless the code
+    // naming it is deprecated too
+    auto warn_deprecated(const mod::module_t&                     owner,
+                         const stdx::option<ast::attribute_list>& attributes,
+                         std::string_view                         name,
+                         const source&                            src) -> void;
+    auto warn_deprecated_decl(const unit& owner, decl_id decl, const source& src) -> void;
+    auto warn_deprecated_field(gs::type& type, usize index, const source& src) -> void;
+    [[nodiscard]] auto quiet_deprecation() const -> bool;
+    // A reference to a `@[testing]` function, which only a test or another one may call directly
+    [[nodiscard]] auto testing_name(const unit& owner, decl_id decl) -> stdx::option<std::string>;
+    [[nodiscard]] auto check_testing_use(std::string_view name, bool called, const source& src)
+        -> result<void>;
+    // Checks a use of the reference `inst` made, when it names a `@[testing]` function
+    [[nodiscard]] auto check_testing_ref(inst_id inst, bool called) -> result<void>;
+    [[nodiscard]] auto in_testing_context() const -> bool;
     auto check_visibility_linkage(gsl::span<const attribute_item> items, const attribute_site& site)
         -> void;
     auto report_misplaced(const attribute_item& item, const attribute_site& site) -> void;
@@ -2802,6 +2830,9 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, gsl::not_null<instance*>> callees_;
     // The `dyn` calls whose interface method is `@[discardable]`
     ankerl::unordered_dense::set<inst_id> discardable_calls_;
+    // References to `@[testing]` functions by name, and the callee a call is resolving
+    ankerl::unordered_dense::map<inst_id, std::string> testing_refs_;
+    stdx::option<inst_id>                              resolving_callee_;
     stdx::option<nominal&>  scope_;
     stdx::option<gs::type&> self_type_;
     std::string             symbol_prefix_;

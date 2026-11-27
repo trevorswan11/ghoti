@@ -110,6 +110,7 @@ auto analyzer::init_struct(inst_id inst, gs::type& type, const source& src) -> r
             unknown.emplace_back(entry.name);
         } else {
             indices.emplace_back(static_cast<usize>(found - st.field_names.begin()));
+            warn_deprecated_field(type, indices.back(), src);
         }
     }
 
