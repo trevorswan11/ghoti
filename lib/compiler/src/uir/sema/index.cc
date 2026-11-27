@@ -1,10 +1,9 @@
-#include <concepts>
-#include <string>
-
+#include <stdx/utility.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/side_tables.hh"

@@ -51,10 +51,9 @@ struct binding {
     bool                  mutable_decl{false}; // a `let mut` declaration, a place when written
     source_location       at{};
     u64                   seq{0}; // declaration order, which a defer copy's view is cut at
-    // Where the LSP finds a local's declaration: its name, statement, or annotation
-    stdx::option<ast::node_id>          name_node{};
-    stdx::option<ast::node_id>          decl_node{};
-    stdx::option<ast::explicit_type_id> annotation{};
+    stdx::option<ast::node_id>          name_node{}; // Where the LSP finds a local's decl name
+    stdx::option<ast::node_id>          decl_node{}; // Where the LSP finds a local's decl node
+    stdx::option<ast::explicit_type_id> annotation{}; // Where the LSP finds a local's decl annotation
 };
 
 enum class scope_kind : u8 {

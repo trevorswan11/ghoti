@@ -950,8 +950,7 @@ class compilation {
     // Whether `u` is the program's root module, whose own items are kept whatever reaches them
     [[nodiscard]] auto is_root(const unit& u) const noexcept -> bool;
     auto note_root_global(std::string name) -> void { root_globals_.emplace(std::move(name)); }
-    // Moves the root module's functions and globals first, so pruning keeps them as the old
-    // emitter's GIR did
+    // Moves the root module's functions and globals first so pruning keeps them
     auto mark_root_items() -> void;
     // The function instance emitted under `symbol`
     [[nodiscard]] auto function_named(std::string_view symbol) -> stdx::option<instance&>;

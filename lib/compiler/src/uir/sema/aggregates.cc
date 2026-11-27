@@ -17,7 +17,9 @@
 #include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
