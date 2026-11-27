@@ -8,11 +8,11 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/arena.hh>
+#include <stdx/function.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
-#include <stdx/function.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"

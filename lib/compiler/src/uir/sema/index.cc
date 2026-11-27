@@ -1,6 +1,6 @@
-#include <stdx/utility.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
