@@ -530,6 +530,14 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
             return comp_.unsupported(u_, src, "an enum value past 64 bits");
         }
 
+        // Each variant names a value of its own
+        if (std::ranges::contains(n.enum_values, static_cast<i64>(*small))) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Two enum variants share the value {}", next.to_string()));
+        }
+
         n.enum_values.emplace_back(static_cast<i64>(*small));
         next = next + big_int{i128{1}};
     }
@@ -607,12 +615,6 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     // A builtin type has only the members impls add to it
     const auto n{comp_.nominal_of(owner)};
-    if (!n) {
-        const auto impls{TRY(comp_.impls_of(owner))};
-        if (impls.empty()) {
-            return comp_.unsupported(u_, src, "a member of a type UIR didn't declare");
-        }
-    }
 
     // A use from another module is located at what it reaches in that module
     const auto ns{n ? n->owner->uir->namespace_of(n->inst) : stdx::option<const namespace_info&>{}};
@@ -634,6 +636,29 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         const auto& impl_unit{*applied->entry->owner};
         const auto& use{&impl_unit == &u_ ? src : impl_unit.uir->src_of(applied->entry->inst)};
         if (const auto member{TRY(comp_.impl_member(*applied, name, use))}) { return *member; }
+    }
+
+    // A field belongs to each value of the type, not to the type
+    if (n) { TRY(comp_.require_fields(u_, src, owner)); }
+    const bool sequence_field{(owner.get_kind() == gs::type_kind::ARRAY ||
+                               owner.get_kind() == gs::type_kind::SLICE) &&
+                              (name == "len" || name == "ptr")};
+    const bool aggregate_field{[&] {
+        if (const auto s{owner.get_data().as_opt<gs::types::struct_t>()}) {
+            return std::ranges::contains(s->field_names, name);
+        }
+        if (const auto un{owner.get_data().as_opt<gs::types::union_t>()}) {
+            return std::ranges::contains(un->field_names, name);
+        }
+        return false;
+    }()};
+    if (sequence_field || aggregate_field) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' is a field of each '{}' value, not of the type",
+                                        name,
+                                        comp_.ctx().type_display_name(owner)));
     }
 
     return comp_.report(u_,

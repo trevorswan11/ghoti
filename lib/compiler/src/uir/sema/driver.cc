@@ -175,6 +175,15 @@ auto compilation::analyze_roots() -> void {
                 if (is_deferred_error(u, d) || (!opts_.check_all && !is_lazy_root(u, d))) { break; }
 
                 const auto value{analyze_decl(u, decl, *d.node)};
+                // A generic function has no one symbol to export
+                if (value && d.has(decl_flags::EXPORT) && value->is<generic_ref>()) {
+                    DISCARD(report(u,
+                                   source{*d.node},
+                                   gs::error::TYPE_MISMATCH,
+                                   "'export' can't export a generic function; export a "
+                                   "non-generic wrapper that calls one instantiation"));
+                    break;
+                }
                 if (!value || !opts_.check_all) { break; }
                 if (const auto type{declared_type(u, d.value_body, *value)}) {
                     analyze_members(u, *type);

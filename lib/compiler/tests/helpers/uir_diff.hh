@@ -95,6 +95,18 @@ struct uir_sema_run {
                                       const std::filesystem::path& root,
                                       const pipeline_settings&     settings = {},
                                       library_list libraries = {}) -> stdx::box<uir_sema_run>;
+
+// What a program's analysis reports: AstGen's errors, or else Sema's errors and warnings
+struct program_diagnostics {
+    sema::diagnostics errors;
+    sema::diagnostics warnings;
+};
+
+// The diagnostics of the program rooted at `root_path`, failing the test if Sema stops instead
+[[nodiscard]] auto uir_diagnostics(mod::source_loader&          loader,
+                                   const std::filesystem::path& root_path,
+                                   const pipeline_settings&     settings,
+                                   library_list libraries = {}) -> program_diagnostics;
 // The normalized GIR of a program UIR Sema must accept
 [[nodiscard]] auto uir_gir(std::string_view source) -> std::string;
 

@@ -317,7 +317,13 @@ auto test_checker_fail(std::string_view failing, Ds&&... expected_diagnostics) {
     return test_checker_fail(failing, {}, std::forward<Ds>(expected_diagnostics)...);
 }
 
-// Runs all of sema and expects a compile error along the way without checking its contents
+// `source`'s diagnostics from analyzing it the way a test build does, everything included
+[[nodiscard]] auto analysis_diagnostics(std::string_view               source,
+                                        const std::vector<mock_file>&  imports       = {},
+                                        stdx::option<std::string_view> target_triple = stdx::none)
+    -> program_diagnostics;
+
+// Analyzes `source` and expects a compile error, which the context's root module then holds
 auto expect_compile_error(std::string_view source) -> ctx_idx_pair;
 
 // Finds a `const <name> = fn(...) {...};` declared directly in `outer`'s body block, returning

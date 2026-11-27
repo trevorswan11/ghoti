@@ -53,6 +53,23 @@ auto analyzer::analyze_range(inst_id inst) -> result<operand> {
     return anon_init{inst};
 }
 
+auto analyzer::check_range_bounds(const range_operands& r, const source& src) -> result<void> {
+    for (const auto& bound : {r.lo, r.hi}) {
+        if (!bound) { continue; }
+        auto& type{type_of(*bound)};
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        if (!is_int_like(type)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A range's bounds must be integers; found '{}'",
+                                            comp_.ctx().type_display_name(type)));
+        }
+    }
+
+    return {};
+}
+
 auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const source& src)
     -> result<operand> {
     const auto bounds{bounds_of(mod(), inst)};
@@ -457,6 +474,7 @@ auto analyzer::run_for(inst_id                  inst,
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
+            TRY(check_range_bounds(r, src));
             // An unrolled range between untyped bounds counts in their default type
             const auto untyped{[&](const stdx::option<operand>& bound) {
                 return bound && type_of(*bound).get_kind() == gs::type_kind::COMPTIME_INT;
@@ -708,6 +726,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
+            TRY(check_range_bounds(r, src));
             auto& elem{counter_type(r)};
             TRY(check_alias(infos.size(), elem, true, false));
             const auto convert{[&](const operand& bound) -> result<gir::value> {

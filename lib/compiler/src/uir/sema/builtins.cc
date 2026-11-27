@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <gsl/util>
 #include <llvm/TargetParser/Triple.h>
@@ -17,6 +18,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -830,19 +832,78 @@ auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool
 
 auto analyzer::builtin_llvm_intrinsic(gsl::span<const ref> args, const source& src)
     -> result<operand> {
-    if (args.size() < 2) { return comp_.unsupported(u_, src, "an `@llvmIntrinsic` of this arity"); }
+    if (args.size() < 2) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Builtin expects at least 2 arguments, found {}", args.size()));
+    }
     TRY(require_runtime(src));
-    const auto name{string_literal(mod(), args, 0)};
+
+    // The name is a compile-time string
+    const auto name{TRY([&] -> result<stdx::option<std::string>> {
+        if (const auto literal{string_literal(mod(), args, 0)}) {
+            return stdx::option<std::string>{std::string{*literal}};
+        }
+        const auto value{[&] {
+            const auto scope{comptime_scope()};
+            return resolve_value(args[0], src);
+        }()};
+        const auto known{value ? comptime_value(*value) : stdx::none};
+        if (!known || comp_.constants().is_type(*known)) { return stdx::option<std::string>{}; }
+        return comp_.constants().value_at(*known).data.as_opt<std::string>().transform(
+            [](const std::string& s) { return s; });
+    }())};
     if (!name) {
-        return comp_.unsupported(u_, src, "an `@llvmIntrinsic` name that isn't a literal");
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "'@llvmIntrinsic' needs a compile-time string naming the intrinsic, "
+                            "like \"llvm.x86.sse2.pause\"");
     }
 
     // The call carries the intrinsic's name, with the result type written second
-    auto&                   result_type{*TRY(resolve_type(args[1], src))};
-    std::vector<gir::value> values;
+    auto&                                      result_type{*TRY(resolve_type(args[1], src))};
+    std::vector<gir::value>                    values;
+    std::vector<gsl::not_null<const gs::type*>> types;
+    std::vector<bool>                          known;
     for (const auto arg : args.subspan(2)) {
         const auto given{TRY(resolve_value(arg, src))};
-        values.emplace_back(TRY(as_runtime(given, src)));
+        if (const auto index{comptime_value(given)}; index && comp_.constants().is_type(*index)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "'@llvmIntrinsic' arguments are values, not types");
+        }
+
+        // An untyped literal is an `i32` or `f64`, as when it binds an `auto` parameter
+        known.emplace_back(comptime_value(given).has_value());
+        const auto typed{TRY(concrete(given, src))};
+        const auto value{TRY(as_runtime(typed, src))};
+        types.emplace_back(value.type.get());
+        values.emplace_back(value);
+    }
+
+    std::vector<usize> immediates;
+    if (const auto problem{codegen::check_llvm_intrinsic(
+            *name,
+            result_type,
+            types,
+            codegen::resolve_target_triple(comp_.ctx().target_opts.triple_str),
+            immediates)}) {
+        return comp_.report(u_, src, gs::error::INVALID_LLVM_INTRINSIC, *problem);
+    }
+
+    // LLVM takes these as part of the instruction, so they must be known now
+    for (const auto index : immediates) {
+        if (index < known.size() && !known[index]) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::COMPTIME_EVALUATION_FAILED,
+                fmt::format("argument {} of '{}' must be known at compile time", index + 1, *name));
+        }
     }
 
     const auto result{

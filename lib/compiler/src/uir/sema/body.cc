@@ -21,8 +21,10 @@
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/uir/uir.hh"
 #include "internal.hh"
 
@@ -213,6 +215,7 @@ auto analyzer::analyze_function() -> result<void> {
     // `@setEval*Limit` in the body scopes over the rest of it
     const auto saved{comp_.limits()};
     const auto restore{gsl::finally([&] { comp_.limits() = saved; })};
+    const auto reported{comp_.diagnostic_count()};
     const auto out{analyze_body(body)};
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
@@ -230,6 +233,21 @@ auto analyzer::analyze_function() -> result<void> {
     } else if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
+        // Code nothing reaches, like what follows an endless loop, never falls off the end
+        const auto here{std::to_underlying(builder_.get_segment()->get_id())};
+        const auto reachable{gir_fn_->reachable_segments()};
+        const bool falls_off{here < reachable.size() && reachable[here]};
+        // A body that already failed reports why instead
+        const bool failed{!out || comp_.diagnostic_count() != reported};
+        if (!failed && falls_off && ret.get_kind() != gs::type_kind::NORETURN &&
+            !ret.is_generic_value() && !ret.is_poison()) {
+            return comp_.report(u_,
+                                src_of(fn_->func),
+                                gs::error::RETURN_TYPE_MISMATCH,
+                                fmt::format("Function expecting return type '{}' does not return "
+                                            "a value on all code paths",
+                                            comp_.ctx().type_display_name(ret)));
+        }
         builder_.emit_return(constant(comp_.constants().intern(ip::undefined_value{}, ret), ret));
     }
 
@@ -465,7 +483,17 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::for_iter:        return analyze_for(inst);
     case tag::bind:            return analyze_bind(inst);
 
-    default:                   break;
+    // A builtin is only ever called, never named as a value
+    case tag::builtin_ref:
+        return comp_.report(
+            u_,
+            src_of(inst),
+            gs::error::TYPE_MISMATCH,
+            fmt::format(
+                "'{}' is a builtin and must be called",
+                syntax::builtin_name(static_cast<syntax::builtin_t>(mod().data_of(inst).un.aux))));
+
+    default: break;
     }
 
     return comp_.unsupported(u_, src_of(inst), fmt::format("the `{}` instruction", tag_name(t)));
@@ -592,7 +620,13 @@ auto analyzer::denoted_type(const operand& op, const source& src)
     -> result<gsl::not_null<gs::type*>> {
     const auto index{comptime_value(op)};
     if (!index || !comp_.constants().is_type(*index)) {
-        return comp_.unsupported(u_, src, "a type position holding a value");
+        auto& found{type_of(op)};
+        if (found.is_poison()) { return stdx::err{stop::POISON}; }
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("expected a type, found a value of type '{}'",
+                                        comp_.ctx().type_display_name(found)));
     }
 
     return &comp_.constants().type_at(*index);

@@ -183,11 +183,30 @@ auto type_check_and_verify(std::string_view              input,
     return {std::move(ctx), idx};
 }
 
+auto analysis_diagnostics(std::string_view               source,
+                          const std::vector<mock_file>&  imports,
+                          stdx::option<std::string_view> target_triple) -> program_diagnostics {
+    constexpr std::string_view ROOT{TEST_FILENAME};
+    mod::memory_loader         loader;
+    loader.add(ROOT, std::string{source});
+    std::vector<std::pair<std::string, std::filesystem::path>> libraries;
+    for (const auto& mock : imports) {
+        loader.add(mock.path, std::string{mock.source});
+        if (mock.name) { libraries.emplace_back(std::string{*mock.name}, mock.path); }
+    }
+
+    pipeline_settings settings{.testing = true};
+    if (target_triple) { settings.target_opts.triple_str = std::string{*target_triple}; }
+    return uir_diagnostics(loader, ROOT, settings, libraries);
+}
+
 auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
-    auto [ctx, idx]{helpers::type_check(source)};
-    const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
-    CHECK_FALSE(diags.empty());
-    return {std::move(ctx), idx};
+    auto ctx{stdx::make_box<sema_test_context>(std::vector<mock_file>{}, TEST_FILENAME, source)};
+    check_errors<syntax::diagnostics>(ctx->root_mod);
+    auto found{analysis_diagnostics(source)};
+    CHECK_FALSE(found.errors.empty());
+    ctx->root_mod.diagnostics = std::move(found.errors);
+    return {std::move(ctx), 0};
 }
 
 auto find_nested_fn(const mod::module_t&      module,
@@ -280,10 +299,9 @@ auto struct_members(std::string_view input, std::string_view name) -> std::vecto
 
 auto resolver_error_codes(std::string_view src, const std::vector<mock_file>& imports)
     -> std::vector<sema::error> {
-    auto [ctx, idx]{helpers::resolve(src, imports)};
     std::vector<sema::error> codes;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
+    for (const auto& d : analysis_diagnostics(src, imports).errors) {
+        codes.emplace_back(d.get_error());
     }
     return codes;
 }
@@ -302,13 +320,11 @@ auto resolve_result::message_contains(std::string_view needle) const -> bool {
 
 namespace {
 
-[[nodiscard]] auto collect_diags(const sema_test_context& ctx) -> resolve_result {
+[[nodiscard]] auto collect_diags(const program_diagnostics& found) -> resolve_result {
     resolve_result out;
-    if (const auto diags{ctx.root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *diags) {
-            out.codes.emplace_back(d.get_error());
-            if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
-        }
+    for (const auto& d : found.errors) {
+        out.codes.emplace_back(d.get_error());
+        if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
     }
     return out;
 }
@@ -317,19 +333,16 @@ namespace {
 
 [[nodiscard]] auto resolve_diags_for_target(std::string_view src, std::string_view target_triple)
     -> resolve_result {
-    sema_test_context ctx{std::vector<mock_file>{}, TEST_FILENAME, src, std::cerr, target_triple};
-    ctx.analyzer.collect_symbols(ctx.root_mod);
-    ctx.analyzer.resolve_types(ctx.root_mod);
-    return collect_diags(ctx);
+    return collect_diags(analysis_diagnostics(src, {}, target_triple));
 }
 
 [[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {
-    return collect_diags(*helpers::resolve(src).first);
+    return collect_diags(analysis_diagnostics(src));
 }
 
 [[nodiscard]] auto type_check_diags(std::string_view src, const std::vector<mock_file>& imports)
     -> resolve_result {
-    return collect_diags(*helpers::type_check(src, imports).first);
+    return collect_diags(analysis_diagnostics(src, imports));
 }
 
 } // namespace ghoti::tests::helpers

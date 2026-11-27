@@ -231,6 +231,24 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
         rhs = TRY(coerce_to(rhs, type_of(lhs), src, {.what = use_site::kind::STORE}));
     }
 
+    // A type only takes part in an operator alongside another type
+    {
+        auto&      pool{comp_.constants()};
+        const auto is_type{[&](const operand& op) {
+            const auto known{comptime_value(op)};
+            return known && pool.is_type(*known);
+        }};
+        const bool lhs_type{is_type(lhs)};
+        if (lhs_type != is_type(rhs)) {
+            const auto& named{pool.type_at(*comptime_value(lhs_type ? lhs : rhs))};
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_USED_AS_VALUE,
+                fmt::format("'{}' is a type, not a value", comp_.ctx().type_display_name(named)));
+        }
+    }
+
     const auto info{binary_info_of(t)};
     if (const auto known{compare_out_of_range(info, lhs, rhs)}) {
         return operand{comp_.constants().intern(*known, builtin(gs::type_kind::BOOL))};
@@ -355,16 +373,12 @@ auto analyzer::analyze_binary(inst_id inst, tag t) -> result<operand> {
     // Two known strings concatenate with `+` and compare by their bytes
     if (const auto folded{string_binary(info, lhs, rhs)}) { return operand{*folded}; }
 
-    // Operators on strings, arrays and other aggregates arrive with their own phases
+    // What's left applies only to numbers, bools and enums
     const auto plain{[](const gs::type& type) {
         return gs::is_numeric(type.get_kind()) || type.get_kind() == gs::type_kind::BOOL ||
                type.get_kind() == gs::type_kind::ENUM;
     }};
-    if (!plain(lhs_type) || !plain(rhs_type)) {
-        return comp_.unsupported(u_, src, "an operator on this kind of value");
-    }
-
-    if (!applies(info.cls, lhs_type, rhs_type)) {
+    if (!plain(lhs_type) || !plain(rhs_type) || !applies(info.cls, lhs_type, rhs_type)) {
         return comp_.report(
             u_,
             src,
@@ -1080,7 +1094,12 @@ auto analyzer::unary_of(inst_id inst, tag t, const operand& operand_value) -> re
 
         if (gs::is_integer(result_type.get_kind()) && !gs::is_signed_integer(result_type)) {
             if (t != tag::neg_wrap) {
-                return comp_.unsupported(u_, src, "negating an unsigned integer");
+                return comp_.report(
+                    u_,
+                    src,
+                    gs::error::OPERATOR_TYPE_MISMATCH,
+                    fmt::format("operator '-' can't negate the unsigned '{}'; use '-%' to wrap",
+                                comp_.ctx().type_display_name(result_type)));
             }
 
             // `NEG` is signed-only, so an unsigned `-%x` is the wrapping `0 -% x` it means
@@ -1100,7 +1119,21 @@ auto analyzer::unary_of(inst_id inst, tag t, const operand& operand_value) -> re
     default: break;
     }
 
-    return comp_.unsupported(u_, src, "this unary operator on this type");
+    const auto spelling{[&] -> std::string_view {
+        switch (t) {
+        case tag::pos:      return "+";
+        case tag::neg:      return "-";
+        case tag::neg_wrap: return "-%";
+        case tag::bit_not:  return "~";
+        default:            return "!";
+        }
+    }()};
+    return comp_.report(u_,
+                        src,
+                        gs::error::OPERATOR_TYPE_MISMATCH,
+                        fmt::format("operator '{}' cannot be applied to type '{}'",
+                                    spelling,
+                                    comp_.ctx().type_display_name(type)));
 }
 
 auto analyzer::bool_slot(inst_id inst, bool is_and) -> gir::value {

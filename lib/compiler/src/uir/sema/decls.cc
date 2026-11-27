@@ -43,6 +43,36 @@ constexpr std::string_view GLOBAL_CONSTANT{
            gs::is_comptime_numeric(return_type.get_kind());
 }
 
+// Whether `func` writes a `return`, `unreachable` or `@compileError` anywhere in its body, whose
+// instructions all come before it
+[[nodiscard]] auto writes_return(const module_t& m, inst_id func) -> bool {
+    record_reader     rec{m, m.data_of(func).pl.extra};
+    stdx::option<u32> first;
+    for (const auto& part : {rec.body_field(), rec.body_field(), rec.body_field()}) {
+        if (part.empty()) { continue; }
+        const auto at{std::to_underlying(part.front())};
+        first = first ? std::min(*first, at) : at;
+    }
+
+    for (u32 i{first.value_or(std::to_underlying(func))}; i < std::to_underlying(func); ++i) {
+        const inst_id at{i};
+        const auto    t{m.tag_of(at)};
+        if (t == tag::ret || t == tag::ret_value || t == tag::ret_residual ||
+            t == tag::ret_failure || t == tag::unreachable) {
+            return true;
+        }
+        if (t == tag::builtin) {
+            record_reader call{m, m.data_of(at).pl.extra};
+            if (static_cast<syntax::builtin_t>(call.u32_field()) ==
+                syntax::builtin_t::COMPILE_ERROR) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 } // namespace
 
 auto analyzer::default_wrapper(const unit& owner, decl_id decl, usize written, const source& src)
@@ -309,7 +339,13 @@ auto compilation::declared_names(const unit& user, const source& use)
     // An impl's methods are its interface's, or its own when it implements none
     for (const auto entry : impls_) {
         const auto& u{*entry->owner};
-        if (const auto iface{TRY(impl_interface(*entry))}) {
+        // An impl of something not an interface reports itself and declares nothing
+        const auto implemented{impl_interface(*entry)};
+        if (!implemented && implemented.error() == stop::UNSUPPORTED) {
+            return stdx::err{stop::UNSUPPORTED};
+        }
+        if (!implemented) { continue; }
+        if (const auto iface{*implemented}) {
             const auto n{nominal_of(*iface)};
             if (!n) { return unsupported(user, use, "an impl of an interface UIR didn't declare"); }
             for (const auto& method : interface_methods(*n)) {
@@ -469,6 +505,15 @@ auto compilation::declare_function(const unit&           u,
     auto&      return_type{*TRY(sig.eval_type(ret, src))};
     const bool comptime_only{is_comptime_only(return_type)};
     const bool infers_return{return_type.get_kind() == gs::type_kind::AUTO};
+
+    // A compile-time-only result never reaches the runtime check for a missing `return`
+    if (comptime_only && !writes_return(m, func)) {
+        return report(u,
+                      src,
+                      gs::error::RETURN_TYPE_MISMATCH,
+                      fmt::format("Function returning '{}' never returns a value",
+                                  ctx_.type_display_name(return_type)));
+    }
     const bool no_value{return_type.get_kind() == gs::type_kind::VOID_ ||
                         return_type.get_kind() == gs::type_kind::NORETURN};
     if (!no_value && !comptime_only && !infers_return &&

@@ -227,6 +227,15 @@ auto compilation::impl_interface(const impl_entry& entry) -> result<stdx::option
     if (shape.interface.empty()) { return stdx::option<gs::type&>{}; }
     analyzer a{*this, *entry.owner};
     auto&    interface{*TRY(a.eval_type(shape.interface, m.src_of(entry.inst)))};
+    if (interface.is_poison()) { return stdx::err{stop::POISON}; }
+    if (interface.get_kind() != gs::type_kind::INTERFACE) {
+        return report(*entry.owner,
+                      m.src_of(entry.inst),
+                      gs::error::TYPE_MISMATCH,
+                      fmt::format("'impl X for T' needs X to be an interface, not '{}'",
+                                  ctx_.type_display_name(interface)));
+    }
+
     return stdx::option<gs::type&>{interface};
 }
 

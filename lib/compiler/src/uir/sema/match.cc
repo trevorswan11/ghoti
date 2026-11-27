@@ -284,7 +284,17 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type, bool place_is_const, bo
 
         const auto known{TRY(known_pattern(body, type, src))};
         if (!known) { return opaque_pattern(pat, type, top_level); }
-        if (pool.is_type(*known)) { return opaque_pattern(pat, type, true); }
+        if (pool.is_type(*known)) {
+            // Only a type is matched against a type
+            if (type.get_kind() != gs::type_kind::TYPE) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::ILLEGAL_MATCH_PATTERN,
+                                    fmt::format("A type can't match a value of type '{}'",
+                                                comp_.ctx().type_display_name(type)));
+            }
+            return opaque_pattern(pat, type, true);
+        }
         const auto  value{*known};
         const auto& data{pool.value_at(value).data};
         if (type.get_kind() == gs::type_kind::BOOL) {
@@ -381,8 +391,21 @@ auto analyzer::known_pattern(gsl::span<const inst_id> body, gs::type& type, cons
         return stdx::option<ip::index>{*index};
     }
 
-    const auto typed{TRY(coerce_to(known, type, src, {.what = use_site::kind::STORE}))};
-    return stdx::option<ip::index>{TRY(require_comptime(typed, src))};
+    // A pattern that can't be the subject's type can never match it
+    const auto attempt{comp_.speculate()};
+    const auto typed{coerce_to(known, type, src, {.what = use_site::kind::STORE})};
+    if (!typed) {
+        if (typed.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
+        comp_.abandon(attempt, false);
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_MATCH_PATTERN,
+                            fmt::format("A pattern of type '{}' can't match a value of type '{}'",
+                                        comp_.ctx().type_display_name(type_of(known)),
+                                        comp_.ctx().type_display_name(type)));
+    }
+
+    return stdx::option<ip::index>{TRY(require_comptime(*typed, src))};
 }
 
 auto analyzer::opaque_pattern(inst_id pat, gs::type& type, bool top_level)

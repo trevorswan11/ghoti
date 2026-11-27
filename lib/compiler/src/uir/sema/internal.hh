@@ -1845,6 +1845,9 @@ class analyzer {
     [[nodiscard]] auto usize_bound(ref r, const source& src) -> result<gir::value>;
     // The type a `for` range counts in
     [[nodiscard]] auto counter_type(const range_operands& r) -> gs::type&;
+    // Reports a `for` range bound that isn't an integer
+    [[nodiscard]] auto check_range_bounds(const range_operands& r, const source& src)
+        -> result<void>;
     // Every value a range takes, when both its bounds are known
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
@@ -2317,6 +2320,11 @@ class analyzer {
     auto start_bool_ops(inst_id inst) -> void;
     // Whether a branch body ends yielding nothing, like a statement `if`'s arms
     [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
+    // Reports an unlabeled loop used as a value, which it never has
+    [[nodiscard]] auto reject_unlabeled_loop(ref value, const source& src) -> result<void>;
+    // Whether `returned` is an `&` or `^` of a local or parameter, or of a field or element of one
+    [[nodiscard]] auto addresses_frame(ref returned) -> bool;
+    [[nodiscard]] auto is_comptime_param(inst_id param) const -> bool;
     // A runtime condition's value when running it again at compile time knows it
     [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
     // What `r` computes when run again at compile time, keeping nothing that records, if computable

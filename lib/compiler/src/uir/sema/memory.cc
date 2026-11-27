@@ -68,6 +68,12 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
         });
     }
 
+    // A type only exists at compile time, so a runtime slot can't hold one
+    if (type && type->get_kind() == gs::type_kind::TYPE) {
+        return comp_.report(
+            u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
+    }
+
     if (!type) {
         if (alignment) { return comp_.unsupported(u_, src, "an aligned `let mut` with no type"); }
 
@@ -558,7 +564,8 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     const auto type_ref{written_type_of(rec.ref_field())};
     const auto init_ref{*rec.ref_field()};
     const auto alignment{TRY(local_alignment(rec.body_field()))};
-    auto       init{TRY(resolve_value(init_ref, src))};
+    TRY(reject_unlabeled_loop(init_ref, src));
+    auto init{TRY(resolve_value(init_ref, src))};
 
     // A `let` of `&f` names the function, like a `let` of `f`
     if (const auto init_inst{as_inst(init_ref)};
@@ -921,6 +928,15 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     }
 
     if (!destination.address.type) {
+        // A type only exists at compile time, so a runtime slot can't hold one
+        if (const auto index{comptime_value(value)};
+            index && comp_.constants().is_type(*index)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::MUTABLE_TYPE_BINDING,
+                                std::string{messages::MUTABLE_TYPE_BINDING});
+        }
+
         // An untyped `let mut` takes its initializer's concrete type, never volatile
         const auto typed{TRY(concrete(value, src))};
         auto&      type{*comp_.ctx().pool.strip_volatile(type_of(typed))};

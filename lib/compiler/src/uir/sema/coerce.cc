@@ -619,6 +619,16 @@ auto analyzer::coerce_to(const operand&  op,
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
 
+    // A type given where a value of a value type belongs
+    if (const auto known{comptime_value(op)};
+        known && comp_.constants().is_type(*known) && gs::is_value_type(target.get_kind())) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' is a type, not a value",
+                                        ctx.type_display_name(comp_.constants().type_at(*known))));
+    }
+
     // A reference to a closure is the environment an erased `fn` holds
     if (const auto referent{gs::pointee_of(from)};
         from.get_kind() == gs::type_kind::REFERENCE && !is_comptime() && referent &&
@@ -791,7 +801,12 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
     if (const auto index{comptime_value(typed)}) {
         if (comp_.constants().is_type(*index)) {
-            return comp_.unsupported(u_, src, "a type used as a runtime value");
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                fmt::format("'{}' is a type, not a value",
+                                            comp_.ctx().type_display_name(
+                                                comp_.constants().type_at(*index))));
         }
 
         const auto& data{comp_.constants().value_at(*index).data};

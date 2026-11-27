@@ -675,6 +675,21 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src,
     }
 
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        // A known index past a known length is an error now, a sentinel slot still readable
+        const auto known{index.is_constant() ? int_of(comp_.constants().value_at(
+                                                   index.constant_index()))
+                                             : stdx::none};
+        const auto small{known ? known->to_i128() : stdx::none};
+        const i128 readable{static_cast<i128>(arr->len) + (arr->null_terminated ? 1 : 0)};
+        if (known && (!small || *small < 0 || *small >= readable)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::SLICE_OUT_OF_BOUNDS,
+                                fmt::format("Index {} is out of bounds for a length of {}",
+                                            known->to_string(),
+                                            arr->len));
+        }
+
         if (safety) {
             const auto bound{
                 constant(comp_.constants().intern(u64{arr->len}, index_type), index_type)};

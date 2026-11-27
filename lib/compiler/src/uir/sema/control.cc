@@ -490,6 +490,7 @@ auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
 auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
     if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    TRY(reject_unlabeled_loop(mod().data_of(inst).un.operand, src));
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
 
     // Collecting the types an inferred return meets records each and leaves
@@ -535,6 +536,16 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
         return void_value();
     }
 
+    // An address of a local or parameter dangles once the function returns
+    if ((ret.get_kind() == gs::type_kind::POINTER || ret.get_kind() == gs::type_kind::REFERENCE) &&
+        addresses_frame(mod().data_of(inst).un.operand)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ESCAPING_LOCAL_REFERENCE,
+                            "Returning a reference into a local, which ends with this function's "
+                            "frame");
+    }
+
     if (ret.get_kind() == gs::type_kind::VOID_) {
         builder_.emit_return();
     } else {
@@ -554,6 +565,71 @@ auto analyzer::analyze_ret_value(inst_id inst) -> result<operand> {
     const auto returned{TRY(coerce_to(value, ret, src, {.what = use_site::kind::RETURN}))};
     if (is_comptime() || ret.get_kind() == gs::type_kind::VOID_) { return returned; }
     return operand{TRY(as_runtime(returned, src))};
+}
+
+auto analyzer::reject_unlabeled_loop(ref value, const source& src) -> result<void> {
+    // Only a labeled loop yields a value, through `break :label v`
+    const auto inst{as_inst(value)};
+    if (!inst || mod().tag_of(*inst) != tag::loop) { return {}; }
+    record_reader rec{record(*inst)};
+    if (!rec.str_field().empty()) { return {}; }
+    return comp_.report(
+        u_,
+        src,
+        gs::error::TYPE_MISMATCH,
+        "A loop without a label has no value; label it and leave it with `break :label value`");
+}
+
+auto analyzer::addresses_frame(ref returned) -> bool {
+    const auto taken{as_inst(returned)};
+    if (!taken || (mod().tag_of(*taken) != tag::ref_of && mod().tag_of(*taken) != tag::address_of)) {
+        return false;
+    }
+
+    // A field or element lives in its object, which a pointer, reference or slice doesn't
+    const auto indirect{[&](inst_id object) {
+        const auto found{values_.find(object)};
+        if (found == values_.end()) { return false; }
+        const auto kind{type_of(found->second).get_kind()};
+        return kind == gs::type_kind::POINTER || kind == gs::type_kind::REFERENCE ||
+               kind == gs::type_kind::SLICE;
+    }};
+    const auto object_of{[&](inst_id i) -> stdx::option<inst_id> {
+        const auto r{record(i).ref_field()};
+        return r ? as_inst(*r) : stdx::none;
+    }};
+    auto at{object_of(*taken)};
+    while (at) {
+        switch (mod().tag_of(*at)) {
+        case tag::field_ptr:
+        case tag::field_val:
+        case tag::elem_ptr: {
+            const auto object{object_of(*at)};
+            if (!object || indirect(*object)) { return false; }
+            at = object;
+            break;
+        }
+        case tag::elem_val: {
+            const auto object{as_inst(mod().data_of(*at).bin.lhs)};
+            if (!object || indirect(*object)) { return false; }
+            at = object;
+            break;
+        }
+        case tag::load:      at = as_inst(mod().data_of(*at).un.operand); break;
+        case tag::alloc_mut:
+        case tag::let_value: return true;
+        case tag::param:     return !indirect(*at) && !is_comptime_param(*at);
+        default:             return false;
+        }
+    }
+
+    return false;
+}
+
+auto analyzer::is_comptime_param(inst_id param) const -> bool {
+    record_reader p{record(param)};
+    p.skip_str().skip_body().skip_body();
+    return (p.u32_field() & flags::PARAM_COMPTIME) != 0;
 }
 
 auto analyzer::yields_nothing(gsl::span<const inst_id> body) const -> bool {

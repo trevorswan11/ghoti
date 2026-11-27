@@ -72,9 +72,9 @@ TEST_CASE("constant shifts by a negative or oversized amount are rejected") {
 }
 
 TEST_CASE("enum member values must fit the underlying type and be distinct") {
-    CHECK(helpers::raised("const E = enum : u8 { a = 300 };", sema::error::TYPE_MISMATCH));
-    CHECK(helpers::raised("const E = enum : u8 { a = -1 };", sema::error::TYPE_MISMATCH));
-    CHECK(helpers::raised("const E = enum : u8 { a = 254, b, c };", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const E = enum : u8 { a = 300 };", sema::error::LITERAL_OUT_OF_RANGE));
+    CHECK(helpers::raised("const E = enum : u8 { a = -1 };", sema::error::LITERAL_OUT_OF_RANGE));
+    CHECK(helpers::raised("const E = enum : u8 { a = 254, b, c };", sema::error::LITERAL_OUT_OF_RANGE));
     CHECK(helpers::raised("const E = enum { a = 1, b = 1 };", sema::error::TYPE_MISMATCH));
 }
 
@@ -89,7 +89,7 @@ TEST_CASE("an unvalued enum member continues from its predecessor") {
 }
 
 TEST_CASE("assignments need an assignable left side") {
-    CHECK(helpers::raised("const f = fn(): void { 5 = 6; };", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const f = fn(): void { 5 = 6; };", sema::error::ASSIGNMENT_TO_CONST));
 }
 
 TEST_CASE("a value cannot be used as a type") {
@@ -103,7 +103,7 @@ TEST_CASE("`impl X for T` requires X to be an interface") {
 
 TEST_CASE("array lengths must be non-negative and addressable") {
     CHECK(helpers::raised("const f = fn(): void { let mut a: [-1]u8 = undefined; _ = a; };",
-                          sema::error::TYPE_MISMATCH));
+                          sema::error::LITERAL_OUT_OF_RANGE));
     CHECK(helpers::raised(
         "const f = fn(): void { let mut a: [18446744073709551615]u8 = undefined; _ = a; };",
         sema::error::TYPE_MISMATCH));
@@ -169,7 +169,7 @@ TEST_CASE("a builtin must be called") {
 
 TEST_CASE("casts need a type target and a value operand") {
     CHECK(helpers::raised("const f = fn(): i32 { return @intCast(i32, ); };",
-                          sema::error::TYPE_USED_AS_VALUE));
+                          sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised("const f = fn(x: u8): i32 { return @intCast(5, x); };",
                           sema::error::TYPE_MISMATCH));
     CHECK(helpers::compile_and_run(R"(
@@ -185,7 +185,7 @@ TEST_CASE("a function declared to return a value cannot return nothing") {
 }
 
 TEST_CASE("an anonymous aggregate cannot be used mid-expression") {
-    CHECK(helpers::raised("const C = struct { id: i32 }.len;", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const C = struct { id: i32 }.len;", sema::error::UNDECLARED_IDENTIFIER));
 }
 
 TEST_CASE("a generic function cannot be exported") {
@@ -329,7 +329,7 @@ TEST_CASE("`@tagName` requires an enum or tagged union value") {
         return std::string{decls} + "const f = fn(e: E, pe: ^E): void { _ = @tagName(" +
                std::string{operand} + "); };";
     }};
-    CHECK(helpers::raised(with_operand("u8"), sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(with_operand("u8"), sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(with_operand("5"), sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(with_operand("S{ .x = 1 }"), sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(with_operand("pe"), sema::error::TYPE_MISMATCH));
@@ -514,7 +514,7 @@ TEST_CASE("a repeated self-reference reports once instead of crashing") {
 TEST_CASE("a type cannot be an index or an asm input") {
     CHECK(helpers::raised(
         "pub const main = fn(): i32 { let a: [3]i32 = .{1, 2, 3}; return a[i32]; };",
-        sema::error::TYPE_USED_AS_VALUE));
+        sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(R"(
         pub const f = fn(): void {
             asm { template: "syscall", inputs: ("{rax}" = i64), options: (volatile) };
@@ -672,7 +672,7 @@ TEST_CASE("returning a reference into the function's own frame is an error") {
 TEST_CASE("fuzz-found crashes on invalid code are errors") {
     // A value pack can't size a type
     CHECK(helpers::raised("const count = fn(c...): type { return c.len; }; const X = count(1, 2);",
-                          sema::error::TYPE_MISMATCH));
+                          sema::error::RETURN_TYPE_MISMATCH));
     // An untyped float has `f64`'s bit pattern
     CHECK(helpers::raised("pub const main = fn(): i32 { return @bitCast(i32, 1.0); };",
                           sema::error::TYPE_MISMATCH));
@@ -687,7 +687,7 @@ TEST_CASE("fuzz-found crashes on invalid code are errors") {
     )",
                           sema::error::ASSIGNMENT_TO_CONST));
     CHECK(helpers::raised("pub const main = fn(): i32 { return if (bool) 1 else 0; };",
-                          sema::error::TYPE_USED_AS_VALUE));
+                          sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(R"(
         pub const f = fn(): void { asm { template: "nop", inputs: ("r" = _), options: (volatile) }; };
     )",
@@ -708,7 +708,7 @@ TEST_CASE("fuzz-found crashes on invalid code are errors") {
 TEST_CASE("a type where a value belongs is an error, not a crash") {
     CHECK(helpers::raised("pub const main = fn(): i32 { let e: ^mut opaque = @ptrCast(^mut opaque, "
                           "^mut u8); return 0; };",
-                          sema::error::TYPE_USED_AS_VALUE));
+                          sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised("pub const main = fn(): i32 { let b = true; return if (b) u8 else 1; };",
                           sema::error::TYPE_USED_AS_VALUE));
     CHECK(helpers::raised("pub const main = fn(): i32 { let n: i32 = 3; return match (n) { 1, i32 "

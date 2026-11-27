@@ -102,7 +102,7 @@ TEST_CASE("only a type can be assigned to a `comptime let mut` type") {
             return 0;
         };
     )",
-                          sema::error::TYPE_MISMATCH));
+                          sema::error::OPERATOR_TYPE_MISMATCH));
     // A runtime binding still can't hold a type
     CHECK(helpers::raised("pub const main = fn(): i32 { let mut T: type = u8; return 0; };",
                           sema::error::MUTABLE_TYPE_BINDING));

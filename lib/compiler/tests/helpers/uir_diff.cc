@@ -743,6 +743,44 @@ auto run_uir_sema_files(mod::source_loader&          loader,
     return run;
 }
 
+auto uir_diagnostics(mod::source_loader&          loader,
+                     const std::filesystem::path& root_path,
+                     const pipeline_settings&     settings,
+                     library_list                 libraries) -> program_diagnostics {
+    auto       modules{make_manager(loader, libraries)};
+    const auto root{modules->try_get_file_module(root_path)};
+    REQUIRE(root);
+    REQUIRE_FALSE((*root)->is_errored());
+
+    sema::analyzer analyzer{*modules, std::cerr, false};
+    configure(analyzer, settings);
+    auto& ctx{analyzer.get_ctx()};
+    ctx.target_opts    = settings.target_opts;
+    ctx.runtime_safety = settings.runtime_safety;
+    const sema::cfg_context cfg{.target_opts = ctx.target_opts,
+                                .facts = codegen::target_facts::resolve(settings.target_opts.triple_str),
+                                .build_mode     = ctx.build_mode,
+                                .runtime_safety = ctx.runtime_safety,
+                                .testing        = settings.testing,
+                                .modules        = *modules};
+
+    // AstGen's errors stop the build before Sema, as they do in the driver
+    program_diagnostics out;
+    auto lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = *modules})};
+    for (auto& item : lowered) {
+        for (auto& d : item.result.diagnostics) { out.errors.emplace_back(std::move(d)); }
+    }
+    if (!out.errors.empty()) { return out; }
+
+    auto analyzed{uir::sema::analyze(ctx,
+                                     {.root = root->get(), .modules = lowered},
+                                     {.check_all = settings.check_all})};
+    if (analyzed.stopped_at) { FAIL("UIR Sema stopped at " << analyzed.stopped_at->what); }
+    out.errors   = std::move(analyzed.diagnostics);
+    out.warnings = std::move(analyzed.warnings);
+    return out;
+}
+
 auto uir_gir(std::string_view source) -> std::string {
     const auto  run{run_uir_sema(source)};
     const auto& out{*run->out};

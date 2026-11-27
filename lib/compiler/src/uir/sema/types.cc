@@ -16,6 +16,7 @@
 #include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -299,6 +300,18 @@ auto analyzer::analyze_array_type(inst_id inst) -> result<operand> {
     if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
     if (!len_ref) { return comp_.unsupported(u_, src, "an array type sized by its items"); }
     const auto len{TRY(array_length(*len_ref, src))};
+
+    // Past 2^48 bytes no target can address the array, and sizes start overflowing
+    constexpr u128 MAX_ARRAY_BYTES{u128{1} << 48U};
+    const bool     scalar{gs::is_numeric(elem.get_kind()) || elem.get_kind() == gs::type_kind::BOOL ||
+                      elem.get_kind() == gs::type_kind::POINTER};
+    const auto     elem_bytes{
+        scalar ? gir::size_of(elem, codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str))
+                   : usize{1}};
+    if (u128{len} > MAX_ARRAY_BYTES || u128{len} * u128{elem_bytes} > MAX_ARRAY_BYTES) {
+        return comp_.report(u_, src, gs::error::TYPE_MISMATCH, "Array type is too large");
+    }
+
     return interned_type(comp_.ctx().get_array(
         container_mutability(bits), (bits & flags::SENTINEL) != 0, len, elem));
 }

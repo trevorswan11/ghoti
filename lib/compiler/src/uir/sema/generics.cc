@@ -534,6 +534,18 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             continue;
         }
 
+        // A type is only ever a compile-time argument
+        if (const auto known{comptime_value(arg)};
+            is_auto && known && comp_.constants().is_type(*known)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Argument {} of '{}' is a type, which only a "
+                                            "'comptime' parameter takes",
+                                            i + 1,
+                                            g.name));
+        }
+
         auto& type{declared ? *TRY(matched_type(*declared, arg, param_src)) : inferred_type(arg)};
 
         // An `impl Fn(...)` parameter takes a callable of exactly that signature
