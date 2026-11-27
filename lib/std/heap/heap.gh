@@ -1,11 +1,18 @@
 import std;
 
+// TODO(tcs) #457: Alias these like normal
+import "allocator_test_suite.gh" as allocator_test_suite;
+
+@[testing] pub const test_allocator = fn(allocator: std.mem.Allocator): void {
+    allocator_test_suite.test_allocator(allocator);
+};
+
+@[testing] pub const test_allocator_errors = fn(allocator: std.mem.Allocator): void {
+    allocator_test_suite.test_allocator_errors(allocator);
+};
+
 @cfg (std.os.HAS_BACKEND) {
     import "page_allocator.gh" as page_alloc;
-
-    test {
-        import "page_allocator.gh";
-    }
 
     pub const PageAllocator = page_alloc.PageAllocator;
 
@@ -13,4 +20,18 @@ import std;
     pub let mut page_allocator: std.mem.Allocator = .{
         .vtable = ^mut page_alloc_impl,
     };
+
+    import "arena_allocator.gh" as arena_alloc;
+
+    pub const ArenaAllocator = arena_alloc.ArenaAllocator;
+
+    import "general_purpose_allocator.gh" as general_alloc;
+
+    pub const GeneralPurposeAllocator = general_alloc.GeneralPurposeAllocator;
+
+    test {
+        import "page_allocator.gh";
+        import "arena_allocator.gh";
+        import "general_purpose_allocator.gh";
+    }
 }

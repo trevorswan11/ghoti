@@ -75,10 +75,52 @@ pub const AllocatorVTable = interface {
 pub const Allocator = struct {
     pub vtable: ^dyn AllocatorVTable,
 
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_alloc = fn(
+        self,
+        len: usize,
+        alignment: Alignment,
+    ): std.Option(^mut u8) {
+        return self.vtable.alloc(len, alignment);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_resize = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): bool {
+        return self.vtable.resize(memory, alignment, new_len);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_remap = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+        new_len: usize,
+    ): std.Option(^mut u8) {
+        return self.vtable.remap(memory, alignment, new_len);
+    };
+
+    /// This function is not intended to be called except from within the
+    /// implementation of an `Allocator`.
+    @[inline(.always)] pub const raw_free = fn(
+        self,
+        memory: []mut u8,
+        alignment: Alignment,
+    ): void {
+        return self.vtable.free(memory, alignment);
+    };
+
     /// Returns a pointer to undefined memory.
     /// Call `destroy` with the result to free the memory.
     pub const create = fn(self, comptime T: type): std.Result(^mut T, AllocError) {
-        return match (self.vtable.alloc(@sizeOf(T), .of(T))) {
+        return match (self.raw_alloc(@sizeOf(T), .of(T))) {
             .some => |raw| .of(@ptrCast(^mut T, raw)),
             .none => .fail(.out_of_memory),
         };
@@ -89,7 +131,7 @@ pub const Allocator = struct {
     pub const destroy = fn(self, ptr: ^mut auto): void {
         const T = @TypeOf(*ptr);
         let raw = @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
-        return self.vtable.free(raw, .of(T));
+        return self.raw_free(raw, .of(T));
     };
 
     /// Allocates an array of `n` items of type `T` and sets all the
@@ -106,7 +148,7 @@ pub const Allocator = struct {
         if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
             return .fail(.out_of_memory);
         }
-        return match (self.vtable.alloc(size, .of(T))) {
+        return match (self.raw_alloc(size, .of(T))) {
             .some => |raw| .of(@sliceFromPtr(@ptrCast(^mut T, raw), len)),
             .none => .fail(.out_of_memory),
         };
@@ -116,21 +158,140 @@ pub const Allocator = struct {
     /// If memory has length 0, free is a no-op.
     /// To free a single item, see `destroy`.
     pub const free = fn(self, mem: []mut auto): void {
+        if (mem.len == 0uz) return;
         const T = @TypeOf(mem[0]);
         let mut size: usize = undefined;
         let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
         @assert(!overflowed, "Attempt to free overflowed allocation");
         let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
-        return self.vtable.free(raw, .of(T));
+        return self.raw_free(raw, .of(T));
+    };
+
+    /// Request to modify the size of an allocation in place.
+    ///
+    /// It is guaranteed to not move the pointer, however the allocator
+    /// implementation may refuse the resize request by returning `false`.
+    ///
+    /// `mem` may have length 0, in which case `false` is returned, unless
+    /// `new_len` is also 0, in which case `true` is returned.
+    ///
+    /// `new_len` may be 0, in which case the allocation is freed.
+    pub const resize = fn(self, mem: []mut auto, new_len: usize): bool {
+        if (new_len == 0uz) {
+            self.free(mem);
+            return true;
+        }
+        if (mem.len == 0uz) {
+            return false;
+        }
+        const T = @TypeOf(mem[0]);
+        if comptime (@sizeOf(T) == 0) {
+            return true;
+        }
+        let mut new_size: usize = undefined;
+        if (@mulWithOverflow(@sizeOf(T), new_len, ^mut new_size)) {
+            return false;
+        }
+        let mut old_size: usize = undefined;
+        let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut old_size);
+        @assert(!overflowed, "Attempt to resize overflowed allocation");
+        let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), old_size);
+        return self.raw_resize(raw, .of(T), new_size);
+    };
+
+    /// Attempt to expand or shrink memory, allowing relocation.
+    ///
+    /// A non-`none` return value indicates the resize was successful. The
+    /// allocation may have same address, or may have been relocated. In either
+    /// case, the allocation now has size of `new_len`. A `none` return value
+    /// indicates that the resize would be equivalent to allocating new memory,
+    /// copying the bytes from the old memory, and then freeing the old memory.
+    /// In such case, it is more efficient for the caller to perform the copy.
+    ///
+    /// `new_len` may be 0, in which case the allocation is freed.
+    pub const remap = fn(self, mem: []mut auto, new_len: usize): std.Option([]mut @TypeOf(mem[0])) {
+        const T = @TypeOf(mem[0]);
+        if (new_len == 0uz) {
+            self.free(mem);
+            return .of(@sliceFromPtr(mem.ptr, 0uz));
+        }
+        if (mem.len == 0uz) {
+            return .empty;
+        }
+        if comptime (@sizeOf(T) == 0) {
+            return .of(@sliceFromPtr(mem.ptr, new_len));
+        }
+        let mut new_size: usize = undefined;
+        if (@mulWithOverflow(@sizeOf(T), new_len, ^mut new_size)) {
+            return .empty;
+        }
+        let mut old_size: usize = undefined;
+        let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut old_size);
+        @assert(!overflowed, "Attempt to remap overflowed allocation");
+        let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), old_size);
+        return match (self.raw_remap(raw, .of(T), new_size)) {
+            .some => |new_ptr| .of(@sliceFromPtr(@ptrCast(^mut T, new_ptr), new_len)),
+            .none => .empty,
+        };
+    };
+
+    /// Requests a new size for an existing allocation, which can be larger,
+    /// smaller, or the same size as the old memory allocation.
+    ///
+    /// If `new_len` is 0, this is the same as `free` and it always succeeds.
+    /// `mem` may have length 0, which makes a new allocation.
+    ///
+    /// This function only fails on out-of-memory conditions.
+    pub const realloc = fn(self, mem: []mut auto, new_len: usize): std.Result(
+        []mut @TypeOf(mem[0]),
+        AllocError
+    ) {
+        const T = @TypeOf(mem[0]);
+        if (mem.len == 0uz) {
+            return self.alloc(T, new_len);
+        }
+        if (new_len == 0uz) {
+            self.free(mem);
+            return .of(@sliceFromPtr(mem.ptr, 0uz));
+        }
+        if comptime (@sizeOf(T) == 0) {
+            return .of(@sliceFromPtr(mem.ptr, new_len));
+        }
+        match (self.remap(mem, new_len)) {
+            .some => |remapped| return .of(remapped),
+            .none => {},
+        }
+        let new_mem = self.alloc(T, new_len)?;
+        let copy_len = if (new_len < mem.len) new_len else mem.len;
+        @memcpy(new_mem[0uz..copy_len], mem[0uz..copy_len]);
+        self.free(mem);
+        return .of(new_mem);
     };
 
     /// Copies `slice` to newly allocated memory. Caller owns the memory.
     pub const dupe = fn(self, comptime T: type, slice: []T): std.Result([]mut T, AllocError) {
-        // TODO(tcs): Also implement dupeZ for null temrination
         let new_buf = self.alloc(T, slice.len)?;
         @memcpy(new_buf, slice);
-        return new_buf;
+        return .of(new_buf);
+    };
+
+    /// Copies `slice` to newly allocated memory, appending a null terminator. Caller owns the memory.
+    pub const dupeZ = fn(self, comptime T: type, slice: []T): std.Result([:0]mut T, AllocError) {
+        let mut len_with_null: usize = undefined;
+        if (@addWithOverflow(slice.len, 1uz, ^mut len_with_null)) {
+            return .fail(.out_of_memory);
+        }
+        let new_buf = self.alloc(T, len_with_null)?;
+        @memcpy(new_buf[0uz..slice.len], slice);
+        new_buf[slice.len] = @bitCast(0);
+
+        const Raw = extern struct {
+            ptr: ^mut T,
+            len: usize,
+        };
+
+        let mut raw = Raw{ .ptr = new_buf.ptr, .len = slice.len };
+        let z_slice = *(@ptrCast(^mut [:0]mut T, ^mut raw));
+        return .of(z_slice);
     };
 };
-
-// TODO(tcs): Implement realloc, remap, and resize thunks

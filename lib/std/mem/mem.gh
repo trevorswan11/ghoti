@@ -22,6 +22,10 @@ pub const Alignment = enum : std.math.Log2Int(usize) {
         return @fromBackingInt(@intCast(std.math.Log2Int(usize), @ctz(n)));
     };
 
+    pub const to_byte_units = fn(a: Alignment): usize {
+        return 1uz << @backingInt(a);
+    };
+
     pub const of = fn(comptime T: type): Alignment {
         return from_byte_units(@alignOf(T));
     };
@@ -31,6 +35,12 @@ test "Alignment.from_byte_units" {
     @expect(Alignment.from_byte_units(0b1) == .@"1");
     @expect(Alignment.from_byte_units(0b1000) == .@"8");
     @expect(Alignment.from_byte_units(0b100000) == .@"32");
+}
+
+test "Alignment.to_byte_units" {
+    @expect(Alignment.to_byte_units(.@"1") == 0b1);
+    @expect(Alignment.to_byte_units(.@"8") == 0b1000);
+    @expect(Alignment.to_byte_units(.@"32") == 0b100000);
 }
 
 test "Alignment.of" {
