@@ -23,12 +23,11 @@ struct astgen_context {
     bool lenient{false};
 };
 
-// A name lowering resolved lexically, for the LSP. `use` names what `name` declares, or is a
-// declared name itself when `name` is none
+// A name lowering resolved lexically, for the LSP
 struct name_use {
-    source                              use;
-    stdx::option<ast::node_id>          name{};
-    stdx::option<ast::node_id>          decl{};
+    source                     use; // names what `name` declares orelse is a declared name itself
+    stdx::option<ast::node_id> name{};
+    stdx::option<ast::node_id> decl{};
     stdx::option<ast::explicit_type_id> annotation{};
 };
 
