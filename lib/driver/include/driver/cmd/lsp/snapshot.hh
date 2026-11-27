@@ -32,6 +32,7 @@ struct analysis_inputs {
     u64                                revision{0};
     mod::overlay_loader                files;
     std::vector<std::filesystem::path> roots;
+    bool                               sema_uir{false};
 };
 
 // A finished analysis of one revision, which queries read while the next one is built.
@@ -51,7 +52,8 @@ class analysis_snapshot {
     analysis_snapshot(u64                 revision,
                       mod::overlay_loader files,
                       std::ostream&       error_stream,
-                      mod::parse_cache&   cache) noexcept;
+                      mod::parse_cache&   cache,
+                      bool                sema_uir = false) noexcept;
     ~analysis_snapshot() = default;
     MAKE_PINNED(analysis_snapshot);
 

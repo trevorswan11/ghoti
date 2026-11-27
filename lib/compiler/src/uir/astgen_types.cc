@@ -443,9 +443,13 @@ auto astgen::lower_param(const ast::function_expr::parameter& param, u32 extra_f
                                 .u32_field(0),
                             param.name)};
     if (name) {
+        note_declared(param.name, stdx::none, param.explicit_type);
         DISCARD(declare(name->name,
                         location_of(param.name),
-                        {.kind = binding_kind::VALUE, .value = added},
+                        {.kind       = binding_kind::VALUE,
+                         .value      = added,
+                         .name_node  = ast::node_id{param.name},
+                         .annotation = param.explicit_type},
                         bodyless));
     }
     return added;
@@ -478,7 +482,9 @@ auto astgen::lower_function(ast::node_id                        id,
                                     fn.self->name)};
             DISCARD(declare(name,
                             location_of(fn.self->name),
-                            {.kind = binding_kind::VALUE, .value = added},
+                            {.kind      = binding_kind::VALUE,
+                             .value     = added,
+                             .name_node = ast::node_id{fn.self->name}},
                             bodyless));
         }
         for (const auto& param : fn.parameters) { DISCARD(lower_param(param, 0, bodyless)); }

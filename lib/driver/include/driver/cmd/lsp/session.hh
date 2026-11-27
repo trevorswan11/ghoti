@@ -26,7 +26,8 @@ class analysis_session {
     // Files already in `cache` are borrowed rather than parsed again
     analysis_session(mod::overlay_loader&            loader,
                      std::ostream&                   error_stream,
-                     stdx::option<mod::parse_cache&> cache = stdx::none) noexcept;
+                     stdx::option<mod::parse_cache&> cache    = stdx::none,
+                     bool                            sema_uir = false) noexcept;
     ~analysis_session() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analysis_session)
 
@@ -38,8 +39,13 @@ class analysis_session {
     MAKE_DEDUCING_GETTER(analyzer);
 
   private:
+    // UIR Sema's analysis, recording names and types into each module's LSP tables
+    auto analyze_uir(mod::module_t& root) -> void;
+
+  private:
     mod::module_manager manager_;
     sema::analyzer      analyzer_;
+    bool                sema_uir_{false};
 };
 
 } // namespace ghoti::lsp

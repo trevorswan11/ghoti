@@ -8,6 +8,7 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/arena.hh>
+#include <stdx/function.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -112,6 +113,11 @@ class module_t {
         import_boundary_global_ = globals_.size();
         import_boundary_marked_ = true;
     }
+
+    // Moves the root module's functions and globals ahead of the imported ones
+    auto mark_import_boundary(const stdx::function<bool(const function&)>&    fn_is_root,
+                              const stdx::function<bool(const global_decl&)>& global_is_root)
+        -> void;
 
     // Drops every unreferenced `extern` decl and every unreachable imported decl
     auto prune_unreachable(gsl::span<const std::string_view> roots) -> void;

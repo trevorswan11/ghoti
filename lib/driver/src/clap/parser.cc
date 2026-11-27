@@ -77,7 +77,8 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         return stdx::make_box<cmd::lsp_server>(error_stream_,
                                                std::chrono::milliseconds{lsp_debounce_ms_},
                                                lsp_workspace_excludes_,
-                                               static_cast<usize>(lsp_workspace_file_cap_));
+                                               static_cast<usize>(lsp_workspace_file_cap_),
+                                               lsp_sema_ == "uir");
     }
 
     if (build_obj_cmd->parsed()) {
@@ -147,6 +148,9 @@ auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
                     "Maximum number of files to discover during workspace-wide file discovery")
         ->default_val(lsp_workspace_file_cap_)
         ->check(CLI::NonNegativeNumber);
+    sub->add_option("--sema", lsp_sema_, "The semantic analysis pipeline: legacy (default), or uir")
+        ->default_val(lsp_sema_)
+        ->check(CLI::IsMember({"legacy", "uir"}));
     return sub;
 }
 

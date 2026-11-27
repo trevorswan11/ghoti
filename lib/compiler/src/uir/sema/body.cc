@@ -173,6 +173,7 @@ auto analyzer::analyze_function() -> result<void> {
         const bool  discarded{(param_flags & flags::PARAM_DISCARDED) != 0 || name == "_"};
         const auto& added{gir_fn_->add_param(discarded ? std::string{} : std::string{name}, type)};
         const gir::value value{added.id, type};
+        if (comp_.indexing()) { note_type(param, operand{value}); }
         if (binding && binding->value) { continue; }
 
         // A slice parameter is passed in a slot of its own, and a written one is spilled to one
@@ -318,6 +319,7 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
             }
         }
 
+        if (comp_.indexing()) { note_type(inst, *value); }
         values_.insert_or_assign(inst, std::move(*value));
         if (jump_) { return flow{}; }
         if (!is_comptime() && terminated()) { return flow{}; }

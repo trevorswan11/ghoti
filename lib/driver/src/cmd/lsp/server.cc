@@ -274,6 +274,7 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
 #endif
 
     state server{error_stream_};
+    server.store.set_sema_uir(sema_uir_);
     // The reader stops on its own after the last message the loop below acts on
     const std::jthread reader{[&] {
         while (true) {

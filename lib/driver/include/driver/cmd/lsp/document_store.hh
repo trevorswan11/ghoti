@@ -58,6 +58,8 @@ class document_store {
 
     // A copy of everything an analysis of the current revision reads
     [[nodiscard]] auto inputs() const -> analysis_inputs;
+    // Analyzes through UIR Sema instead of the old pipeline
+    auto set_sema_uir(bool sema_uir) noexcept -> void { sema_uir_ = sema_uir; }
 
     // Adopts `snapshot` unless a newer one is already installed, queueing its diagnostics
     auto install(stdx::box<analysis_snapshot> snapshot) -> void;
@@ -108,6 +110,7 @@ class document_store {
     mod::parse_cache                           parse_cache_;
     stdx::option<stdx::box<analysis_snapshot>> snapshot_;
     touched_modules                            pending_diagnostics_;
+    bool                                       sema_uir_{false};
 };
 
 } // namespace ghoti::lsp

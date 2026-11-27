@@ -946,6 +946,12 @@ class compilation {
     // Records the first construct this phase doesn't analyze and returns the unsupported stop
     [[nodiscard]] auto unsupported(const unit& u, const source& src, std::string what)
         -> stdx::err<stop>;
+    [[nodiscard]] auto indexing() const noexcept -> bool { return opts_.index; }
+    // Whether `u` is the program's root module, whose own items are kept whatever reaches them
+    [[nodiscard]] auto is_root(const unit& u) const noexcept -> bool;
+    auto note_root_global(std::string name) -> void { root_globals_.emplace(std::move(name)); }
+    // Moves the root module's functions and globals first so pruning keeps them
+    auto mark_root_items() -> void;
     // The function instance emitted under `symbol`
     [[nodiscard]] auto function_named(std::string_view symbol) -> stdx::option<instance&>;
     // A use of a deprecated name, a warning or an error by the deprecation policy, once a site
@@ -1168,6 +1174,7 @@ class compilation {
     gir::module_t                                                       gir_;
     gs::diagnostics                                                     diagnostics_;
     gs::diagnostics                                                     warnings_;
+    ankerl::unordered_dense::set<std::string>                           root_globals_;
     stdx::option<sema::unsupported>                                     stopped_at_;
     u32                                                                 ptr_bits_;
     std::vector<comptime_alloc>                                         allocs_;
@@ -1273,6 +1280,7 @@ class analyzer {
     [[nodiscard]] auto bind_comptime_param(inst_id param, ip::index value) -> result<void>;
     // A module-level declaration's value, emitting its GIR global when it has one
     [[nodiscard]] auto analyze_decl(decl_id decl) -> result<operand>;
+    [[nodiscard]] auto decl_value(decl_id decl) -> result<operand>;
     // A module-level `comptime let mut`, a compile-time allocation of its own
     [[nodiscard]] auto comptime_global(const decl& d, const source& src) -> result<operand>;
     // The alignment a local's attributes give its slot
@@ -1716,6 +1724,9 @@ class analyzer {
     [[nodiscard]] auto read(const place& p, const source& src) -> result<gir::value>;
     // The storage of an operand whose instruction isn't at hand, spilling a value with none
     [[nodiscard]] auto operand_address(const operand& op, const source& src) -> result<place>;
+    // A known aggregate's slot in a runtime body, built in its entry once for every read of it
+    [[nodiscard]] auto entry_aggregate(const operand& op, const source& src)
+        -> result<stdx::option<place>>;
     [[nodiscard]] auto global_place(std::string_view symbol, gs::type& type, bool is_mutable)
         -> place;
     // `type` as a binding named by `r` holds it, mutable unless the binding is immutable
@@ -2061,6 +2072,11 @@ class analyzer {
     [[nodiscard]] auto reading_binary(gsl::span<const inst_id> body, inst_id call) const
         -> stdx::option<inst_id>;
     [[nodiscard]] auto analyze_unary(inst_id inst, tag t) -> result<operand>;
+    // A unary operator of an inferred cast, once the type it is used as is known
+    [[nodiscard]] auto unary_as(inst_id inst, gs::type& target, const source& src)
+        -> result<operand>;
+    [[nodiscard]] auto unary_of(inst_id inst, tag t, const operand& operand_value)
+        -> result<operand>;
     [[nodiscard]] auto analyze_bool_op(inst_id inst, bool is_and) -> result<operand>;
     [[nodiscard]] auto
     analyze_shift(inst_id inst, const binary_info& info, const operand& lhs, const operand& rhs)
@@ -2142,6 +2158,8 @@ class analyzer {
     [[nodiscard]] auto literal_name(const enum_literal& literal) const -> std::string;
     // An enum literal as a compile-time value of `@EnumLiteral()`
     [[nodiscard]] auto literal_value(const enum_literal& literal) -> ip::index;
+    // Whether a merge waiting for its type holds untyped literals, not untyped numbers
+    [[nodiscard]] auto merge_holds_literals(merge_ref m) const -> bool;
     [[nodiscard]] static auto is_untyped_literal(const operand& op) -> bool {
         return op.is<anon_init>() || op.is<enum_literal>() || op.is<cast_ref>() ||
                op.is<implicit_call>() || op.is<slice_literal>();
@@ -2386,6 +2404,19 @@ class analyzer {
     auto warn_deprecated_decl(const unit& owner, decl_id decl, const source& src) -> void;
     auto warn_deprecated_field(gs::type& type, usize index, const source& src) -> void;
     [[nodiscard]] auto quiet_deprecation() const -> bool;
+    // The LSP index (index.cc): a name's type, and the declaration a member access reaches
+    auto note_type(inst_id inst, const operand& value) -> void;
+    auto note_type_at(const source& src, const operand& value) -> void;
+    auto note_member(const source&                       src,
+                     mod::module_t&                      owner,
+                     ast::node_id                        name,
+                     stdx::option<ast::node_id>          decl,
+                     stdx::option<ast::explicit_type_id> annotation,
+                     stdx::option<gs::type&>             type) -> void;
+    auto note_member_decl(const source& src, const unit& owner, decl_id decl) -> void;
+    auto note_field(const source& src, gs::type& type, usize index) -> void;
+    // A field's or variant's declared name, found under the cursor with its type
+    auto note_declared_name(ast::node_id name, gs::type& type) -> void;
     // A reference to a `@[testing]` function, which only a test or another one may call directly
     [[nodiscard]] auto testing_name(const unit& owner, decl_id decl) -> stdx::option<std::string>;
     [[nodiscard]] auto check_testing_use(std::string_view name, bool called, const source& src)
@@ -2808,6 +2839,8 @@ class analyzer {
     ankerl::unordered_dense::map<inst_id, gir::value> reference_reads_;
     // A binary operator's left side read through a returned reference right after its call
     ankerl::unordered_dense::map<inst_id, std::pair<gir::value, operand>> early_reads_;
+    // Known aggregates a runtime body addresses, each built once in the entry (entry_aggregate)
+    ankerl::unordered_dense::map<ip::index, place> entry_built_;
     // Compile-time string parameters built on entry, which spilling them reuses
     ankerl::unordered_dense::map<inst_id, gir::value> entry_strings_;
     // The packed fields a nested packed field's place is reached through

@@ -106,7 +106,7 @@ auto astgen::run() -> lowered {
     pop_scope();
     // A defer copied onto several exits reports its errors once
     diags_.remove_duplicates();
-    return {std::move(out_), std::move(diags_)};
+    return {std::move(out_), std::move(diags_), std::move(names_)};
 }
 
 auto astgen::lower_roots() -> void {
@@ -324,6 +324,7 @@ auto astgen::add_value_decl(const ast::decl_stmt& decl,
         (decl.attributes && decl.attributes->find(ast::attribute_kind::DEPRECATED))) {
         d.flags |= decl_flags::QUIET_DEPRECATION;
     }
+    note_declared(decl.name, node, stdx::none);
     if (decl.extern_target) {
         d.extern_target = out_.intern(ast_.get_as<ast::string_expr>(*decl.extern_target).value);
     }
@@ -684,6 +685,38 @@ auto lower_module(const mod::module_t& mod, const astgen_context& cx) -> lowered
     return gen.run();
 }
 
+auto index_names(lowered_module& item) -> void {
+    auto& m{*item.source};
+    for (const auto& name : item.result.names) {
+        const auto declaration{
+            name.decl || name.annotation
+                ? stdx::option<sema::declaration_ref>{sema::declaration_ref{
+                      .owner = &m, .decl = name.decl, .annotation = name.annotation}}
+                : stdx::none};
+        name.use.visit([&](auto id) {
+            if (name.name) {
+                m.set_identifier_definition(id,
+                                            located_span{m.path,
+                                                         {m.ast.location_of(*name.name),
+                                                          m.ast.end_location_of(*name.name)}});
+            }
+
+            // A declared name is found under the cursor like a use
+            if constexpr (std::same_as<decltype(id), ast::node_id>) {
+                m.add_identifier_position(id);
+            }
+            if (declaration) { m.set_identifier_declaration(id, *declaration); }
+
+            // A use reads its declaration's type, which Sema gave the declared name
+            if constexpr (std::same_as<decltype(id), ast::node_id>) {
+                if (name.name && !m.has_sema_type(id) && m.has_sema_type(*name.name)) {
+                    m.set_sema_type(id, m.get_sema_type(*name.name));
+                }
+            }
+        });
+    }
+}
+
 auto lower_reachable(mod::module_t& root, const astgen_context& cx) -> std::vector<lowered_module> {
     std::vector<lowered_module>                                       out;
     ankerl::unordered_dense::set<gsl::not_null<const mod::module_t*>> seen{&root};
@@ -691,7 +724,7 @@ auto lower_reachable(mod::module_t& root, const astgen_context& cx) -> std::vect
     while (!pending.empty()) {
         const auto next{pending.back()};
         pending.pop_back();
-        if (next->is_errored()) { continue; }
+        if (next->is_errored() && !cx.lenient) { continue; }
         auto lowered{lower_module(*next, cx)};
         for (const auto& import : lowered.uir.imports()) {
             if (!import.path) { continue; }

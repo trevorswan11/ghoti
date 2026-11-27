@@ -156,6 +156,11 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
     // A value with no storage is spilled into a slot
     const auto inst{as_inst(r)};
     const bool binding{inst && is_binding(mod().tag_of(*inst))};
+
+    // A known aggregate read through a constant is built once for every read
+    if (!binding) {
+        if (const auto built{TRY(entry_aggregate(op, src))}) { return *built; }
+    }
     const bool to_entry{binding && (op.is<ip::index>() || mod().tag_of(*inst) == tag::param)};
 
     // An untyped constant is spilled at the type it defaults to
@@ -265,6 +270,7 @@ auto analyzer::field_index(gs::type& type, std::string_view name, const source& 
     }()};
     if (const auto found{index_of(names, name)}) {
         warn_deprecated_field(type, *found, src);
+        note_field(src, type, *found);
         return *found;
     }
 
@@ -1174,8 +1180,35 @@ auto analyzer::operand_address(const operand& op, const source& src) -> result<p
         if (binding) { return address_of(inst_ref(*binding), src); }
     }
 
+    if (const auto built{TRY(entry_aggregate(op, src))}) { return *built; }
     const auto value{TRY(as_runtime(op, src))};
     return spill(value, *value.type, false);
+}
+
+auto analyzer::entry_aggregate(const operand& op, const source& src)
+    -> result<stdx::option<place>> {
+    const auto known{op.as_opt<ip::index>()};
+    if (!known || !gir_fn_ || is_comptime() || comp_.constants().is_type(*known) ||
+        !comp_.constants().value_at(*known).data.is<ip::aggregate_value>()) {
+        return stdx::none;
+    }
+
+    if (const auto found{entry_built_.find(*known)}; found != entry_built_.end()) {
+        return found->second;
+    }
+
+    auto&      current{*builder_.get_segment()};
+    const bool splicing{builder_.is_splicing()};
+    builder_.set_segment(*gir_fn_->get_segment(gir::segment_id{0}));
+    builder_.set_splice(true);
+    const auto restore{gsl::finally([&] {
+        builder_.set_segment(current);
+        builder_.set_splice(splicing);
+    })};
+    const auto value{TRY(as_runtime(op, src))};
+    const auto built{spill(value, *value.type, false)};
+    entry_built_.insert_or_assign(*known, built);
+    return built;
 }
 
 auto analyzer::comptime_field(ip::index object, std::string_view name, const source& src)

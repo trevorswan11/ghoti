@@ -17,7 +17,9 @@
 #include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/ip/pool.hh"
@@ -360,6 +362,9 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
                                          is_packed,
                                          alignments,
                                          gs::declared_names(ctx.arena, *u_.source, fields));
+    for (usize i{0}; i < fields.size() && i < count; ++i) {
+        note_declared_name(ast::node_id{fields[i].name}, *field_types[i]);
+    }
     return {};
 }
 
@@ -473,6 +478,9 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
                                         is_packed,
                                         tag_enum,
                                         gs::declared_names(ctx.arena, *u_.source, fields));
+    for (usize i{0}; i < fields.size() && i < count; ++i) {
+        note_declared_name(ast::node_id{fields[i].name}, *field_types[i]);
+    }
     return {};
 }
 
@@ -539,6 +547,7 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
                                        *u_.source,
                                        gsl::span<const gsl::not_null<gs::type*>>{},
                                        gs::declared_names(ctx.arena, *u_.source, values));
+    for (const auto& value : values) { note_declared_name(ast::node_id{value.name}, *n.type); }
     return {};
 }
 
@@ -578,7 +587,18 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
     if (owner.get_kind() == gs::type_kind::ENUM) {
         TRY(comp_.require_fields(u_, src, owner));
         const auto& en{owner.get_data().as<gs::types::enum_t>()};
-        if (std::ranges::contains(en.variant_names, name)) {
+        if (const auto at{std::ranges::find(en.variant_names, name)};
+            at != en.variant_names.end()) {
+            const auto index{static_cast<usize>(at - en.variant_names.begin())};
+            if (index < en.ast_enumerations.size()) {
+                note_member(src,
+                            en.enclosing,
+                            ast::node_id{en.ast_enumerations[index].name},
+                            stdx::none,
+                            stdx::none,
+                            owner);
+            }
+
             return enum_constant(owner, name, src);
         }
     }
@@ -599,6 +619,7 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         for (const auto decl : ns->decls) {
             if (owner_mod.string(owner_mod.decl_at(decl).name) == name) {
                 warn_deprecated_decl(*n->owner, decl, src);
+                note_member_decl(src, *n->owner, decl);
                 const bool here{n->owner.get() == &u_};
                 return comp_.analyze_member(
                     *n, decl, here ? src : source{*owner_mod.decl_at(decl).node});

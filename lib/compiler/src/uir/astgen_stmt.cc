@@ -125,8 +125,13 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     if (!is_mut && initializes_fn) {
         // A local function can call itself, so its name is bound before its body
         const auto inst{reserve(id)};
-        DISCARD(declare(
-            name, location_of(decl.name), {.kind = binding_kind::VALUE, .value = inst_ref(inst)}));
+        note_declared(decl.name, id, stdx::none);
+        DISCARD(declare(name,
+                        location_of(decl.name),
+                        {.kind      = binding_kind::VALUE,
+                         .value     = inst_ref(inst),
+                         .name_node = ast::node_id{decl.name},
+                         .decl_node = id}));
         const ast::node_id value_node{*decl.value};
         if (!is_comptime) {
             const auto init{lower_function(value_node, *initializes_fn, decl)};
@@ -184,6 +189,9 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
                  writer().str_field(name).ref_field(type_ref).ref_field(init).body_field(attrs),
                  id)};
     }
+    b.name_node = ast::node_id{decl.name};
+    b.decl_node = id;
+    note_declared(decl.name, id, stdx::none);
     DISCARD(declare(name, location_of(decl.name), b));
 }
 

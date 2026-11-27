@@ -2,21 +2,24 @@
 
 #include <algorithm>
 #include <sstream>
-#include <stdx/profiler.hh>
-#include <stdx/types.hh>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/function.hh>
 #include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/types.hh>
 
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/dumper.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
@@ -90,6 +93,24 @@ auto module_t::get_library_imports() const -> std::vector<extern_import> {
             {std::string{global->abi_name}, std::string{symbol}, true});
     }
     return imports;
+}
+
+auto module_t::mark_import_boundary(const stdx::function<bool(const function&)>&    fn_is_root,
+                                    const stdx::function<bool(const global_decl&)>& global_is_root)
+    -> void {
+    const auto fns{std::ranges::stable_partition(
+        functions_, [&](gsl::not_null<function*> fn) { return fn_is_root(*fn); })};
+    const auto globals{std::ranges::stable_partition(
+        globals_, [&](gsl::not_null<global_decl*> g) { return global_is_root(*g); })};
+    import_boundary_fn_     = static_cast<usize>(fns.begin() - functions_.begin());
+    import_boundary_global_ = static_cast<usize>(globals.begin() - globals_.begin());
+    import_boundary_marked_ = true;
+
+    // `tests_` indexes into `functions_`, which moved
+    tests_.clear();
+    for (usize i{0}; i < functions_.size(); ++i) {
+        if (functions_[i]->get_is_test()) { tests_.emplace_back(i); }
+    }
 }
 
 auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> void {

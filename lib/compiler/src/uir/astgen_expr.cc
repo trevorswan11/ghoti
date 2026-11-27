@@ -223,11 +223,33 @@ auto astgen::primitive_named(std::string_view name, token_type_t type, source sr
     return stdx::none;
 }
 
+auto astgen::note_name(source use, const binding& b) -> void {
+    if (b.kind == binding_kind::DECL) {
+        const auto node{out_.decl_at(*b.decl).node};
+        const auto stmt{node ? ast_.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (!stmt) { return; }
+        names_.emplace_back(name_use{.use = use, .name = ast::node_id{stmt->name}, .decl = node});
+        return;
+    }
+
+    if (!b.name_node) { return; }
+    names_.emplace_back(
+        name_use{.use = use, .name = b.name_node, .decl = b.decl_node, .annotation = b.annotation});
+}
+
+auto astgen::note_declared(ast::node_id                        name,
+                           stdx::option<ast::node_id>          decl,
+                           stdx::option<ast::explicit_type_id> annotation) -> void {
+    names_.emplace_back(
+        name_use{.use = source{name}, .name = stdx::none, .decl = decl, .annotation = annotation});
+}
+
 auto astgen::identifier(source src, source_location at, std::string_view name, use u)
     -> place_result {
     const auto found{lookup(name)};
     if (const auto hit{found.as_opt<lookup_hit>()}) {
         const auto& b{hit->found};
+        note_name(src, b);
         switch (b.kind) {
         case binding_kind::DECL:
             if (u != use::VALUE && b.mutable_decl) {
@@ -771,8 +793,9 @@ auto astgen::bind_capture(const ast::capture_t& capture, u32 slot, source src) -
                                 .u32_field(static_cast<u32>(capture.modifier.get_raw())),
                             src)};
     if (!name) { return; }
-    DISCARD(declare(
-        name->name, location_of(*capture.payload), {.kind = binding_kind::VALUE, .value = bound}));
+    DISCARD(declare(name->name,
+                    location_of(*capture.payload),
+                    {.kind = binding_kind::VALUE, .value = bound, .name_node = *capture.payload}));
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {

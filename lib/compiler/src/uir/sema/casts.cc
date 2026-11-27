@@ -132,6 +132,10 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
                 "cannot infer the type of an inferred cast meeting an untyped value");
         }
 
+        if (t == tag::neg || t == tag::neg_wrap || t == tag::bit_not || t == tag::pos) {
+            return unary_as(cast.inst, *target, src);
+        }
+
         return binary_as(cast.inst, *target, src);
     }
 

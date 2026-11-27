@@ -59,7 +59,7 @@ auto document_store::text_of(const std::filesystem::path& path) -> stdx::option<
 }
 
 auto document_store::inputs() const -> analysis_inputs {
-    return {.revision = revision_, .files = loader_, .roots = known_roots_};
+    return {.revision = revision_, .files = loader_, .roots = known_roots_, .sema_uir = sema_uir_};
 }
 
 auto document_store::install(stdx::box<analysis_snapshot> snapshot) -> void {

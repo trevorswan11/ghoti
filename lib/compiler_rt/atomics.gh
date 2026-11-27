@@ -773,7 +773,7 @@ test "sized compare-exchanges swap on a match and report the value on a mismatch
     @expect(fetch(T, wide, .add, ^mut x, 5) == 10);
     @expect(x == 15);
     @expect(fetch(T, wide, .sub, ^mut x, 20) == 15);
-    @expect(x == 15 -% 20);
+    @expect(x == @as(T, 15) -% 20);
     x = 0b1100;
     @expect(fetch(T, wide, .band, ^mut x, 0b1010) == 0b1100);
     @expect(x == 0b1000);

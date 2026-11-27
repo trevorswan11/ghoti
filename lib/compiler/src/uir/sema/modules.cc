@@ -65,7 +65,10 @@ auto analyzer::analyze_import(inst_id inst) -> result<operand> {
 auto analyzer::module_member(const module_ref& m, std::string_view name, const source& src)
     -> result<operand> {
     const auto value{TRY(comp_.module_member(m, name, u_, src))};
-    if (const auto decl{module_decl(m, name)}) { warn_deprecated_decl(*m.target, *decl, src); }
+    if (const auto decl{module_decl(m, name)}) {
+        warn_deprecated_decl(*m.target, *decl, src);
+        note_member_decl(src, *m.target, *decl);
+    }
     return value;
 }
 
