@@ -77,6 +77,24 @@ TEST_CASE("The target CPU's features follow --cpu, --features, and ghoti's basel
         }
     }
 
+    SECTION("a hard-float ARM ABI has the VFP it passes floats in") {
+        // An unversioned triple is the armhf distros' ARMv7-A with VFPv3-D16 and no NEON
+        const auto armhf{enabled({.triple_str = "arm-unknown-linux-gnueabihf"})};
+        CHECK(has(armhf, "v7"));
+        CHECK(has(armhf, "vfp3d16"));
+        CHECK_FALSE(has(armhf, "neon"));
+        CHECK_FALSE(has(armhf, "d32"));
+
+        CHECK(has(enabled({.triple_str = "armv7-unknown-linux-musleabihf"}), "vfp3d16"));
+        CHECK(has(enabled({.triple_str = "armv6-unknown-linux-gnueabihf"}), "vfp2"));
+        CHECK(has(enabled({.triple_str = "thumbv7em-none-eabihf"}), "vfp3d16"));
+
+        // A soft-float ABI keeps the bare baseline
+        const auto soft{enabled({.triple_str = "arm-unknown-linux-gnueabi"})};
+        CHECK_FALSE(has(soft, "vfp2"));
+        CHECK_FALSE(has(soft, "vfp3d16"));
+    }
+
     SECTION("AArch64 always has NEON") {
         CHECK(has(enabled({.triple_str = "aarch64-unknown-linux-gnu"}), "neon"));
     }
