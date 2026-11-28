@@ -276,8 +276,7 @@ auto analyzer::field_index(gs::type& type, std::string_view name, const source& 
         return {};
     }()};
     if (const auto found{index_of(names, name)}) {
-        // A field without `pub` is only reached from the module that declares its type, while a
-        // type constructor's instance keeps its fields open as the old pipeline did
+        // A field without `pub` is only reached from the module that declares its type
         const auto st{type.get_data().as_opt<gs::types::struct_t>()};
         const auto n{st ? comp_.nominal_of(type) : stdx::none};
         if (st && !(n && n->in_call) && &st->enclosing != u_.source.get() &&
