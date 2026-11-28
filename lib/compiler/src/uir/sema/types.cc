@@ -347,6 +347,45 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     return static_cast<usize>(*small);
 }
 
+namespace {
+
+// A vector in a C signature passes like `__m128` / `__m256` / `__m512`, which no other width has
+[[nodiscard]] auto nonabi_vector(const gs::type& t, u32 ptr_bits) -> stdx::option<const gs::type&> {
+    const auto scan{[ptr_bits](const gs::type& inner) { return nonabi_vector(inner, ptr_bits); }};
+    return t.get_data().visit(
+        [&t, ptr_bits](gs::types::vector vec) -> stdx::option<const gs::type&> {
+            const auto bits{gs::vector_bits(vec, ptr_bits)};
+            if (bits == 128 || bits == 256 || bits == 512) { return stdx::none; }
+            return t;
+        },
+        [&scan](gs::types::pointer p) { return scan(p.underlying); },
+        [&scan](gs::types::reference r) { return scan(r.underlying); },
+        [&scan](gs::types::slice sl) { return scan(sl.underlying); },
+        [&scan](gs::types::array ar) { return scan(ar.underlying); },
+        [&scan](gs::types::function fn) -> stdx::option<const gs::type&> {
+            for (const auto param : fn.params) {
+                if (const auto found{scan(*param)}) { return found; }
+            }
+            return scan(fn.return_type);
+        },
+        [](const auto&) -> stdx::option<const gs::type&> { return stdx::none; });
+}
+
+} // namespace
+
+auto analyzer::check_extern_type(const gs::type& type, const source& src) -> result<void> {
+    if (const auto vec{nonabi_vector(type, comp_.ptr_bits())}) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_EXTERN_VECTOR,
+                            fmt::format("'{}' has no C ABI; a vector crossing an `extern` boundary "
+                                        "must be 16, 32, or 64 bytes",
+                                        comp_.ctx().type_display_name(*vec)));
+    }
+
+    return {};
+}
+
 auto analyzer::analyze_func(inst_id inst) -> result<operand> {
     if (!declaring_ || !is_comptime()) {
         // A literal in a runtime body is a function of its own, or the body of a closure after it

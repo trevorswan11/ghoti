@@ -328,12 +328,7 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
 
     if (type.get_kind() != gs::type_kind::STRUCT && type.get_kind() != gs::type_kind::UNION) {
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
-        return comp_.report(u_,
-                            src,
-                            gs::error::TYPE_MISMATCH,
-                            fmt::format("A value of type '{}' has no field named '{}'",
-                                        ctx.type_display_name(type),
-                                        name));
+        return no_field(type, name, src);
     }
 
     const auto index{TRY(field_index(type, name, src))};
@@ -1314,7 +1309,34 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
                            ptr_type);
     }
 
+    if (type.get_kind() == gs::type_kind::ENUM) { return no_field(type, name, src); }
     return comp_.unsupported(u_, src, fmt::format("a field of a comptime `{}`", type.to_string()));
+}
+
+auto analyzer::no_field(gs::type& type, std::string_view name, const source& src)
+    -> stdx::err<stop> {
+    auto& ctx{comp_.ctx()};
+    if (const auto en{type.get_data().as_opt<gs::types::enum_t>()};
+        en && std::ranges::contains(en->variant_names, name)) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("'{}' is a variant of '{}', not a member of a value of it; write '.{}' or "
+                        "'{}.{}'",
+                        name,
+                        ctx.type_display_name(type),
+                        name,
+                        ctx.type_display_name(type),
+                        name));
+    }
+
+    return comp_.report(u_,
+                        src,
+                        gs::error::TYPE_MISMATCH,
+                        fmt::format("A value of type '{}' has no field named '{}'",
+                                    ctx.type_display_name(type),
+                                    name));
 }
 
 auto element_type_of(gs::type& t) -> stdx::option<gs::type&> {
@@ -1345,7 +1367,22 @@ auto analyzer::pack_elem(pack_ref pack, ref at_ref, const source& src) -> result
 }
 
 auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) -> result<operand> {
-    auto&       pool{comp_.constants()};
+    auto& pool{comp_.constants()};
+    if (pool.is_type(object)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' is a type, not a value to index",
+                                        comp_.ctx().type_display_name(pool.type_at(object))));
+    }
+    if (pool.is_type(at)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("An index must be an integer; found the type '{}'",
+                                        comp_.ctx().type_display_name(pool.type_at(at))));
+    }
+
     const auto& value{pool.value_at(object)};
     const auto  agg{value.data.as_opt<ip::aggregate_value>()};
     const auto  text{value.data.as_opt<std::string>()};
@@ -1366,6 +1403,15 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
     }
 
     if ((!agg && !text) || !index || !elem_type) {
+        const bool indexable{value.type && (element_type_of(*value.type) ||
+                                            value.type->get_kind() == gs::type_kind::POINTER)};
+        if (!indexable && value.type) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Can only index slices, arrays, and pointers; found '{}'",
+                                            comp_.ctx().type_display_name(*value.type)));
+        }
         return comp_.unsupported(u_, src, "indexing this comptime value");
     }
 

@@ -1823,6 +1823,11 @@ class analyzer {
                                   bool          written = false) -> result<place>;
     [[nodiscard]] auto comptime_field(ip::index object, std::string_view name, const source& src)
         -> result<operand>;
+    // Reports a vector in an `extern` type that has no C ABI
+    [[nodiscard]] auto check_extern_type(const gs::type& type, const source& src) -> result<void>;
+    // Reports `name` read from a value of `type`, which has no such field
+    [[nodiscard]] auto no_field(gs::type& type, std::string_view name, const source& src)
+        -> stdx::err<stop>;
     // The value of a pack at a compile-time index
     [[nodiscard]] auto pack_elem(pack_ref pack, ref at_ref, const source& src) -> result<operand>;
     // The pack of the elements a pack's compile-time slice bounds select
@@ -2703,6 +2708,10 @@ class analyzer {
     // A runtime `@assert` or `@verify`, a call to the handler where the condition fails
     [[nodiscard]] auto builtin_llvm_intrinsic(gsl::span<const ref> args, const source& src)
         -> result<operand>;
+    // Reports a type among `args`, which a math or target builtin takes only as values
+    [[nodiscard]] auto reject_type_arguments(syntax::builtin_t    which,
+                                             gsl::span<const ref> args,
+                                             const source&        src) -> result<void>;
     [[nodiscard]] auto builtin_return_address(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_entry_main(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_field(gsl::span<const ref> args, const source& src)

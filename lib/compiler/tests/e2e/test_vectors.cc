@@ -322,7 +322,7 @@ TEST_CASE("Vector lanes have no address, and a vector can't be sliced") {
 TEST_CASE("Vector initializers take one value per lane") {
     const auto res{helpers::type_check_diags(
         "pub const f = fn(): void { let a: @Vector(4, i32) = .{ 1, 2, 3 }; };")};
-    CHECK(res.message_contains("Vector of length 4 initialized with 3 value(s)"));
+    CHECK(res.message_contains("A vector of 4 lanes needs 4 values; found 3"));
 }
 
 TEST_CASE("A packed aggregate holds no vectors") {

@@ -518,7 +518,7 @@ TEST_CASE("A global's folded initializer still has to fit its annotation element
 TEST_CASE("A number can't take a pointer in a compound assignment") {
     CHECK(helpers::raised(
         "pub const f = fn(): i32 { let mut c: i32 = 0; let y: i32 = 5; c += ^y; return c; };",
-        sema::error::OPERATOR_TYPE_MISMATCH));
+        sema::error::TYPE_MISMATCH));
     // A reference reads as its value, and a pointer still steps
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {

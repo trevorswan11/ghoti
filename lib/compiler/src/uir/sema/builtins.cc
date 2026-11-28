@@ -53,6 +53,79 @@ constexpr std::string_view DEFAULT_ASSERT_FAILURE{"Compile-time assertion failed
 
 } // namespace
 
+namespace {
+
+// Where a math or target builtin's value arguments start, none for a builtin that may take types
+[[nodiscard]] auto value_args_from(syntax::builtin_t which) noexcept -> stdx::option<usize> {
+    using syntax::builtin_t;
+    switch (which) {
+    case builtin_t::MUL_ADD: return 1UZ;
+    case builtin_t::CLZ:
+    case builtin_t::CTZ:
+    case builtin_t::POPCOUNT:
+    case builtin_t::SQRT:
+    case builtin_t::SIN:
+    case builtin_t::COS:
+    case builtin_t::TAN:
+    case builtin_t::EXP:
+    case builtin_t::EXP2:
+    case builtin_t::LOG:
+    case builtin_t::LOG2:
+    case builtin_t::LOG10:
+    case builtin_t::FLOOR:
+    case builtin_t::CEIL:
+    case builtin_t::ABS:
+    case builtin_t::MIN:
+    case builtin_t::MAX:
+    case builtin_t::DIV_TRUNC:
+    case builtin_t::DIV_FLOOR:
+    case builtin_t::DIV_EXACT:
+    case builtin_t::REM:
+    case builtin_t::MOD:
+    case builtin_t::ADD_WITH_OVERFLOW:
+    case builtin_t::SUB_WITH_OVERFLOW:
+    case builtin_t::MUL_WITH_OVERFLOW:
+    case builtin_t::SHL_WITH_OVERFLOW:
+    case builtin_t::TARGET_TRIPLE:
+    case builtin_t::TARGET_OS:
+    case builtin_t::TARGET_ARCH:
+    case builtin_t::TARGET_ABI:
+    case builtin_t::TARGET_FAMILY:
+    case builtin_t::OPTIMIZE_MODE:
+    case builtin_t::RUNTIME_SAFETY:
+    case builtin_t::BRANCH_HINT:
+    case builtin_t::SET_RUNTIME_SAFETY:
+    case builtin_t::TARGET_ENDIAN:
+    case builtin_t::TARGET_PTR_BITS:
+    case builtin_t::SET_EVAL_RECURSION_LIMIT:
+    case builtin_t::SET_EVAL_UNROLL_LIMIT:
+    case builtin_t::RETURN_ADDRESS: return 0UZ;
+    default:                        return stdx::none;
+    }
+}
+
+} // namespace
+
+auto analyzer::reject_type_arguments(syntax::builtin_t    which,
+                                     gsl::span<const ref> args,
+                                     const source&        src) -> result<void> {
+    // Each argument was analyzed before the call, so resolving it again only reads its result
+    for (const auto arg : args) {
+        const auto value{TRY(resolve(arg, src))};
+        const auto known{comptime_value(value)};
+        if (!known || !comp_.constants().is_type(*known)) { continue; }
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' expects a value, but was given the type '{}'",
+                                        syntax::builtin_name(which),
+                                        comp_.ctx().type_display_name(
+                                            comp_.constants().type_at(*known))));
+    }
+
+    return {};
+}
+
 auto compile_error_message(const module_t& m, gsl::span<const ref> args) -> std::string {
     return std::string{string_literal(m, args, 0).value_or(DEFAULT_COMPILE_ERROR)};
 }
@@ -63,6 +136,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     const auto  args{rec.refs_field()};
     const auto& src{src_of(inst)};
     using syntax::builtin_t;
+    if (const auto first{value_args_from(which)}) {
+        TRY(reject_type_arguments(which, args.subspan(std::min(*first, args.size())), src));
+    }
+
     switch (which) {
     case builtin_t::COMPILE_ERROR:            return builtin_compile_error(args, src);
     case builtin_t::SET_EVAL_RECURSION_LIMIT: return builtin_limit(args, src, true);
@@ -948,8 +1025,8 @@ auto analyzer::field_name_arg(ref arg, const source& src) -> result<stdx::option
     }()};
     if (!given && given.error() != stop::RUNTIME) { return stdx::err{given.error()}; }
     const auto known{given ? comptime_value(*given) : stdx::none};
-    const auto text{known ? comp_.constants().value_at(*known).data.as_opt<std::string>()
-                          : stdx::none};
+    if (!known || comp_.constants().is_type(*known)) { return stdx::option<std::string>{}; }
+    const auto text{comp_.constants().value_at(*known).data.as_opt<std::string>()};
     return text ? stdx::option<std::string>{*text} : stdx::none;
 }
 

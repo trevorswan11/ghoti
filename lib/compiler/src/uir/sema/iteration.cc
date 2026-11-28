@@ -56,6 +56,13 @@ auto analyzer::analyze_range(inst_id inst) -> result<operand> {
 auto analyzer::check_range_bounds(const range_operands& r, const source& src) -> result<void> {
     for (const auto& bound : {r.lo, r.hi}) {
         if (!bound) { continue; }
+        if (const auto known{comptime_value(*bound)};
+            known && comp_.constants().is_type(*known)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "A range bound must be a value, not a type");
+        }
         auto& type{type_of(*bound)};
         if (type.is_poison()) { return stdx::err{stop::POISON}; }
         if (!is_int_like(type)) {
@@ -76,8 +83,9 @@ auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const sou
     if (!bounds.lo || !bounds.hi) {
         return comp_.report(u_,
                             src,
-                            gs::error::COMPTIME_EVALUATION_FAILED,
-                            "a range used as a value needs both of its bounds");
+                            gs::error::ILLEGAL_OPEN_RANGE,
+                            "An open-ended range is only valid inside a subscript (`x[lo..]`, "
+                            "`x[..hi]`, `x[..]`) or a `for` loop paired with an array or slice");
     }
 
     // Both bounds are known at compile time
@@ -88,6 +96,12 @@ auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const sou
             return resolve_value(r, src);
         }()};
         if (!value && value.error() != stop::RUNTIME) { return stdx::err{value.error()}; }
+        if (value && comptime_value(*value) && pool.is_type(*comptime_value(*value))) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "A range bound must be a value, not a type");
+        }
         if (!value || !comptime_value(*value) || !int_of(pool.value_at(*comptime_value(*value)))) {
             return comp_.report(u_,
                                 src,

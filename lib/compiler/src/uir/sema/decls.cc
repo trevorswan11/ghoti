@@ -703,6 +703,7 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
         const auto unhandled{d.flags &
                              ~(HANDLED_FLAGS | decl_flags::EXTERN | decl_flags::THREADLOCAL)};
         auto&      type{*TRY(eval_type(mod().body(*d.type_body), src))};
+        TRY(check_extern_type(type, src));
         if (unhandled != decl_flags::NONE) {
             return comp_.unsupported(u_, src, "an extern declaration with these modifiers");
         }

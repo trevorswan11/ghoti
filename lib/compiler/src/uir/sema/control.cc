@@ -386,6 +386,13 @@ auto analyzer::analyze_loop(inst_id inst) -> result<operand> {
 
         const auto c{TRY(condition(*out.yielded, src))};
         normal_exit = builder_.get_segment()->get_id();
+
+        // A condition known to hold never exits, so only a `break` or `return` leaves the loop
+        if (const auto known{c.literal_opt<bool>(comp_.constants())}; known && *known) {
+            emit_goto(body_seg);
+            return {};
+        }
+
         builder_.emit_cond_goto(c, body_seg, else_seg.value_or(exit));
         return {};
     }};

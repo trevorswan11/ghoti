@@ -341,6 +341,7 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         alignments[i]  = resolved.alignment.value_or(0);
         field_types[i] = *TRY(field_type_of(type_body, default_body, name, field_src));
+        if (is_extern) { TRY(check_extern_type(*field_types[i], field_src)); }
         if (bit_packed) {
             TRY(check_packed_field(*field_types[i], name, "struct", field_src));
             if (resolved.alignment) { TRY(reject_packed_alignment(name, "struct", field_src)); }
@@ -419,6 +420,7 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         field_types[i] = *TRY(field_type_of(type_body, stdx::none, name, field_src));
+        if (is_extern) { TRY(check_extern_type(*field_types[i], field_src)); }
         if (bit_packed) { TRY(check_packed_field(*field_types[i], name, "union", field_src)); }
         if (resolved.alignment) {
             DISCARD(comp_.report(u_,
