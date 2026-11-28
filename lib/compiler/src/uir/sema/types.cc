@@ -206,14 +206,9 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
     if ((bits & flags::VOLATILE) != 0 && t == tag::ref_type) {
         return comp_.unsupported(u_, src, "a volatile type");
     }
-    if (elem.get_kind() == gs::type_kind::INTERFACE) {
-        return comp_.report(u_,
-                            src,
-                            gs::error::INTERFACE_NOT_A_VALUE,
-                            fmt::format("'{}' is an interface, not a value type; point at a 'dyn "
-                                        "{}' instead",
-                                        comp_.ctx().type_display_name(elem),
-                                        comp_.ctx().type_display_name(elem)));
+    // A slice's elements are stored by value, which a pointer or reference's pointee isn't
+    if (t == tag::slice_type || elem.get_kind() == gs::type_kind::INTERFACE) {
+        TRY(check_storable(elem, src));
     }
 
     auto&      ctx{comp_.ctx()};
@@ -306,6 +301,7 @@ auto analyzer::analyze_array_type(inst_id inst) -> result<operand> {
     if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
     if (!len_ref) { return comp_.unsupported(u_, src, "an array type sized by its items"); }
     const auto len{TRY(array_length(*len_ref, src))};
+    TRY(check_storable(elem, src));
 
     // Past 2^48 bytes no target can address the array, and sizes start overflowing
     constexpr u128 MAX_ARRAY_BYTES{u128{1} << 48U};
@@ -371,7 +367,89 @@ namespace {
         [](const auto&) -> stdx::option<const gs::type&> { return stdx::none; });
 }
 
+// What an `extern` aggregate field's type holds that has no C ABI
+struct abi_holdings {
+    bool dyn{false};
+    bool erased_fn{false};
+    bool reference{false};
+};
+
+auto scan_holdings(const gs::type& t, abi_holdings& found) -> void {
+    t.get_data().visit([&](const gs::types::dyn_t&) { found.dyn = true; },
+                       [&](const gs::types::reference& r) {
+                           found.reference = true;
+                           scan_holdings(r.underlying, found);
+                       },
+                       [&](const gs::types::pointer& p) { scan_holdings(p.underlying, found); },
+                       [&](const gs::types::slice& s) { scan_holdings(s.underlying, found); },
+                       [&](const gs::types::array& a) { scan_holdings(a.underlying, found); },
+                       [&](const gs::types::function& fn) {
+                           if (fn.erased) { found.erased_fn = true; }
+                           for (const auto param : fn.params) { scan_holdings(*param, found); }
+                           scan_holdings(fn.return_type, found);
+                       },
+                       [](const auto&) {});
+}
+
 } // namespace
+
+auto analyzer::check_extern_field(const gs::type&  type,
+                                  std::string_view kind,
+                                  std::string_view name,
+                                  const source&    src) -> result<void> {
+    abi_holdings found;
+    scan_holdings(type, found);
+    const auto refuse{[&](std::string message) -> result<void> {
+        return comp_.report(u_, src, gs::error::ILLEGAL_REFERENCE_FIELD, std::move(message));
+    }};
+    if (found.dyn) {
+        return refuse(fmt::format("extern {} field '{}' cannot involve `dyn` in any form; a `&dyn` "
+                                  "/ `^dyn` fat pointer has no C ABI representation",
+                                  kind,
+                                  name));
+    }
+    if (found.erased_fn) {
+        return refuse(fmt::format("extern {} field '{}' holds an erased `fn(...)` callable, which has "
+                                  "no C ABI representation; use a thin `extern fn(...)`",
+                                  kind,
+                                  name));
+    }
+    if (found.reference) {
+        return refuse(fmt::format("extern {} field '{}' cannot have a reference type; an 'extern' "
+                                  "aggregate has no ABI representation for references, so use a "
+                                  "pointer",
+                                  kind,
+                                  name));
+    }
+
+    return check_extern_type(type, src);
+}
+
+auto analyzer::check_storable(const gs::type& type, const source& src) -> result<void> {
+    auto& ctx{comp_.ctx()};
+    if (type.get_kind() == gs::type_kind::INTERFACE) {
+        const auto name{ctx.type_display_name(type)};
+        return comp_.report(u_,
+                            src,
+                            gs::error::INTERFACE_NOT_A_VALUE,
+                            fmt::format("`{}` is an interface and cannot be stored by value; use "
+                                        "`&dyn {}`, `^dyn {}`, or an `impl {}` parameter",
+                                        name,
+                                        name,
+                                        name,
+                                        name));
+    }
+
+    if (type.get_kind() == gs::type_kind::DYN) {
+        const auto name{ctx.type_display_name(type)};
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_UNSIZED_TYPE,
+                            fmt::format("`{}` is unsized; use `&{}` or `^{}`", name, name, name));
+    }
+
+    return {};
+}
 
 auto analyzer::check_extern_type(const gs::type& type, const source& src) -> result<void> {
     if (const auto vec{nonabi_vector(type, comp_.ptr_bits())}) {

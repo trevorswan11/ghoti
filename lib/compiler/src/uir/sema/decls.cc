@@ -194,6 +194,11 @@ auto compilation::declared_type(const unit&                   u,
 auto compilation::analyze_members(const unit& u, gs::type& owner) -> void {
     const auto n{nominal_of(owner)};
     if (!n || n->in_call) { return; }
+    if (owner.get_kind() == gs::type_kind::INTERFACE) {
+        check_interface(*n);
+        return;
+    }
+
     const auto ns{u.uir->namespace_of(n->inst)};
     if (!ns) { return; }
     for (const auto decl : ns->decls) {
@@ -509,7 +514,8 @@ auto compilation::declare_function(const unit&           u,
         }
 
         if (modifier != 0) { return unsupported(u, param_src, "a parameter modifier"); }
-        auto&      type{*TRY(sig.eval_type(type_body, param_src))};
+        auto& type{*TRY(sig.eval_type(type_body, param_src))};
+        TRY(sig.check_storable(type, param_src));
         const bool is_void{type.get_kind() == gs::type_kind::VOID_};
         if ((!gs::is_value_type(type.get_kind()) && !is_void) ||
             gs::is_comptime_numeric(type.get_kind())) {
@@ -521,7 +527,8 @@ auto compilation::declare_function(const unit&           u,
         param_types.emplace_back(&type);
     }
 
-    auto&      return_type{*TRY(sig.eval_type(ret, src))};
+    auto& return_type{*TRY(sig.eval_type(ret, src))};
+    TRY(sig.check_storable(return_type, src));
     const bool comptime_only{is_comptime_only(return_type)};
     const bool infers_return{return_type.get_kind() == gs::type_kind::AUTO};
 
@@ -745,6 +752,7 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
     bool                    infers{false};
     if (d.type_body) {
         auto& type{*TRY(eval_type(mod().body(d.type_body), src))};
+        TRY(check_storable(type, src));
         infers = type.get_kind() == gs::type_kind::AUTO;
         if (!infers) { declared.emplace(type); }
     }

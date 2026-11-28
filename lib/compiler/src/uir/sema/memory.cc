@@ -73,6 +73,7 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
         return comp_.report(
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
+    if (type) { TRY(check_storable(*type, src)); }
     if (type && type->get_kind() == gs::type_kind::NORETURN) {
         return comp_.report(u_,
                             src,
@@ -622,6 +623,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     stdx::option<gs::type&> declared;
     if (type_ref) {
         declared.emplace(*TRY(resolve_type(*type_ref, src)));
+        TRY(check_storable(*declared, src));
         value = TRY(coerce_to(
             init,
             *declared,

@@ -218,6 +218,7 @@ auto compilation::impls_of(gs::type& target) -> result<std::vector<gsl::not_null
         found.emplace_back(&applied);
     }
 
+    if (!found.empty()) { check_impls(target, found); }
     return found;
 }
 

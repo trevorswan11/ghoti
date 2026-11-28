@@ -233,17 +233,42 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
         bound.emplace_back(name, TRY(resolve_type(type_ref, at)));
     }
 
+    auto& ctx{comp_.ctx()};
     if (iface.get_kind() != gs::type_kind::INTERFACE) {
-        return comp_.unsupported(u_, src, "a `dyn` of something other than an interface");
+        if (iface.is_poison()) { return stdx::err{stop::POISON}; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("`dyn` requires an interface; found `{}`", ctx.type_display_name(iface)));
     }
 
     const auto n{comp_.nominal_of(iface)};
     if (!n) { return comp_.unsupported(u_, src, "a `dyn` of an interface UIR didn't declare"); }
-    auto&       ctx{comp_.ctx()};
     const auto& names{iface.get_data().as<gs::types::interface_t>().assoc_type_names};
+    const auto  iface_name{ctx.type_display_name(iface)};
     for (const auto& [name, type] : bound) {
         if (!std::ranges::contains(names, name)) {
-            return comp_.unsupported(u_, src, "a `dyn` binding an associated type it doesn't have");
+            return comp_.report(
+                u_,
+                src,
+                gs::error::DYN_UNBOUND_ASSOC,
+                fmt::format("`{}` has no associated type `{}`", iface_name, name));
+        }
+    }
+
+    // A call through a `dyn` passes only a pointer, so no method may take `self` by value
+    const auto& im{*n->owner->uir};
+    for (const auto& method : comp_.interface_methods(*n)) {
+        const auto shape{shape_of_signature(im, method.func)};
+        if (shape.has_self && shape.how == ast::type_modifier::modifier::VALUE) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_BY_VALUE_SELF,
+                                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, "
+                                            "`@This()`, or an unbound associated type by value",
+                                            iface_name,
+                                            method.name));
         }
     }
 
@@ -259,6 +284,18 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
         std::ranges::all_of(names, [&](auto name) { return written(name).has_value(); })};
     if (!every_bound && comp_.declares_associated_items(*n) &&
         !comp_.defaults_every_associated_item(*n)) {
+        for (const auto& item : associated_items(im, n->inst, true)) {
+            if (item.defaulted || written(item.name)) { continue; }
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_UNBOUND_ASSOC,
+                                fmt::format("`&dyn {}` needs associated type `{}` bound: write "
+                                            "`dyn {}({} = ...)`",
+                                            iface_name,
+                                            item.name,
+                                            iface_name,
+                                            item.name));
+        }
         return comp_.unsupported(u_, src, "a `dyn` of an associated item with no default");
     }
 

@@ -896,6 +896,15 @@ class compilation {
     [[nodiscard]] auto impl_member(impl_instance& applied, std::string_view name, const source& use)
         -> result<stdx::option<operand>>;
 
+    // Conformance (conformance.cc)
+    // Reports what the impls applied to `target` get wrong, the first time any is applied
+    auto check_impls(gs::type& target, gsl::span<const gsl::not_null<impl_instance*>> applied)
+        -> void;
+    // Reports what an interface's impl lacks, adds, or declares differently from it
+    auto check_conformance(impl_instance& applied) -> void;
+    // Reports a method signature of an interface whose types can't hold their values
+    auto check_interface(nominal& iface) -> void;
+
     // `dyn` (dyn.cc)
     [[nodiscard]] auto interface_methods(const nominal& iface) -> std::vector<interface_method>;
     // Whether the interface's method `name` gives any parameter a default argument
@@ -1227,7 +1236,9 @@ class compilation {
         generic_versions_;
     std::vector<function_export> exports_;
     std::vector<modified_call>   modified_calls_;
-    usize                        reports_{0};
+    // Each type whose impls were checked
+    ankerl::unordered_dense::set<const gs::type*> checked_impls_;
+    usize                                         reports_{0};
     u32                          tests_{0};
     u32                          anonymous_tests_{0};
 };
@@ -1299,6 +1310,17 @@ class analyzer {
         -> result<gsl::not_null<gs::type*>>;
     // Analyzes the function's parameters and body into its GIR function
     [[nodiscard]] auto analyze_function() -> result<void>;
+    // Analyzes one instruction, as a body reaching it would
+    [[nodiscard]] auto analyze_one(inst_id inst) -> result<operand> { return analyze_inst(inst); }
+    // Reports what an `extern` aggregate's field holds that has no C ABI
+    [[nodiscard]] auto check_extern_field(const gs::type&  type,
+                                          std::string_view kind,
+                                          std::string_view name,
+                                          const source&    src) -> result<void>;
+    // Reports an interface or bare `dyn`, which no storage can hold by value
+    [[nodiscard]] auto check_storable(const gs::type& type, const source& src) -> result<void>;
+    // Reports a vector in an `extern` type that has no C ABI
+    [[nodiscard]] auto check_extern_type(const gs::type& type, const source& src) -> result<void>;
     // Analyzes a body only to collect the types its `return`s give, for an inferred return type
     [[nodiscard]] auto collect_returns() -> std::vector<gsl::not_null<gs::type*>>;
     // Binds a comptime parameter of a runtime body, giving an aggregate a slot runtime reads use
@@ -1823,8 +1845,6 @@ class analyzer {
                                   bool          written = false) -> result<place>;
     [[nodiscard]] auto comptime_field(ip::index object, std::string_view name, const source& src)
         -> result<operand>;
-    // Reports a vector in an `extern` type that has no C ABI
-    [[nodiscard]] auto check_extern_type(const gs::type& type, const source& src) -> result<void>;
     // Reports `name` read from a value of `type`, which has no such field
     [[nodiscard]] auto no_field(gs::type& type, std::string_view name, const source& src)
         -> stdx::err<stop>;
@@ -2998,5 +3018,21 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 }
 // An integer constant's value, none for any other kind of constant
 [[nodiscard]] auto int_of(const ip::value& v) -> stdx::option<big_int>;
+
+// What a function literal's signature says about its `self` and how many parameters it takes
+struct self_shape {
+    bool                         has_self{false};
+    ast::type_modifier::modifier how{ast::type_modifier::modifier::VALUE};
+    usize                        count{0};
+};
+[[nodiscard]] auto shape_of_signature(const module_t& m, inst_id func) -> self_shape;
+
+// An interface's associated type (`types`) or constant, with whether it has a default
+struct associated_item {
+    std::string_view name;
+    bool             defaulted;
+};
+[[nodiscard]] auto associated_items(const module_t& m, inst_id iface, bool types)
+    -> std::vector<associated_item>;
 
 } // namespace ghoti::uir::sema

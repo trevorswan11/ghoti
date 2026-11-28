@@ -217,6 +217,50 @@ auto compilation::declare_generic(const unit&           u,
                          : in_impl      ? stdx::option<gs::type&>{*member.self_type}
                          : member.scope ? stdx::option<gs::type&>{*member.scope->type}
                                         : stdx::none};
+    // Interfaces bound together share one namespace, so two may not declare one associated item
+    {
+        const auto&   m{*u.uir};
+        record_reader rec{m, m.data_of(func).pl.extra};
+        const auto    params{params_of(m, rec.body_field())};
+        rec.skip_body().skip_body().skip_u32().skip_u32().skip_body();
+        analyzer sig{*this, u};
+        sig.enter(member);
+        for (const auto& bound : impl_bounds_of(rec)) {
+            if (bound.interfaces.size() < 2 || bound.param >= params.size()) { continue; }
+            // Each interface the bound names is an instruction of the parameter list
+            std::vector<std::string_view> seen;
+            for (const auto interface_ref : bound.interfaces) {
+                const auto named{as_inst(interface_ref)};
+                if (!named) { continue; }
+                const auto before{speculate()};
+                const auto value{sig.analyze_one(*named)};
+                abandon(before);
+                const auto index{value ? sig.comptime_value(*value) : stdx::none};
+                const auto n{index && constants().is_type(*index)
+                                 ? nominal_of(constants().type_at(*index))
+                                 : stdx::none};
+                if (!n || constants().type_at(*index).get_kind() != gs::type_kind::INTERFACE) {
+                    continue;
+                }
+                for (const bool types : {true, false}) {
+                    for (const auto& item : associated_items(*n->owner->uir, n->inst, types)) {
+                        if (!std::ranges::contains(seen, item.name)) {
+                            seen.emplace_back(item.name);
+                            continue;
+                        }
+                        return report(u,
+                                      m.src_of(func),
+                                      gs::error::CONFLICTING_ASSOC,
+                                      fmt::format("interfaces in this `impl (...)` bound both "
+                                                  "declare an associated item `{}`; split the "
+                                                  "parameter or use a sub-interface",
+                                                  item.name));
+                    }
+                }
+            }
+        }
+    }
+
     auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
