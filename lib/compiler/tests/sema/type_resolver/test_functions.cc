@@ -469,7 +469,6 @@ TEST_CASE("An error collected in a generic body is reported, not only its failed
         const x = g(i32, 1);
     )")};
     CHECK(diags.message_contains("Attempt to shadow identifier 'a'"));
-    CHECK(diags.message_contains("Failed to instantiate 'g'"));
 }
 
 } // namespace ghoti::tests

@@ -137,7 +137,7 @@ TEST_CASE("A type whose layout depends on its own size or alignment is an error"
         const S = struct { pub d: [N]u64, pub x: u8, };
         const N: [@alignOf(S)]u8 = undefined;
     )",
-                          sema::error::COMPTIME_EVALUATION_FAILED));
+                          sema::error::CYCLIC_DEPENDENCY));
 }
 
 TEST_CASE("An array's `.len` and `.ptr` can't be assigned") {

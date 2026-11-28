@@ -1224,7 +1224,8 @@ TEST_CASE("Malformed nested patterns are rejected with a reason") {
         CHECK(rejects("return match (r) { .ok(_, _) => 1, .err => 2 };", ILLEGAL));
         CHECK(rejects("return match (r) { .ok() => 1, .err => 2 };", ILLEGAL));
         CHECK(rejects("return match (r) { .ok(.none(_)) => 1, _ => 2 };", ILLEGAL));
-        CHECK(rejects("return match (r) { .ok(.nope) => 1, _ => 2 };", sema::error::UNDECLARED_IDENTIFIER));
+        CHECK(rejects("return match (r) { .ok(.nope) => 1, _ => 2 };",
+                      sema::error::UNDECLARED_IDENTIFIER));
     }
 
     SECTION("captures") {

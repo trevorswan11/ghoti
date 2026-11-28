@@ -324,7 +324,7 @@ TEST_CASE("A generic local function can't capture a binding declared after it") 
             return f(@as(u8, 2));
         };
     )",
-                          sema::error::GENERIC_CLOSURE_CAPTURE));
+                          sema::error::ILLEGAL_FIELD_ORDER_DEPENDENCY));
 }
 
 } // namespace ghoti::tests

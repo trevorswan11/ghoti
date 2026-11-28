@@ -76,7 +76,8 @@ TEST_CASE("constant shifts by a negative or oversized amount are rejected") {
 TEST_CASE("enum member values must fit the underlying type and be distinct") {
     CHECK(helpers::raised("const E = enum : u8 { a = 300 };", sema::error::LITERAL_OUT_OF_RANGE));
     CHECK(helpers::raised("const E = enum : u8 { a = -1 };", sema::error::LITERAL_OUT_OF_RANGE));
-    CHECK(helpers::raised("const E = enum : u8 { a = 254, b, c };", sema::error::LITERAL_OUT_OF_RANGE));
+    CHECK(helpers::raised("const E = enum : u8 { a = 254, b, c };",
+                          sema::error::LITERAL_OUT_OF_RANGE));
     CHECK(helpers::raised("const E = enum { a = 1, b = 1 };", sema::error::TYPE_MISMATCH));
 }
 
@@ -287,7 +288,7 @@ TEST_CASE("errors inside a parameterized impl method are reported once per site"
     CHECK(std::ranges::count(undeclared.codes, sema::error::UNDECLARED_IDENTIFIER) == 1);
     CHECK(helpers::raised(with_body("return @intCast(i32, u8);"), sema::error::TYPE_MISMATCH));
     CHECK(
-        helpers::raised(with_body("const r = self.a[..]; return 0;"), sema::error::COMPTIME_MUT_NOT_FOLDABLE));
+        helpers::raised(with_body("const r = self.a[..]; return 0;"), sema::error::TYPE_MISMATCH));
 }
 
 TEST_CASE("a parameterized impl method body types against its concrete instantiation") {

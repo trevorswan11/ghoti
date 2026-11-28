@@ -758,7 +758,8 @@ auto uir_diagnostics(mod::source_loader&          loader,
     ctx.target_opts    = settings.target_opts;
     ctx.runtime_safety = settings.runtime_safety;
     const sema::cfg_context cfg{.target_opts = ctx.target_opts,
-                                .facts = codegen::target_facts::resolve(settings.target_opts.triple_str),
+                                .facts =
+                                    codegen::target_facts::resolve(settings.target_opts.triple_str),
                                 .build_mode     = ctx.build_mode,
                                 .runtime_safety = ctx.runtime_safety,
                                 .testing        = settings.testing,
@@ -766,15 +767,14 @@ auto uir_diagnostics(mod::source_loader&          loader,
 
     // AstGen's errors stop the build before Sema, as they do in the driver
     program_diagnostics out;
-    auto lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = *modules})};
+    auto                lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = *modules})};
     for (auto& item : lowered) {
         for (auto& d : item.result.diagnostics) { out.errors.emplace_back(std::move(d)); }
     }
     if (!out.errors.empty()) { return out; }
 
-    auto analyzed{uir::sema::analyze(ctx,
-                                     {.root = root->get(), .modules = lowered},
-                                     {.check_all = settings.check_all})};
+    auto analyzed{uir::sema::analyze(
+        ctx, {.root = root->get(), .modules = lowered}, {.check_all = settings.check_all})};
     if (analyzed.stopped_at) { FAIL("UIR Sema stopped at " << analyzed.stopped_at->what); }
     out.errors   = std::move(analyzed.diagnostics);
     out.warnings = std::move(analyzed.warnings);
