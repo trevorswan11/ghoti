@@ -582,12 +582,12 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
 
     // An inferred return type is the first returned value's
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
-        // An untyped number only takes its type from the returns after it
         // A cast inferring its target has none to take from an inferred return
         if (const auto cast{value.as_opt<cast_ref>()}) {
             return cast_target_inferred(*cast, stdx::none);
         }
 
+        // An untyped number only takes its type from the returns after it
         if (is_untyped_literal(value) ||
             (!is_comptime() && gs::is_comptime_numeric(type_of(value).get_kind()))) {
             return comp_.unsupported(u_, src, "an untyped value as an inferred return");

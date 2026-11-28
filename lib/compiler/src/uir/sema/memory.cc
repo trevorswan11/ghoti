@@ -623,8 +623,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
                             "'rest...', or an `unroll for` iterable");
     }
 
-    // A runtime choice between untyped integers is stored in their default type, which each has
-    // to fit
+    // A runtime choice between untyped integers is stored in their default type
     if (const auto m{init.as_opt<merge_ref>()}; m && !type_ref && !is_comptime()) {
         auto& stored_as{comp_.ctx().default_concrete(builtin(gs::type_kind::COMPTIME_INT))};
         for (const auto& arrival : merges_[m->index].arrivals) {

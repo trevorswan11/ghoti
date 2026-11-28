@@ -1237,7 +1237,7 @@ class compilation {
     std::vector<function_export> exports_;
     std::vector<modified_call>   modified_calls_;
     // Each type whose impls were checked
-    ankerl::unordered_dense::set<const gs::type*> checked_impls_;
+    ankerl::unordered_dense::set<gsl::not_null<const gs::type*>> checked_impls_;
     usize                                         reports_{0};
     u32                          tests_{0};
     u32                          anonymous_tests_{0};
@@ -1866,9 +1866,9 @@ class analyzer {
         -> stdx::err<stop>;
     // The value of a pack at a compile-time index
     [[nodiscard]] auto pack_elem(pack_ref pack, ref at_ref, const source& src) -> result<operand>;
-    // The pack of the elements a pack's compile-time slice bounds select
     // The name of the pack an `x[...]` source indexes, or "pack"
     [[nodiscard]] auto indexed_pack_name(const source& src) const -> std::string_view;
+    // The pack of the elements a pack's compile-time slice bounds select
     [[nodiscard]] auto pack_slice(pack_ref          pack,
                                   stdx::option<ref> lo_ref,
                                   stdx::option<ref> hi_ref,
@@ -2635,11 +2635,12 @@ class analyzer {
         stdx::option<gs::type&> elem{};
     };
 
-    // Memory builtins (math.cc)
     // Inline assembly (asm.cc)
     [[nodiscard]] auto analyze_asm(inst_id inst) -> result<operand>;
     // Reports an `asm` whose options, constraints, operands or template don't fit together
     [[nodiscard]] auto check_asm_form(const source& src) -> result<void>;
+
+    // Memory builtins (math.cc)
     [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
     // A buffer taken apart into its data, element count and, for a destination, byte count
     [[nodiscard]] auto
