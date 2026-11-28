@@ -249,11 +249,10 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
     const auto  iface_name{ctx.type_display_name(iface)};
     for (const auto& [name, type] : bound) {
         if (!std::ranges::contains(names, name)) {
-            return comp_.report(
-                u_,
-                src,
-                gs::error::DYN_UNBOUND_ASSOC,
-                fmt::format("`{}` has no associated type `{}`", iface_name, name));
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_UNBOUND_ASSOC,
+                                fmt::format("`{}` has no associated type `{}`", iface_name, name));
         }
     }
 
@@ -403,7 +402,28 @@ auto analyzer::call_dyn(inst_id              call,
     record_reader rec{m, m.data_of(slot->func).pl.extra};
     const auto    params{params_of(m, rec.body_field())};
     const auto    ret{rec.body_field()};
-    analyzer      sig{comp_, owner};
+
+    // A `mut?` method takes its mutability from the receiver's type, which `dyn` erases
+    const bool poly_self{!params.empty() && [&] {
+        record_reader p{m, m.data_of(params.front()).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        const auto bits{p.u32_field()};
+        const auto modifier{static_cast<ast::type_modifier::modifier>(p.u32_field())};
+        return (bits & flags::PARAM_SELF) != 0 &&
+               (modifier == ast::type_modifier::modifier::POLY_REF ||
+                modifier == ast::type_modifier::modifier::POLY_PTR);
+    }()};
+    if (poly_self) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_POLY_MUTABILITY,
+                            fmt::format("`{}` takes a `mut?` parameter, so it can't be called "
+                                        "through `dyn {}`",
+                                        name,
+                                        comp_.ctx().type_display_name(iface_type)));
+    }
+
+    analyzer sig{comp_, owner};
     // An associated type the `dyn` binds is that binding, any other its default
     if (slot != methods.end() && slot->closure) {
         const auto&   bound{dyn->get_data().as<gs::types::dyn_t>().assoc_bindings};

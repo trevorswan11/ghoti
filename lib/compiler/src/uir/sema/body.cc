@@ -220,10 +220,12 @@ auto analyzer::analyze_function() -> result<void> {
     if (!out && out.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
     if (terminated()) { return {}; }
 
-    // An inferred return type with no `return` to fix it is `void`
+    // An inferred return type with no `return` to fix it is `void`, unless the body failed first
     if (collected_returns_) { return {}; }
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
-        fn_->return_type = &builtin(gs::type_kind::VOID_);
+        const bool failed{!out || comp_.report_count() != reported || !failed_.empty()};
+        fn_->return_type = failed ? &comp_.ctx().get_poison() : &builtin(gs::type_kind::VOID_);
+        if (failed) { return stdx::err{stop::POISON}; }
     }
 
     auto& ret{*fn_->return_type};
@@ -238,7 +240,7 @@ auto analyzer::analyze_function() -> result<void> {
         const auto reachable{gir_fn_->reachable_segments()};
         const bool falls_off{here < reachable.size() && reachable[here]};
         // A body that already failed reports why instead
-        const bool failed{!out || comp_.report_count() != reported};
+        const bool failed{!out || comp_.report_count() != reported || !failed_.empty()};
         if (!failed && falls_off && ret.get_kind() != gs::type_kind::NORETURN &&
             !ret.is_generic_value() && !ret.is_poison()) {
             return comp_.report(u_,
@@ -255,7 +257,8 @@ auto analyzer::analyze_function() -> result<void> {
 }
 
 auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
-    body_hints_.emplace_back(hint_inst_of(body));
+    const bool hintless{std::exchange(hintless_body_, false)};
+    body_hints_.emplace_back(hintless ? stdx::none : hint_inst_of(body));
     safety_scopes_.emplace_back();
     const auto pop_scope{gsl::finally([&] {
         body_hints_.pop_back();
@@ -307,6 +310,14 @@ auto analyzer::analyze_body(gsl::span<const inst_id> body) -> result<flow> {
         if (!is_comptime()) { start_bool_ops(inst); }
         if (const auto call{dyn_receivers_.find(inst)}; call != dyn_receivers_.end()) {
             prepare_dyn_call(call->second);
+        }
+
+        // A block statement among others is a scope of its own, which no hint may lead
+        if (mod().tag_of(inst) == tag::block) {
+            const auto at{std::ranges::find(body, inst)};
+            const auto rest{body.subspan(static_cast<usize>(at - body.begin()) + 1)};
+            hintless_body_ = !std::ranges::all_of(
+                rest, [&](inst_id after) { return mod().tag_of(after) == tag::yield; });
         }
 
         auto value{tested_calls_.contains(inst) ? tested_call(inst) : analyze_inst(inst)};
@@ -466,32 +477,37 @@ auto analyzer::analyze_inst(inst_id inst) -> result<operand> {
     case tag::dyn_type:        return analyze_dyn_type(inst);
 
     case tag::implicit_access: return enum_literal{inst};
-    case tag::init_struct:     return analyze_init_struct(inst);
-    case tag::init_array:      return analyze_init_array(inst);
-    case tag::array_lit:       return analyze_array_lit(inst);
-    case tag::field_val:       return analyze_field_val(inst);
-    case tag::field_ptr:       return analyze_field_ptr(inst);
-    case tag::elem_val:        return analyze_elem_val(inst);
-    case tag::elem_ptr:        return analyze_elem_ptr(inst);
-    case tag::asm_expr:        return analyze_asm(inst);
-    case tag::ref_of:          return analyze_ref_of(inst, false);
-    case tag::address_of:      return analyze_ref_of(inst, true);
-    case tag::deref:           return analyze_deref(inst);
-    case tag::match:           return analyze_match(inst);
-    case tag::slice:           return analyze_slice(inst);
-    case tag::range:           return analyze_range(inst);
-    case tag::for_iter:        return analyze_for(inst);
-    case tag::bind:            return analyze_bind(inst);
+    case tag::undeclared:
+        return comp_.report(u_,
+                            src_of(inst),
+                            gs::error::UNDECLARED_IDENTIFIER,
+                            fmt::format("Use of undeclared identifier '{}'",
+                                        mod().string(mod().data_of(inst).str)));
+    case tag::init_struct: return analyze_init_struct(inst);
+    case tag::init_array:  return analyze_init_array(inst);
+    case tag::array_lit:   return analyze_array_lit(inst);
+    case tag::field_val:   return analyze_field_val(inst);
+    case tag::field_ptr:   return analyze_field_ptr(inst);
+    case tag::elem_val:    return analyze_elem_val(inst);
+    case tag::elem_ptr:    return analyze_elem_ptr(inst);
+    case tag::asm_expr:    return analyze_asm(inst);
+    case tag::ref_of:      return analyze_ref_of(inst, false);
+    case tag::address_of:  return analyze_ref_of(inst, true);
+    case tag::deref:       return analyze_deref(inst);
+    case tag::match:       return analyze_match(inst);
+    case tag::slice:       return analyze_slice(inst);
+    case tag::range:       return analyze_range(inst);
+    case tag::for_iter:    return analyze_for(inst);
+    case tag::bind:        return analyze_bind(inst);
 
     // A builtin is only ever called, never named as a value
     case tag::builtin_ref:
-        return comp_.report(
-            u_,
-            src_of(inst),
-            gs::error::TYPE_MISMATCH,
-            fmt::format(
-                "'{}' is a builtin and must be called",
-                syntax::builtin_name(static_cast<syntax::builtin_t>(mod().data_of(inst).un.aux))));
+        return comp_.report(u_,
+                            src_of(inst),
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'{}' is a builtin and must be called",
+                                        syntax::builtin_name(static_cast<syntax::builtin_t>(
+                                            mod().data_of(inst).un.aux))));
 
     default: break;
     }

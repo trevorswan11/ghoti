@@ -314,8 +314,12 @@ auto compilation::infer_return(instance& fn, const unit& caller, const source& u
     -> result<void> {
     if (!fn.infers_return || fn.return_type->get_kind() != gs::type_kind::AUTO) { return {}; }
     if (fn.analyzed) {
-        return unsupported(
-            caller, use, "a recursive call of a function whose return type is inferred");
+        return report(caller,
+                      use,
+                      gs::error::COMPTIME_RECURSION_LIMIT_EXCEEDED,
+                      fmt::format("'{}' calls itself with the same arguments, so its return type "
+                                  "must be written out instead of inferred",
+                                  fn.source_name));
     }
 
     const auto analyzed{analyze_body(fn)};

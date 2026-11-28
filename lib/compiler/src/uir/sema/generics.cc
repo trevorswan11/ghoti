@@ -226,7 +226,7 @@ auto compilation::declare_generic(const unit&           u,
         analyzer sig{*this, u};
         sig.enter(member);
         for (const auto& bound : impl_bounds_of(rec)) {
-            if (bound.interfaces.size() < 2 || bound.param >= params.size()) { continue; }
+            if (bound.param >= params.size()) { continue; }
             // Each interface the bound names is an instruction of the parameter list
             std::vector<std::string_view> seen;
             for (const auto interface_ref : bound.interfaces) {
@@ -239,7 +239,21 @@ auto compilation::declare_generic(const unit&           u,
                 const auto n{index && constants().is_type(*index)
                                  ? nominal_of(constants().type_at(*index))
                                  : stdx::none};
-                if (!n || constants().type_at(*index).get_kind() != gs::type_kind::INTERFACE) {
+                // A bound names an interface, or a callable for `impl Fn(...)`
+                const auto kind{
+                    index && constants().is_type(*index)
+                        ? stdx::option<gs::type_kind>{constants().type_at(*index).get_kind()}
+                        : stdx::none};
+                if (kind && *kind != gs::type_kind::INTERFACE && *kind != gs::type_kind::FUNCTION) {
+                    return report(
+                        u,
+                        m.src_of(*named),
+                        gs::error::TYPE_MISMATCH,
+                        fmt::format("an `impl` parameter bound must name an interface; "
+                                    "found `{}`",
+                                    ctx().type_display_name(constants().type_at(*index))));
+                }
+                if (!n || *kind != gs::type_kind::INTERFACE || bound.interfaces.size() < 2) {
                     continue;
                 }
                 for (const bool types : {true, false}) {
@@ -261,7 +275,7 @@ auto compilation::declare_generic(const unit&           u,
         }
     }
 
-    auto&      fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
+    auto& fn{*generics_.emplace_back(arena_.make<generic_fn>(generic_fn{
         .owner     = &units_[u.index],
         .decl      = decl,
         .func      = func,
@@ -469,6 +483,16 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
     rec.skip_body().skip_u32().skip_u32().skip_body();
     const auto bounds{impl_bounds_of(rec)};
 
+    // A bound counts the written parameters, which a method's `self` comes before
+    const bool has_self{!params.empty() && [&] {
+        record_reader p{m, m.data_of(params.front()).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_SELF) != 0;
+    }()};
+    const auto bounds_param{[&](const impl_bound& bound, usize i) {
+        return bound.param + (has_self ? 1UZ : 0UZ) == i;
+    }};
+
     // Parameter types are read in the template's scope, where earlier parameters are bound
     analyzer sig{comp_, *g.owner};
     sig.enter(member_context{.captures = g.captures, .self_type = g.self_type, .scope = g.scope});
@@ -514,7 +538,17 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
             if (!untyped) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
             for (usize j{i}; j < args.size(); ++j) {
                 // A `void` value is passed like any other
-                auto&      type{declared ? *declared : pack_element_type(args[j].value)};
+                auto& type{declared ? *declared : pack_element_type(args[j].value)};
+
+                // An `impl I...` bound holds for every argument, an untyped one in its default type
+                for (const auto& bound : bounds) {
+                    if (!bounds_param(bound, i)) { continue; }
+                    auto& bounded{gs::is_comptime_numeric(type.get_kind())
+                                      ? comp_.ctx().default_concrete(type)
+                                      : type};
+                    TRY(check_bound(sig, bound, bounded, g, param, args[j], src));
+                }
+
                 const bool passed{gs::is_value_type(type.get_kind()) ||
                                   type.get_kind() == gs::type_kind::VOID_};
                 if (!passed || gs::is_comptime_numeric(type.get_kind())) {
@@ -543,6 +577,23 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
         stdx::option<gs::type&> declared;
         if (!is_auto) { declared.emplace(*TRY(sig.eval_type(type_body, param_src))); }
 
+        // An `impl Fn(...)` parameter takes a callable of exactly that signature
+        if (is_impl_fn(m, type_body)) {
+            auto& pattern{*TRY(sig.eval_type(type_body, param_src))};
+            if (const auto why{callable_mismatch(pattern, arg)}) {
+                record_reader param_rec{m, m.data_of(param).pl.extra};
+                const auto    pname{param_rec.str_field()};
+                const auto    at{args[i].written.and_then(as_inst)};
+                return comp_.report(u_,
+                                    at ? src_of(*at) : src,
+                                    gs::error::UNSATISFIED_BOUND,
+                                    fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
+                                                comp_.ctx().type_display_name(type_of(arg)),
+                                                pname,
+                                                *why));
+            }
+        }
+
         // An untyped argument to `auto`, or a parameter whose type is untyped, binds its value
         const bool comptime_numeric_arg{
             (is_auto && gs::is_comptime_numeric(type_of(arg).get_kind())) ||
@@ -554,8 +605,14 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                 .arg_index = i + 1,
                 .callee    = g.name,
             };
-            const auto index{TRY(comptime_argument(args[i], declared, use, src))};
+            const auto index{TRY(comptime_argument(
+                args[i], declared, use, src, inferred_comptime_reason(*g.owner, g.func, param)))};
             auto&      type{declared ? *declared : type_of(arg)};
+            for (const auto& bound : bounds) {
+                if (bounds_param(bound, i)) {
+                    TRY(check_bound(sig, bound, type, g, param, args[i], src));
+                }
+            }
             sig.bind(param, operand{index});
             binding.key.args.emplace_back(index);
             binding.bindings.emplace_back<param_binding>({.value = index, .has_slot = binds_type});
@@ -590,27 +647,22 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
                                             g.name));
         }
 
-        auto& type{declared ? *TRY(matched_type(*declared, arg, param_src)) : inferred_type(arg)};
-
-        // An `impl Fn(...)` parameter takes a callable of exactly that signature
-        if (is_impl_fn(m, type_body)) {
-            auto& pattern{*TRY(sig.eval_type(type_body, param_src))};
-            if (const auto why{callable_mismatch(pattern, arg)}) {
-                record_reader param_rec{m, m.data_of(param).pl.extra};
-                const auto    pname{param_rec.str_field()};
-                const auto    at{args[i].written.and_then(as_inst)};
-                return comp_.report(u_,
-                                    at ? src_of(*at) : src,
-                                    gs::error::UNSATISFIED_BOUND,
-                                    fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
-                                                comp_.ctx().type_display_name(type_of(arg)),
-                                                pname,
-                                                *why));
-            }
+        if (is_auto && arg.is<enum_literal>()) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Argument {} is an enum literal, which only exists at "
+                                            "compile time; make the parameter `comptime`, or pass "
+                                            "an enum value",
+                                            i + 1));
         }
 
+        auto& type{declared ? *TRY(matched_type(*declared, arg, param_src)) : inferred_type(arg)};
+
         for (const auto& bound : bounds) {
-            if (bound.param == i) { TRY(check_bound(sig, bound, type, g, param, args[i], src)); }
+            if (bounds_param(bound, i)) {
+                TRY(check_bound(sig, bound, type, g, param, args[i], src));
+            }
         }
 
         // A `void` or `undefined` value is passed like any other
@@ -664,13 +716,83 @@ auto analyzer::bind_generic(generic_fn& g, gsl::span<const call_arg> args, const
     return binding;
 }
 
-auto analyzer::comptime_argument(const call_arg&         arg,
-                                 stdx::option<gs::type&> declared,
-                                 const use_site&         use,
-                                 const source&           src) -> result<ip::index> {
+auto analyzer::inferred_comptime_reason(const unit& owner, inst_id func, inst_id param) const
+    -> stdx::option<std::string> {
+    const auto&   m{*owner.uir};
+    record_reader p{m, m.data_of(param).pl.extra};
+    p.skip_str().skip_body().skip_body();
+    const auto bits{p.u32_field()};
+    if ((bits & flags::PARAM_COMPTIME) == 0 || (bits & flags::PARAM_COMPTIME_WRITTEN) != 0) {
+        return stdx::none;
+    }
+
+    // The parser notes where the body reads the parameter at compile time
+    const auto& tree{owner.source->ast};
+    const auto  fn_node{m.src_of(func).as_opt<ast::node_id>()};
+    const auto  param_node{m.src_of(param).as_opt<ast::node_id>()};
+    const auto  fn{fn_node ? tree.get_as_opt<ast::function_expr>(*fn_node) : stdx::none};
+    if (!fn || !param_node) { return stdx::none; }
+    const auto written{std::ranges::find_if(fn->parameters, [&](const auto& candidate) {
+        return ast::node_id{candidate.name}.get_index() == param_node->get_index();
+    })};
+    if (written == fn->parameters.end()) { return stdx::none; }
+
+    const auto token{
+        written->explicit_type
+            ? stdx::option<syntax::token_type_t>{written->explicit_type->get_token_type()}
+            : stdx::none};
+    if (token == syntax::token_type_t::COMPTIME_INT_TYPE ||
+        token == syntax::token_type_t::COMPTIME_FLOAT_TYPE) {
+        return std::string{"; the parameter is compile-time because an untyped number only "
+                           "exists at compile time"};
+    }
+
+    if (!written->comptime_read) {
+        return std::string{"; the parameter is compile-time because this function reads it in a "
+                           "compile-time position"};
+    }
+
+    return fmt::format("; '{}' is compile-time because the function reads it at compile time at "
+                       "{}:{}{}",
+                       tree.get_as<ast::identifier_expr>(*param_node).name,
+                       owner.source->path.string(),
+                       tree.location_of(*written->comptime_read),
+                       written->comptime_read_in_const
+                           ? ", in a `const` initializer (use `let` to read it at runtime)"
+                           : "");
+}
+
+auto analyzer::comptime_argument(const call_arg&           arg,
+                                 stdx::option<gs::type&>   declared,
+                                 const use_site&           use,
+                                 const source&             src,
+                                 stdx::option<std::string> reason) -> result<ip::index> {
     // An untyped parameter holds an enum literal by its name
     if (const auto literal{arg.value.as_opt<enum_literal>()}; literal && !declared) {
         return literal_value(*literal);
+    }
+
+    // A generic passed at compile time is instantiated there, away from its environment
+    const auto generic{comp_.closure_generic(type_of(arg.value))};
+    if (generic && generic->env) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "a compile-time function argument must capture only compile-time "
+                            "constants");
+    }
+
+    // An untyped number is never read out of the address of one
+    if (declared && gs::is_comptime_numeric(declared->get_kind()) &&
+        gs::pointee_of(type_of(arg.value))) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("Argument {} of type '{}' is not assignable to parameter "
+                                        "type '{}'",
+                                        use.arg_index,
+                                        comp_.ctx().type_display_name(type_of(arg.value)),
+                                        comp_.ctx().type_display_name(*declared)));
     }
 
     auto known{[&] -> result<operand> {
@@ -695,6 +817,16 @@ auto analyzer::comptime_argument(const call_arg&         arg,
     if (is_comptime()) {
         if (!known) { return stdx::err{known.error()}; }
         return *comptime_value(*known);
+    }
+
+    // A parameter the body made compile-time says why its argument had to be known
+    if (!known && known.error() == stop::RUNTIME && reason) {
+        return comp_.report_runtime_need(
+            u_,
+            stdx::none,
+            gs::error::COMPTIME_EVALUATION_FAILED,
+            fmt::format("argument to a comptime parameter must be a compile-time constant{}",
+                        *reason));
     }
 
     const auto checked{TRY(at_comptime_boundary(std::move(known), src))};
@@ -798,7 +930,12 @@ auto analyzer::matched_type(gs::type& declared, const operand& arg, const source
     if (!holds_auto(declared)) { return &declared; }
     const auto matched{match_auto(comp_.ctx(), declared, type_of(arg))};
     if (!matched) {
-        return comp_.unsupported(u_, src, "an argument that doesn't match its `auto` pattern");
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("Argument of type '{}' does not match parameter type '{}'",
+                                        comp_.ctx().type_display_name(type_of(arg)),
+                                        comp_.ctx().type_display_name(declared)));
     }
 
     return &*matched;
@@ -834,8 +971,9 @@ auto analyzer::callable_mismatch(const gs::type& pattern, const operand& arg)
     if (arg.is<generic_ref>()) { return stdx::none; }
 
     // A function, closure, or erased `fn` value, directly or through `^` / `&`
-    auto&      given{type_of(arg)};
-    auto&      callee{gs::pointee_of(given).value_or(given)};
+    auto& given{type_of(arg)};
+    auto& callee{gs::pointee_of(given).value_or(given)};
+    if (comp_.closure_generic(callee)) { return stdx::none; }
     const auto closure{callee.get_data().as_opt<gs::types::closure_t>()};
     const auto have{closure ? closure->signature.get_data().as_opt<gs::types::function>()
                             : callee.get_data().as_opt<gs::types::function>()};
@@ -851,10 +989,11 @@ auto analyzer::callable_mismatch(const gs::type& pattern, const operand& arg)
                            want->params.size());
     }
 
-    // An `auto` slot takes anything, any other must be exactly the same type
-    auto&      ctx{comp_.ctx()};
+    auto& ctx{comp_.ctx()};
+    // An `auto` slot on either side takes anything, a generic closure settled by its calls
     const auto matches{[](const gs::type& w, const gs::type& h) {
-        return w.get_kind() == gs::type_kind::AUTO || gs::is_same_unqualified(w, h);
+        return w.get_kind() == gs::type_kind::AUTO || h.get_kind() == gs::type_kind::AUTO ||
+               gs::is_same_unqualified(w, h);
     }};
     for (usize i{0}; i < want->params.size(); ++i) {
         auto& have_t{*have->params[i + skip]};
@@ -888,10 +1027,21 @@ auto analyzer::check_bound(analyzer&         sig,
         const auto interface{TRY(sig.value_of(interface_ref, m.src_of(param)))};
         const auto index{comptime_value(interface)};
         auto&      pool{comp_.constants()};
-        // An `impl Fn(...)` bound was matched against the callable already
+        // An `impl Fn(...)` bound takes a callable of exactly that signature
         if (index && pool.is_type(*index) &&
             pool.type_at(*index).get_kind() == gs::type_kind::FUNCTION) {
-            continue;
+            const auto why{callable_mismatch(pool.type_at(*index), arg.value)};
+            if (!why) { continue; }
+            record_reader p{m, m.data_of(param).pl.extra};
+            const auto    name{p.str_field()};
+            const auto    at{arg.written.and_then(as_inst)};
+            return comp_.report(u_,
+                                at ? src_of(*at) : src,
+                                gs::error::UNSATISFIED_BOUND,
+                                fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
+                                            comp_.ctx().type_display_name(type_of(arg.value)),
+                                            name,
+                                            *why));
         }
 
         if (!index || !pool.is_type(*index) ||

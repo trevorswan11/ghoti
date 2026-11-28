@@ -53,7 +53,14 @@ auto analyzer::analyze_call(inst_id inst) -> result<operand> {
 
         // `.name(args)` calls the member of whatever type the call is used as
         if (callee.is<enum_literal>() && !expands) { return implicit_call{inst}; }
-        return call_expanding(callee, args, pack_mask, src, callee_src.value_or(src));
+
+        // A function bound to a local is a value, which leaves its declaration's defaults behind
+        const auto callee_inst{as_inst(callee_ref)};
+        defaults_hidden_ = callee_inst && (mod().tag_of(*callee_inst) == tag::let_value ||
+                                           mod().tag_of(*callee_inst) == tag::const_local);
+        auto called{call_expanding(callee, args, pack_mask, src, callee_src.value_or(src))};
+        defaults_hidden_ = false;
+        return called;
     });
 }
 
@@ -80,6 +87,13 @@ auto analyzer::with_modifier(stdx::option<ref>                       modifier,
     }
 
     const auto how{ast::call_modifier_from_name(name)};
+    if (!how && !name.empty()) {
+        return comp_.report(u_,
+                            at,
+                            gs::error::UNDECLARED_IDENTIFIER,
+                            fmt::format("Type 'CallModifier' has no field named '{}'", name));
+    }
+
     if (!how) {
         return comp_.report(u_,
                             at,
@@ -139,7 +153,12 @@ auto analyzer::call_expanding(const operand&       callee,
             continue;
         }
 
-        if (!pack) { return comp_.unsupported(u_, src, "an expansion of something not a pack"); }
+        if (!pack) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::PACK_EXPANSION_MISPLACED,
+                                "'...' may only expand the enclosing parameter pack");
+        }
         for (const auto& element : packs_[pack->index]) {
             values.emplace_back(call_arg{.value = element, .written = stdx::none});
         }
@@ -208,6 +227,16 @@ auto analyzer::call_operand(const operand&       callee,
         const auto pointee{callee_type.get_data().as_opt<gs::types::pointer>()};
         const auto fn_type{
             (pointee ? pointee->underlying : callee_type).get_data().as_opt<gs::types::function>()};
+        if (callee_type.is_poison()) { return stdx::err{stop::POISON}; }
+        if (!fn_type && !comp_.closure_body(callee_type) &&
+            callee_type.get_kind() != gs::type_kind::CLOSURE) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::NON_CALLABLE_EXPRESSION,
+                                fmt::format("Expression of type '{}' is not callable",
+                                            comp_.ctx().type_display_name(callee_type)));
+        }
+
         if (!fn_type || is_comptime()) {
             return comp_.unsupported(u_, src, "a call through a value");
         }
@@ -346,8 +375,9 @@ auto analyzer::call_function(instance&            target,
                              const source&        callee_src,
                              bool                 through_member) -> result<operand> {
     // A call leaving trailing defaulted arguments off goes to the declaration's wrapper for them
+    const bool hidden{std::exchange(defaults_hidden_, false)};
     const bool variadic{target.type->get_data().as<gs::types::function>().is_variadic};
-    if (!variadic && args.size() < target.params.size()) {
+    if (!variadic && !hidden && args.size() < target.params.size()) {
         const auto written{args.size() - (target.self_modifier && !args.empty() ? 1 : 0)};
         if (const auto wrapper{TRY(default_wrapper(*target.owner, target.decl, written, src))}) {
             if (const auto fn{wrapper->as_opt<function_ref>()}) {
@@ -424,8 +454,8 @@ auto analyzer::call_with(instance&            target,
                                                  *target.params[i],
                                                  src,
                                                  {.what      = use_site::kind::ARGUMENT,
-                                                  .arg_index = i + 1,
-                                                  .callee    = target.symbol}))};
+                                                  .arg_index = written_position(target, i),
+                                                  .callee    = callee_name(target)}))};
                 values.emplace_back(TRY(require_comptime(coerced, src)));
             }
 
@@ -460,11 +490,12 @@ auto analyzer::call_with(instance&            target,
             continue;
         }
 
-        const auto coerced{TRY(coerce_to(
-            args[i],
-            param,
-            src,
-            {.what = use_site::kind::ARGUMENT, .arg_index = i + 1, .callee = target.symbol}))};
+        const auto coerced{TRY(coerce_to(args[i],
+                                         param,
+                                         src,
+                                         {.what      = use_site::kind::ARGUMENT,
+                                          .arg_index = written_position(target, i),
+                                          .callee    = callee_name(target)}))};
         values.emplace_back(TRY(as_runtime(coerced, src)));
     }
 
@@ -498,6 +529,20 @@ auto analyzer::call_with(instance&            target,
     }
     if (!result) { return void_value(); }
     return gir::value{*result, ret};
+}
+
+auto callee_name(const instance& fn) -> std::string_view {
+    return fn.source_name.empty() ? std::string_view{fn.symbol} : std::string_view{fn.source_name};
+}
+
+auto written_position(const instance& fn, usize slot) -> usize {
+    // A compile-time parameter takes no slot, but still counts where the call is written
+    usize seen{0};
+    for (usize i{0}; i < fn.bindings.size(); ++i) {
+        if (!fn.bindings[i].has_slot) { continue; }
+        if (seen++ == slot) { return i + 1; }
+    }
+    return slot + 1;
 }
 
 namespace {

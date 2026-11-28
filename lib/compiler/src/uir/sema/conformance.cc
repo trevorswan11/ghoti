@@ -20,11 +20,7 @@
 
 namespace ghoti::uir::sema {
 
-namespace {
-
-using modifier = ast::type_modifier::modifier;
-
-} // namespace
+namespace { using modifier = ast::type_modifier::modifier; } // namespace
 
 auto shape_of_signature(const module_t& m, inst_id func) -> self_shape {
     record_reader rec{m, m.data_of(func).pl.extra};
@@ -72,7 +68,8 @@ namespace {
 // A `&mut` or `^mut` requirement needs a mutable binding, pointer and reference must agree, and
 // only a `mut?` method implements a `mut?` one
 [[nodiscard]] auto self_compatible(modifier required, modifier provided) -> bool {
-    const auto is_poly{[](modifier h) { return h == modifier::POLY_REF || h == modifier::POLY_PTR; }};
+    const auto is_poly{
+        [](modifier h) { return h == modifier::POLY_REF || h == modifier::POLY_PTR; }};
     if (is_poly(required) || is_poly(provided)) { return required == provided; }
     switch (required) {
     case modifier::PTR:     return provided == modifier::PTR || provided == modifier::MUT_PTR;
@@ -98,7 +95,7 @@ namespace {
 
 } // namespace
 
-auto compilation::check_impls(gs::type&                                       target,
+auto compilation::check_impls(gs::type&                                      target,
                               gsl::span<const gsl::not_null<impl_instance*>> applied) -> void {
     // A check may apply the impls again, which it then has nothing left to do for
     if (!checked_impls_.insert(&target).second) { return; }
@@ -114,10 +111,11 @@ auto compilation::check_impls(gs::type&                                       ta
         const bool  target_here{home(*impl->target) == &u};
         const auto& at{u.uir->src_of(impl->entry->inst)};
         if (impl->interface && !target_here && home(*impl->interface) != &u) {
-            DISCARD(report(u,
-                           at,
-                           gs::error::ORPHAN_IMPL,
-                           "`impl I for T` is only allowed in the module that declares `I` or `T`"));
+            DISCARD(
+                report(u,
+                       at,
+                       gs::error::ORPHAN_IMPL,
+                       "`impl I for T` is only allowed in the module that declares `I` or `T`"));
         } else if (!impl->interface && !target_here) {
             DISCARD(report(u,
                            at,
@@ -181,10 +179,16 @@ auto compilation::check_impls(gs::type&                                       ta
 auto compilation::check_interface(nominal& iface) -> void {
     const auto& m{*iface.owner->uir};
     for (const auto& method : interface_methods(iface)) {
-        // A method reading associated items is typed only for an impl that binds them
-        if (method.closure) { continue; }
         analyzer sig{*this, *iface.owner};
         sig.enter(iface);
+        record_reader shape{m, m.data_of(method.func).pl.extra};
+        shape.skip_body().skip_body().skip_body().skip_u32();
+        if ((shape.u32_field() & flags::BODYLESS) != 0) {
+            sig.check_bodyless_attributes(method.attrs);
+        }
+
+        // A method reading associated items is typed only for an impl that binds them
+        if (method.closure) { continue; }
         record_reader rec{m, m.data_of(method.func).pl.extra};
         const auto    params{params_of(m, rec.body_field())};
         const auto    ret{rec.body_field()};
@@ -334,13 +338,14 @@ auto compilation::check_conformance(impl_instance& applied) -> void {
     const auto consts{associated_items(im, iface->inst, false)};
     for (const auto& item : types) {
         if (item.defaulted || written(item.name)) { continue; }
-        DISCARD(report(u,
-                       site,
-                       gs::error::MISSING_IMPL_METHOD,
-                       fmt::format("`{}` does not implement `{}`: associated type `{}` is not bound",
-                                   target_name,
-                                   iface_name,
-                                   item.name)));
+        DISCARD(
+            report(u,
+                   site,
+                   gs::error::MISSING_IMPL_METHOD,
+                   fmt::format("`{}` does not implement `{}`: associated type `{}` is not bound",
+                               target_name,
+                               iface_name,
+                               item.name)));
     }
 
     // A static `let mut` may hold the impl's state, but nothing else outside the interface
@@ -349,9 +354,9 @@ auto compilation::check_conformance(impl_instance& applied) -> void {
         const auto& d{m.decl_at(decl)};
         const auto  name{m.string(d.name)};
         const bool  item{std::ranges::contains(methods, name, &interface_method::name) ||
-                        std::ranges::contains(types, name, &associated_item::name) ||
-                        std::ranges::contains(consts, name, &associated_item::name) ||
-                        d.has(decl_flags::MUT)};
+                         std::ranges::contains(types, name, &associated_item::name) ||
+                         std::ranges::contains(consts, name, &associated_item::name) ||
+                         d.has(decl_flags::MUT)};
         if (item) { continue; }
         DISCARD(report(u,
                        site,

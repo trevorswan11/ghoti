@@ -389,6 +389,16 @@ auto analyzer::float_math_of(syntax::builtin_t which, const operand& arg, const 
         return operand{result};
     }
 
+    if (!gs::is_float(type.get_kind()) && !gs::is_integer(type.get_kind()) &&
+        type.get_kind() != gs::type_kind::VECTOR) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'{}' operand must be a float; found '{}'",
+                                        name,
+                                        comp_.ctx().type_display_name(type)));
+    }
+
     if (!gs::is_float(type.get_kind())) {
         return comp_.unsupported(
             u_, src, fmt::format("`{}` of something other than a typed float", name));
@@ -784,9 +794,17 @@ auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, cons
     auto&      byte_ptr{ctx.get_pointer(gs::types::mut::MUTABLE, ctx.get_int(8, false))};
     const auto layout{codegen::type_layout::resolve(ctx.target_opts.triple_str)};
     auto&      type{type_of(given)};
+    const auto immutable{[&] {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "A memory builtin can't write through an immutable destination; use a "
+                            "`mut` slice or array");
+    }};
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
         // An array is reached where it lives
         const auto base{TRY(address_of(arg_ref, src))};
+        if (is_dest && (!base.is_mutable || type.is_constant())) { return immutable(); }
         const auto first{
             builder_.emit_get_element_ptr(base.address, {usize_constant(0)}, byte_ptr)};
         const auto count{usize_constant(arr->len)};
@@ -802,6 +820,7 @@ auto analyzer::buffer_view(ref arg_ref, const operand& given, bool is_dest, cons
 
     const auto slice{type.get_data().as_opt<gs::types::slice>()};
     if (!slice) { return comp_.unsupported(u_, src, "a memory builtin's buffer of this type"); }
+    if (is_dest && type.is_constant()) { return immutable(); }
     const auto value{TRY(as_runtime(given, src))};
     const auto slot{spill(value, type, false).address};
     const auto ptr_at{
@@ -844,6 +863,13 @@ auto analyzer::builtin_mem(syntax::builtin_t which, gsl::span<const ref> args, c
         if (found == mem_views_.end()) { return stdx::none; }
         return found->second;
     }};
+
+    // A buffer that failed to analyze has reported why
+    for (const auto arg : args) {
+        if (const auto inst{as_inst(arg)}; inst && failed_.contains(*inst)) {
+            return stdx::err{stop::POISON};
+        }
+    }
 
     auto&      ctx{comp_.ctx()};
     auto&      bool_type{builtin(gs::type_kind::BOOL)};

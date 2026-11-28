@@ -1200,7 +1200,19 @@ auto analyzer::analyze_bool_op(inst_id inst, bool is_and) -> result<operand> {
         return coerce_to(op, bool_type, src, {.what = use_site::kind::STORE});
     }};
     if (!is_bool(type_of(lhs)) && (!is_pointer(lhs) || is_comptime())) {
-        return comp_.unsupported(u_, src, "`and` / `or` on a non-bool");
+        auto& found{type_of(lhs)};
+        if (found.is_poison()) { return stdx::err{stop::POISON}; }
+        const auto name{is_and ? "and" : "or"};
+        return comp_.report(u_,
+                            src,
+                            gs::error::OPERATOR_TYPE_MISMATCH,
+                            vector_read(found)
+                                ? fmt::format("operator '{}' needs 'bool' lanes; found '{}'",
+                                              name,
+                                              comp_.ctx().type_display_name(found))
+                                : fmt::format("operator '{}' expects 'bool' operands; found '{}'",
+                                              name,
+                                              comp_.ctx().type_display_name(found)));
     }
     auto& pool{comp_.constants()};
 

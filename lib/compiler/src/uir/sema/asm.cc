@@ -83,7 +83,8 @@ auto analyzer::check_asm_form(const source& src) -> result<void> {
                               kind == ast::node_kind::DEREFERENCE_EXPRESSION ||
                               kind == ast::node_kind::IMPLICIT_ACCESS_EXPRESSION};
         if (!assignable) {
-            return fail(node_source(*op.value), "An asm output operand must be an assignable lvalue");
+            return fail(node_source(*op.value),
+                        "An asm output operand must be an assignable lvalue");
         }
     }
 
@@ -101,7 +102,9 @@ auto analyzer::check_asm_form(const source& src) -> result<void> {
     if (node.outputs.empty() && !has_volatile) {
         return fail(src, "An asm block with no output operands must be marked `volatile`");
     }
-    if (result_slots > 1) { return fail(src, "An asm block may have at most one `_` result operand"); }
+    if (result_slots > 1) {
+        return fail(src, "An asm block may have at most one `_` result operand");
+    }
     if (result_slots == 1 && !node.result_type) {
         return fail(src,
                     "An asm block with a `_` result operand needs an explicit result type, e.g. "

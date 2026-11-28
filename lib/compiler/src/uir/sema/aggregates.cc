@@ -342,6 +342,11 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         alignments[i]  = resolved.alignment.value_or(0);
         field_types[i] = *TRY(field_type_of(type_body, default_body, name, field_src));
         TRY(check_storable(*field_types[i], field_src));
+        TRY(check_inhabited(*field_types[i], field_src));
+        // A type constructor's instance may hold a `mut?` view its call was given
+        if (!n.in_call && n.captures.empty()) {
+            TRY(check_unpolymorphic(*field_types[i], field_src));
+        }
         if (is_extern) { TRY(check_extern_field(*field_types[i], "struct", name, field_src)); }
         if (bit_packed) {
             TRY(check_packed_field(*field_types[i], name, "struct", field_src));
@@ -422,6 +427,10 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         field_types[i] = *TRY(field_type_of(type_body, stdx::none, name, field_src));
         TRY(check_storable(*field_types[i], field_src));
+        // A type constructor's instance may hold a `mut?` view its call was given
+        if (!n.in_call && n.captures.empty()) {
+            TRY(check_unpolymorphic(*field_types[i], field_src));
+        }
         if (is_extern) { TRY(check_extern_field(*field_types[i], "union", name, field_src)); }
         if (bit_packed) { TRY(check_packed_field(*field_types[i], name, "union", field_src)); }
         if (resolved.alignment) {
@@ -536,10 +545,11 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
 
         // Each variant names a value of its own
         if (std::ranges::contains(n.enum_values, static_cast<i64>(*small))) {
-            return comp_.report(u_,
-                                src,
-                                gs::error::TYPE_MISMATCH,
-                                fmt::format("Two enum variants share the value {}", next.to_string()));
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                fmt::format("Two enum variants share the value {}", next.to_string()));
         }
 
         n.enum_values.emplace_back(static_cast<i64>(*small));
@@ -644,9 +654,9 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     // A field belongs to each value of the type, not to the type
     if (n) { TRY(comp_.require_fields(u_, src, owner)); }
-    const bool sequence_field{(owner.get_kind() == gs::type_kind::ARRAY ||
-                               owner.get_kind() == gs::type_kind::SLICE) &&
-                              (name == "len" || name == "ptr")};
+    const bool sequence_field{
+        (owner.get_kind() == gs::type_kind::ARRAY || owner.get_kind() == gs::type_kind::SLICE) &&
+        (name == "len" || name == "ptr")};
     const bool aggregate_field{[&] {
         if (const auto s{owner.get_data().as_opt<gs::types::struct_t>()}) {
             return std::ranges::contains(s->field_names, name);

@@ -46,6 +46,16 @@ auto analyzer::condition(const operand& op, const source& src) -> result<gir::va
     }
 
     if (type.get_kind() != gs::type_kind::BOOL) {
+        // An `Unwrappable` condition is unwrapped, which a capture has to receive
+        if (TRY(unwrap_shape_of(type, src))) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_UNWRAP_CAPTURE,
+                                fmt::format("A condition on a '{}' unwraps it, so it needs a "
+                                            "capture; write `|_|` to ignore the payload",
+                                            comp_.ctx().type_display_name(type)));
+        }
+
         return comp_.report(
             u_, src, gs::error::TYPE_MISMATCH, messages::condition_not_bool(comp_.ctx(), type));
     }
@@ -92,6 +102,19 @@ auto analyzer::finish_merge(const std::vector<incoming>& arrivals,
     if (arrivals.empty()) {
         builder_.emit_unreachable();
         return void_value();
+    }
+
+    // Types only exist at compile time, so a runtime branch can't choose between them
+    if (std::ranges::all_of(arrivals,
+                            [&](const incoming& arrival) {
+                                const auto known{comptime_value(arrival.value)};
+                                return known && comp_.constants().is_type(*known);
+                            }) &&
+        arrivals.size() > 1) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "A type computed by an expression must be known at compile time");
     }
 
     std::vector<operand> values;
@@ -494,11 +517,57 @@ auto analyzer::analyze_repeat(inst_id inst) -> result<operand> {
     return void_value();
 }
 
+auto analyzer::reject_closure_escape(ref written, const operand& value, const source& src)
+    -> result<void> {
+    // A capturing generic's value is a function type, its environment the closure behind it
+    const auto generic{comp_.closure_generic(type_of(value))};
+    const auto env_type{generic && generic->env ? stdx::option<gs::type&>{*generic->env->type}
+                                                : stdx::option<gs::type&>{type_of(value)}};
+    const auto closure{env_type->get_data().as_opt<gs::types::closure_t>()};
+    if (!closure || closure->captures.empty()) { return {}; }
+
+    // A literal returned as written can't hold a reference into the frame that ends
+    const auto inst{as_inst(written)};
+    const bool literal{inst && mod().tag_of(*inst) == tag::closure};
+    const bool borrows{std::ranges::any_of(closure->captures, [](const auto& capture) {
+        return capture.mode != gs::types::capture_mode::VALUE;
+    })};
+    if (literal && borrows) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_CLOSURE_ESCAPE,
+                            fmt::format("{} captures a reference into its enclosing function and "
+                                        "cannot be returned directly; mark it 'move fn' to capture "
+                                        "by value instead",
+                                        generic ? "Generic function" : "Closure"));
+    }
+
+    // An erased callable borrows its closure's environment from this frame
+    const auto erased{fn_->return_type->get_data().as_opt<gs::types::function>()};
+    if (erased && erased->erased) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_CLOSURE_ESCAPE,
+                            fmt::format("A capturing {} erased into `fn(...)` borrows its "
+                                        "environment from this function and cannot be returned; "
+                                        "return it by its own type with an `auto` return instead",
+                                        generic ? "generic function" : "closure"));
+    }
+
+    return {};
+}
+
+auto analyzer::return_outside_function(const source& src) -> result<operand> {
+    return comp_.report(
+        u_, src, gs::error::ILLEGAL_CONTROL_FLOW, "A return must be inside a function body");
+}
+
 auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
-    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    if (!fn_) { return return_outside_function(src); }
     TRY(reject_unlabeled_loop(mod().data_of(inst).un.operand, src));
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
+    TRY(reject_closure_escape(mod().data_of(inst).un.operand, value, src));
 
     // Collecting the types an inferred return meets records each and leaves
     if (collected_returns_ && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
@@ -514,6 +583,11 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
     // An inferred return type is the first returned value's
     if (fn_->infers_return && fn_->return_type->get_kind() == gs::type_kind::AUTO) {
         // An untyped number only takes its type from the returns after it
+        // A cast inferring its target has none to take from an inferred return
+        if (const auto cast{value.as_opt<cast_ref>()}) {
+            return cast_target_inferred(*cast, stdx::none);
+        }
+
         if (is_untyped_literal(value) ||
             (!is_comptime() && gs::is_comptime_numeric(type_of(value).get_kind()))) {
             return comp_.unsupported(u_, src, "an untyped value as an inferred return");
@@ -522,7 +596,23 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
         fn_->return_type = &inferred_type(value);
     }
 
-    auto&      ret{*fn_->return_type};
+    auto& ret{*fn_->return_type};
+
+    // A `mut?` result takes its mutability from a `mut?` parameter, never a view of its own
+    const auto view{[](const gs::type& t) {
+        return t.get_kind() == gs::type_kind::REFERENCE || t.get_kind() == gs::type_kind::POINTER ||
+               t.get_kind() == gs::type_kind::SLICE;
+    }};
+    if (ret.is_poly() && view(ret) && view(type_of(value)) && !type_of(value).is_poly()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::RETURN_TYPE_MISMATCH,
+                            fmt::format("Return value of type '{}' is not assignable to function "
+                                        "return type '{}'",
+                                        comp_.ctx().type_display_name(type_of(value)),
+                                        comp_.ctx().type_display_name(ret)));
+    }
+
     const auto returned{TRY(coerce_to(value,
                                       ret,
                                       src,
@@ -564,7 +654,7 @@ auto analyzer::analyze_ret(inst_id inst) -> result<operand> {
 
 auto analyzer::analyze_ret_value(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
-    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    if (!fn_) { return return_outside_function(src); }
     const auto value{TRY(resolve_value(mod().data_of(inst).un.operand, src))};
     auto&      ret{*fn_->return_type};
     if (ret.get_kind() == gs::type_kind::AUTO) { return value; }
@@ -589,7 +679,8 @@ auto analyzer::reject_unlabeled_loop(ref value, const source& src) -> result<voi
 
 auto analyzer::addresses_frame(ref returned) -> bool {
     const auto taken{as_inst(returned)};
-    if (!taken || (mod().tag_of(*taken) != tag::ref_of && mod().tag_of(*taken) != tag::address_of)) {
+    if (!taken ||
+        (mod().tag_of(*taken) != tag::ref_of && mod().tag_of(*taken) != tag::address_of)) {
         return false;
     }
 
@@ -605,12 +696,12 @@ auto analyzer::addresses_frame(ref returned) -> bool {
         const auto r{record(i).ref_field()};
         return r ? as_inst(*r) : stdx::none;
     }};
-    auto at{object_of(*taken)};
+    auto       at{object_of(*taken)};
     while (at) {
         switch (mod().tag_of(*at)) {
         case tag::field_ptr:
         case tag::field_val:
-        case tag::elem_ptr: {
+        case tag::elem_ptr:  {
             const auto object{object_of(*at)};
             if (!object || indirect(*object)) { return false; }
             at = object;
@@ -714,7 +805,15 @@ auto analyzer::run_loop(inst_id inst) -> result<operand> {
         [&](jump::kind k) { return jump_ && jump_->what == k && jump_->target == inst; }};
     const auto holds{[&] -> result<bool> {
         const auto scope{comptime_scope()};
-        const auto out{TRY(analyze_body(cond_body))};
+        auto       cond{analyze_body(cond_body)};
+        if (!cond && cond.error() == stop::RUNTIME && (loop_flags & flags::UNROLL) != 0) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_WHILE_NONFOLDABLE_COND,
+                                "`unroll while`'s condition must fold to a compile-time-known "
+                                "`bool`");
+        }
+        const auto out{TRY(std::move(cond))};
         if (jump_ || !out.yielded) {
             return comp_.unsupported(u_, src, "a loop condition that leaves");
         }
@@ -816,6 +915,12 @@ auto analyzer::analyze_condbr_comptime(inst_id inst) -> result<operand> {
         return reevaluate(cond_ref, cond_src.value_or(src));
     }()};
     if (!cond && cond.error() == stop::RUNTIME) {
+        // Both arms are still checked, so a name either one misspells reports first
+        if (!is_comptime()) {
+            DISCARD(analyze_unemitted(then_body));
+            DISCARD(analyze_unemitted(else_body));
+            jump_.reset();
+        }
         return comp_.report_runtime_need(
             u_,
             cond_src.value_or(src),

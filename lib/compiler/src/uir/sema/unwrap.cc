@@ -76,6 +76,10 @@ auto analyzer::call_impl_method(impl_instance&       applied,
     return comp_.unsupported(u_, src, fmt::format("an impl's `{}` that isn't a function", name));
 }
 
+auto analyzer::is_rewrappable(gs::type& type, const source& src) -> result<bool> {
+    return TRY(prelude_impl(unref(type), "Rewrappable", src)).has_value();
+}
+
 auto analyzer::unwrap_shape_of(gs::type& operand_type, const source& src)
     -> result<stdx::option<unwrap_shape>> {
     auto&      target{unref(operand_type)};
@@ -578,7 +582,7 @@ auto analyzer::analyze_residual(inst_id inst) -> result<operand> {
 
 auto analyzer::analyze_ret_failure(inst_id inst) -> result<operand> {
     const auto& src{src_of(inst)};
-    if (!fn_) { return comp_.unsupported(u_, src, "a return outside a function"); }
+    if (!fn_) { return return_outside_function(src); }
     const auto operand_ref{mod().data_of(inst).un.operand};
     const auto value{TRY(resolve_value(operand_ref, src))};
 

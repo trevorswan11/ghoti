@@ -65,7 +65,21 @@ auto analyzer::vector_operand(const operand& op, gs::type& lane, u32 len, const 
         return coerce_to(read, shape, src, {.what = use_site::kind::STORE});
     }
 
-    return splat(read, shape, src);
+    // A scalar is broadcast to every lane, so it has to fit one
+    const auto attempt{comp_.speculate()};
+    auto       broadcast{splat(read, shape, src)};
+    // An integer literal that doesn't fit a lane says so in its own words
+    if (!broadcast && broadcast.error() == stop::POISON && !type_of(read).is_poison() &&
+        type_of(read).get_kind() != gs::type_kind::COMPTIME_INT) {
+        comp_.abandon(attempt, false);
+        return comp_.report(u_,
+                            src,
+                            gs::error::OPERATOR_TYPE_MISMATCH,
+                            fmt::format("'{}' does not broadcast to the lanes of '{}'",
+                                        comp_.ctx().type_display_name(type_of(read)),
+                                        comp_.ctx().type_display_name(shape)));
+    }
+    return broadcast;
 }
 
 auto analyzer::runtime_lanes(const operand& given, const operand& widened, const source& src)
@@ -240,20 +254,45 @@ auto analyzer::vector_binary(const binary_info& info,
     auto&      shape{ctx.get_vector(gs::types::mut::CONSTANT, len, lane)};
     auto& result_type{is_comparison ? ctx.with_lane(shape, builtin(gs::type_kind::BOOL)) : shape};
 
-    // Known lanes fold one at a time
+    // A known amount that is too wide for the lanes faults whatever is shifted
     const auto known_l{lanes_of(l, len)};
     const auto known_r{lanes_of(r, len)};
+    if (info.cls == op_class::SHIFT && known_r && !info.wrapping && !info.saturating &&
+        gs::is_integer(lane.get_kind())) {
+        const auto domain{domain_of(lane)};
+        for (const auto amount : *known_r) {
+            const auto exact{int_of(pool.value_at(amount))};
+            const auto small{exact ? exact->to_i128() : stdx::none};
+            if (!small) { continue; }
+            const auto probe{
+                gir::semantics::fold_int_shift(gir::semantics::int_op::SHL, domain, 0, *small)};
+            if (!probe) {
+                return comp_.report(
+                    u_,
+                    src,
+                    gs::error::COMPTIME_EVALUATION_FAILED,
+                    gir::semantics::describe(probe.error(), domain, ctx.type_display_name(lane)));
+            }
+        }
+    }
+
+    // Known lanes fold one at a time, and a lane that doesn't is left to the runtime
     if (known_l && known_r) {
         std::vector<stdx::option<ip::index>> elements;
         for (u32 i{0}; i < len; ++i) {
             const auto folded{
                 TRY(fold_binary(info, lane, operand{(*known_l)[i]}, operand{(*known_r)[i]}, src))};
             const auto value{folded ? comptime_value(*folded) : stdx::none};
-            if (!value) { return comp_.unsupported(u_, src, "a vector lane that doesn't fold"); }
+            if (!value) { break; }
             elements.emplace_back(*value);
         }
 
-        return operand{pool.intern(ip::aggregate_value{std::move(elements)}, result_type)};
+        if (elements.size() == len) {
+            return operand{pool.intern(ip::aggregate_value{std::move(elements)}, result_type)};
+        }
+        if (is_comptime() || !gir_fn_) {
+            return comp_.unsupported(u_, src, "a vector lane that doesn't fold");
+        }
     }
 
     TRY(require_runtime(src));
@@ -345,16 +384,20 @@ auto analyzer::vector_lane(const operand& vector, ref index_ref, const source& s
     auto&       usize_type{builtin(gs::type_kind::USIZE)};
     const auto  at{TRY(coerce_to(index, usize_type, src, {.what = use_site::kind::STORE}))};
 
-    // A known lane of a known vector is that lane at compile time
+    // A known index past the lanes is an error wherever it is read
     const auto known_at{comptime_value(at)};
-    if (const auto lanes{lanes_of(read, vec.len)}; lanes && known_at && is_comptime()) {
-        const auto i{int_of(comp_.constants().value_at(*known_at))};
-        const auto small{i ? i->to_u128() : stdx::none};
-        if (!small || *small >= vec.len) {
-            return comp_.report(
-                u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
-        }
+    const auto i{known_at ? int_of(comp_.constants().value_at(*known_at)) : stdx::none};
+    const auto small{i ? i->to_u128() : stdx::none};
+    if (i && (!small || *small >= vec.len)) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::SLICE_OUT_OF_BOUNDS,
+            fmt::format("Index {} is out of bounds for a length of {}", i->to_string(), vec.len));
+    }
 
+    // A known lane of a known vector is that lane at compile time
+    if (const auto lanes{lanes_of(read, vec.len)}; lanes && small && is_comptime()) {
         return operand{(*lanes)[static_cast<usize>(*small)]};
     }
 
@@ -373,11 +416,7 @@ auto analyzer::vector_lane(const operand& vector, ref index_ref, const source& s
     const gir::value extracted{
         builder_.emit_vector_op(gir::instruction_kind::EXTRACT_LANE, {vec_value, idx}, lane), lane};
     const auto lanes{lanes_of(read, vec.len)};
-    const auto i{known_at ? int_of(comp_.constants().value_at(*known_at)) : stdx::none};
-    const auto small{i ? i->to_u128() : stdx::none};
-    if (lanes && small && *small < vec.len) {
-        remember_built(extracted, (*lanes)[static_cast<usize>(*small)]);
-    }
+    if (lanes && small) { remember_built(extracted, (*lanes)[static_cast<usize>(*small)]); }
 
     return operand{extracted};
 }
@@ -411,6 +450,19 @@ auto analyzer::builtin_reduce(gsl::span<const ref> args, const source& src) -> r
     auto&      lane{vec->underlying};
     const auto names{op_type.get_data().as<gs::types::enum_t>().variant_names};
     const auto ordinal{static_cast<u8>(std::ranges::find(names, *op_name) - names.begin())};
+
+    // A bitwise reduction takes integer or bool lanes, and the rest take numbers
+    const bool bitwise_op{*op_name == "and" || *op_name == "or" || *op_name == "xor"};
+    const bool fits{bitwise_op ? (is_int_like(lane) || lane.get_kind() == gs::type_kind::BOOL)
+                               : gs::is_numeric(lane.get_kind())};
+    if (!fits) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("'@reduce': '.{}' does not reduce '{}' lanes",
+                                        *op_name,
+                                        comp_.ctx().type_display_name(lane)));
+    }
 
     // Known lanes fold left to right
     if (const auto lanes{lanes_of(vector, vec->len)}) {
@@ -728,6 +780,19 @@ auto analyzer::builtin_select(gsl::span<const ref> args, const source& src) -> r
     const auto a{TRY(resolve_value(args[1], src))};
     const auto b{TRY(resolve_value(args[2], src))};
     const auto len{pred_vec->len};
+    for (const auto& branch : {a, b}) {
+        const auto shape{vector_read(type_of(branch))};
+        const auto vec{shape ? gs::vector_of(*shape) : stdx::none};
+        if (vec && vec->len != len) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("'@select': the mask must be a '@Vector({}, bool)'; "
+                                            "found '{}'",
+                                            vec->len,
+                                            comp_.ctx().type_display_name(type_of(pred))));
+        }
+    }
     auto&      lane{[&]() -> gs::type& {
         if (const auto va{vector_read(type_of(a))}) { return gs::vector_of(*va)->underlying; }
         if (const auto vb{vector_read(type_of(b))}) { return gs::vector_of(*vb)->underlying; }

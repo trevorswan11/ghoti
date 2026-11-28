@@ -760,6 +760,40 @@ auto analyzer::variant_pattern(inst_id pat, gs::type& type, bool place_is_const)
     return out;
 }
 
+auto analyzer::check_match_subject(const gs::type& type, const source& src) -> result<void> {
+    const auto kind{type.get_kind()};
+    if (gs::is_float(kind) || kind == gs::type_kind::COMPTIME_FLOAT) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "Cannot match on floats due to precision; use an if statement with "
+                            "explicit precision handling");
+    }
+
+    if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}; ut && ut->is_untagged) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "Cannot match on an untagged union; it has no runtime tag");
+    }
+
+    if (kind == gs::type_kind::VOID_ || kind == gs::type_kind::UNDEFINED) {
+        return comp_.report(u_, src, gs::error::TYPE_MISMATCH, "Empty types cannot be matched on");
+    }
+
+    if (kind == gs::type_kind::OPAQUE || kind == gs::type_kind::NORETURN ||
+        kind == gs::type_kind::NULLPTR) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
+                        comp_.ctx().type_display_name(type)));
+    }
+
+    return {};
+}
+
 auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -794,6 +828,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     }
 
     auto& type{through_ref ? *gs::pointee_of(matched_type) : matched_type};
+    TRY(check_match_subject(type, src));
 
     // A type or an untyped number is only matched at compile time, by each pattern's value
     const bool by_value{type.get_kind() == gs::type_kind::TYPE ||
@@ -852,7 +887,8 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
             if (!expected) {
                 expected.emplace(std::move(names));
             } else if (!std::ranges::equal(*expected, names, [](const auto& l, const auto& r) {
-                           return l.first == r.first && gs::is_same_unqualified(*l.second, *r.second);
+                           return l.first == r.first &&
+                                  gs::is_same_unqualified(*l.second, *r.second);
                        })) {
                 return comp_.report(u_,
                                     src_of(*as_inst(p)),
@@ -1045,11 +1081,12 @@ auto analyzer::match_by_value(const std::vector<match_arm>& arms,
                                         "type");
                 }
 
-                const auto bound{[&](gsl::span<const inst_id> body) -> result<stdx::option<big_int>> {
-                    const auto known{comptime_value(TRY(pattern_operand(body, src_of(pat))))};
-                    if (!known || pool.is_type(*known)) { return stdx::option<big_int>{}; }
-                    return int_of(pool.value_at(*known));
-                }};
+                const auto bound{
+                    [&](gsl::span<const inst_id> body) -> result<stdx::option<big_int>> {
+                        const auto known{comptime_value(TRY(pattern_operand(body, src_of(pat))))};
+                        if (!known || pool.is_type(*known)) { return stdx::option<big_int>{}; }
+                        return int_of(pool.value_at(*known));
+                    }};
                 const auto lo{TRY(bound(lo_body))};
                 const auto hi{TRY(bound(hi_body))};
                 const auto at{pool.is_type(value) ? stdx::none : int_of(pool.value_at(value))};
@@ -1682,6 +1719,45 @@ void analyzer::bind_slots(const match_lowering& m, usize arm, bool read_only) {
     });
 }
 
+auto analyzer::arms_ruled_out(usize                                  count,
+                              const std::vector<pattern::row_input>& rows,
+                              const operand& scrutinee) -> std::vector<bool> {
+    std::vector<bool> ruled_out(count, false);
+    const auto        known{comptime_value(scrutinee)};
+    if (!known) { return ruled_out; }
+    const auto& value{comp_.constants().value_at(*known)};
+    const auto  number{int_of(value)};
+    const auto  flag{value.data.as_opt<bool>()};
+
+    // Rows are tried in order, so the first one certain to match decides the arm
+    std::vector<bool>   may_match(count, false);
+    stdx::option<usize> chosen;
+    for (const auto& row : rows) {
+        const auto& n{*row.root};
+        const auto  hit{[&] -> stdx::option<bool> {
+            switch (n.kind) {
+            case pattern::node_kind::WILDCARD: return true;
+            case pattern::node_kind::INT_RANGE:
+                if (!number) { return stdx::none; }
+                return n.lo <= *number && *number <= n.hi;
+            case pattern::node_kind::BOOL_VALUE:
+                if (!flag) { return stdx::none; }
+                return n.boolean == *flag;
+            default: return stdx::none;
+            }
+        }()};
+        if (!hit || *hit) { may_match[row.arm] = true; }
+        if (hit && *hit && !row.guarded) {
+            chosen = row.arm;
+            break;
+        }
+    }
+
+    if (!chosen) { return ruled_out; }
+    for (usize a{0}; a < count; ++a) { ruled_out[a] = a != *chosen && !may_match[a]; }
+    return ruled_out;
+}
+
 auto analyzer::emit_match(const std::vector<match_arm>&          arms,
                           const std::vector<pattern::row_input>& rows,
                           const pattern::decision_tree&          tree,
@@ -1734,6 +1810,7 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
         if (tree.row_reached[i]) { reached[rows[i].arm] = true; }
     }
 
+    const auto            ruled_out{arms_ruled_out(arms.size(), rows, scrutinee)};
     std::vector<incoming> arrivals;
     for (usize a{0}; a < arms.size(); ++a) {
         if (!reached[a]) { continue; }
@@ -1754,7 +1831,11 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
             values_.insert_or_assign(*as_inst(*capture), slot_operand(*slot));
         }
 
-        const auto out{TRY(analyze_body(arms[a].body))};
+        // An arm a known subject never reaches keeps its type errors but runs no checks
+        untaken_ += ruled_out[a] ? 1 : 0;
+        auto analyzed{analyze_body(arms[a].body)};
+        untaken_ -= ruled_out[a] ? 1 : 0;
+        const auto out{TRY(std::move(analyzed))};
         if (terminated()) { continue; }
 
         // What a destructuring binds has no value once its `else` carries on
