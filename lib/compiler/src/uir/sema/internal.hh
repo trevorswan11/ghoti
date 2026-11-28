@@ -896,6 +896,15 @@ class compilation {
     [[nodiscard]] auto impl_member(impl_instance& applied, std::string_view name, const source& use)
         -> result<stdx::option<operand>>;
 
+    // Conformance (conformance.cc)
+    // Reports what the impls applied to `target` get wrong, the first time any is applied
+    auto check_impls(gs::type& target, gsl::span<const gsl::not_null<impl_instance*>> applied)
+        -> void;
+    // Reports what an interface's impl lacks, adds, or declares differently from it
+    auto check_conformance(impl_instance& applied) -> void;
+    // Reports a method signature of an interface whose types can't hold their values
+    auto check_interface(nominal& iface) -> void;
+
     // `dyn` (dyn.cc)
     [[nodiscard]] auto interface_methods(const nominal& iface) -> std::vector<interface_method>;
     // Whether the interface's method `name` gives any parameter a default argument
@@ -1069,6 +1078,8 @@ class compilation {
     [[nodiscard]] auto speculating() const noexcept -> bool { return speculating_ > 0; }
     // Drops the value errors reported since `from`, which an arm that never runs can't have
     [[nodiscard]] auto diagnostic_count() const noexcept -> usize { return diagnostics_.size(); }
+    // Every report made, a repeat of an earlier one included
+    [[nodiscard]] auto report_count() const noexcept -> usize { return reports_; }
     auto drop_value_errors(usize from) -> bool;
     // Drops the diagnostics, runtime need and, unless kept, unsupported stop recorded since `s`
     auto abandon(const speculation& s, bool keep_unsupported = false) -> void;
@@ -1225,6 +1236,9 @@ class compilation {
         generic_versions_;
     std::vector<function_export> exports_;
     std::vector<modified_call>   modified_calls_;
+    // Each type whose impls were checked
+    ankerl::unordered_dense::set<gsl::not_null<const gs::type*>> checked_impls_;
+    usize                                         reports_{0};
     u32                          tests_{0};
     u32                          anonymous_tests_{0};
 };
@@ -1296,6 +1310,31 @@ class analyzer {
         -> result<gsl::not_null<gs::type*>>;
     // Analyzes the function's parameters and body into its GIR function
     [[nodiscard]] auto analyze_function() -> result<void>;
+    // Analyzes one instruction, as a body reaching it would
+    [[nodiscard]] auto analyze_one(inst_id inst) -> result<operand> { return analyze_inst(inst); }
+    // Reports what an `extern` aggregate's field holds that has no C ABI
+    [[nodiscard]] auto check_extern_field(const gs::type&  type,
+                                          std::string_view kind,
+                                          std::string_view name,
+                                          const source&    src) -> result<void>;
+    // Reports an interface or bare `dyn`, which no storage can hold by value
+    [[nodiscard]] auto check_storable(const gs::type& type, const source& src) -> result<void>;
+    // Reports storage of `noreturn`, which has no values, also as an array's elements
+    [[nodiscard]] auto check_inhabited(const gs::type& type, const source& src) -> result<void>;
+    // Whether `r` spells a reference type itself, rather than naming one through a parameter
+    [[nodiscard]] auto writes_reference(ref r) const -> bool;
+    // Whether a type implements `builtin.Rewrappable`, so a failure can be returned as one
+    [[nodiscard]] auto is_rewrappable(gs::type& type, const source& src) -> result<bool>;
+    // Reports a function-only attribute on an interface member that has no body
+    auto check_bodyless_attributes(gsl::span<const inst_id> attrs) -> void;
+    // Reports `mut?` outside a function's parameters, result, and locals
+    [[nodiscard]] auto check_unpolymorphic(const gs::type& type, const source& src) -> result<void>;
+    // Reports a reference as an array or slice element
+    [[nodiscard]] auto check_element(const gs::type& type, const source& src) -> result<void>;
+    // Reports an `opaque` passed or returned by value
+    [[nodiscard]] auto check_passable(const gs::type& type, const source& src) -> result<void>;
+    // Reports a vector in an `extern` type that has no C ABI
+    [[nodiscard]] auto check_extern_type(const gs::type& type, const source& src) -> result<void>;
     // Analyzes a body only to collect the types its `return`s give, for an inferred return type
     [[nodiscard]] auto collect_returns() -> std::vector<gsl::not_null<gs::type*>>;
     // Binds a comptime parameter of a runtime body, giving an aggregate a slot runtime reads use
@@ -1540,6 +1579,8 @@ class analyzer {
     // Whether the declaration's value is a closure of `func`, which declares it instead
     [[nodiscard]] auto closure_declares(inst_id func) const -> bool;
     // The name the `let` right after a function literal binds it to
+    // The `let` or `const` whose initializer is `value`
+    [[nodiscard]] auto binder_of(inst_id value) const -> stdx::option<inst_id>;
     [[nodiscard]] auto binding_name_of(inst_id value) const -> std::string_view;
     // Whether a closure right after the function literal `func` wraps it
     [[nodiscard]] auto wrapping_closure(inst_id func) const -> bool;
@@ -1820,8 +1861,13 @@ class analyzer {
                                   bool          written = false) -> result<place>;
     [[nodiscard]] auto comptime_field(ip::index object, std::string_view name, const source& src)
         -> result<operand>;
+    // Reports `name` read from a value of `type`, which has no such field
+    [[nodiscard]] auto no_field(gs::type& type, std::string_view name, const source& src)
+        -> stdx::err<stop>;
     // The value of a pack at a compile-time index
     [[nodiscard]] auto pack_elem(pack_ref pack, ref at_ref, const source& src) -> result<operand>;
+    // The name of the pack an `x[...]` source indexes, or "pack"
+    [[nodiscard]] auto indexed_pack_name(const source& src) const -> std::string_view;
     // The pack of the elements a pack's compile-time slice bounds select
     [[nodiscard]] auto pack_slice(pack_ref          pack,
                                   stdx::option<ref> lo_ref,
@@ -1841,10 +1887,15 @@ class analyzer {
                                       bool              inclusive,
                                       const source&     src) -> result<operand>;
     [[nodiscard]] auto analyze_slice(inst_id inst) -> result<operand>;
+    // Reports slicing a type that holds no elements to slice
+    [[nodiscard]] auto unsliceable(gs::type& type, const source& src) -> result<operand>;
     [[nodiscard]] auto analyze_for(inst_id inst) -> result<operand>;
     [[nodiscard]] auto usize_bound(ref r, const source& src) -> result<gir::value>;
     // The type a `for` range counts in
     [[nodiscard]] auto counter_type(const range_operands& r) -> gs::type&;
+    // Reports a `for` range bound that isn't an integer
+    [[nodiscard]] auto check_range_bounds(const range_operands& r, const source& src)
+        -> result<void>;
     // Every value a range takes, when both its bounds are known
     [[nodiscard]] auto known_range(const range_operands& r, bool inclusive)
         -> stdx::option<value_range>;
@@ -1864,6 +1915,8 @@ class analyzer {
                                gsl::span<const inst_id> else_body) -> result<operand>;
 
     // `match` (match.cc)
+    // Reports a subject no pattern can be matched against
+    [[nodiscard]] auto check_match_subject(const gs::type& type, const source& src) -> result<void>;
     [[nodiscard]] auto analyze_match(inst_id inst) -> result<operand>;
     [[nodiscard]] auto match_arms(inst_id inst) -> std::vector<match_arm>;
     [[nodiscard]] auto capture_name(const ast::capture_t& capture) const -> std::string_view;
@@ -1935,6 +1988,10 @@ class analyzer {
                                  bool                                       binding = false,
                                  const stdx::option<comptime_alias>& root = stdx::none)
         -> result<operand>;
+    // The arms a subject known at compile time can't reach
+    [[nodiscard]] auto arms_ruled_out(usize                                  count,
+                                      const std::vector<gs::pattern::row_input>& rows,
+                                      const operand& scrutinee) -> std::vector<bool>;
     [[nodiscard]] auto emit_match(const std::vector<match_arm>&              arms,
                                   const std::vector<gs::pattern::row_input>& rows,
                                   const gs::pattern::decision_tree&          tree,
@@ -1968,7 +2025,7 @@ class analyzer {
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
     [[nodiscard]] auto slot_operand(const capture_slot& slot) -> operand;
     // Binds the names an arm's patterns capture to the arm's slots
-    void bind_slots(const match_lowering& m, usize arm);
+    void bind_slots(const match_lowering& m, usize arm, bool read_only = false);
 
     // Types with no declaration (synthesized.cc)
     [[nodiscard]] auto analyze_merge_enums(inst_id inst) -> result<operand>;
@@ -2139,11 +2196,18 @@ class analyzer {
     // Coercion (coerce.cc)
     [[nodiscard]] auto coerce(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
+    // Reports a runtime number converted to a compile-time one, which only a known value becomes
+    [[nodiscard]] auto
+    reject_runtime_to_comptime(const operand& op, gs::type& target, const source& src)
+        -> result<void>;
     // `coerce`, reporting a missing conversion in the words of `site`
     [[nodiscard]] auto
     coerce_to(const operand& op, gs::type& target, const source& src, const use_site& site)
         -> result<operand>;
-    [[nodiscard]] auto peer_type(gsl::span<const operand> ops, const source& src)
+    // `what` names a builtin the operands are given to, which the error then names
+    [[nodiscard]] auto peer_type(gsl::span<const operand>       ops,
+                                 const source&                  src,
+                                 stdx::option<std::string_view> what = stdx::none)
         -> result<gsl::not_null<gs::type*>>;
     // The array of type `from` at `address` viewed as a slice of its elements
     [[nodiscard]] auto array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
@@ -2192,6 +2256,9 @@ class analyzer {
 
     // Locals and memory (memory.cc)
     [[nodiscard]] auto analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand>;
+    // Reports an untyped `undefined` bound at runtime, which has nothing to be
+    [[nodiscard]] auto reject_untyped_undefined(const operand& value, const source& src)
+        -> result<void>;
     [[nodiscard]] auto store_comptime(const comptime_place& p,
                                       const operand&        value,
                                       const source&         src) -> result<void>;
@@ -2275,6 +2342,11 @@ class analyzer {
     [[nodiscard]] auto analyze_condbr(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_break(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_repeat(inst_id inst) -> result<operand>;
+    // Reports a returned closure whose environment the returning frame owns
+    [[nodiscard]] auto reject_closure_escape(ref written, const operand& value, const source& src)
+        -> result<void>;
+    // Reports a `return` reached with no function to return from
+    [[nodiscard]] auto return_outside_function(const source& src) -> result<operand>;
     [[nodiscard]] auto analyze_ret(inst_id inst) -> result<operand>;
     [[nodiscard]] auto analyze_ret_value(inst_id inst) -> result<operand>;
     // What a compile-time reference refers to, none for any other operand
@@ -2317,6 +2389,11 @@ class analyzer {
     auto start_bool_ops(inst_id inst) -> void;
     // Whether a branch body ends yielding nothing, like a statement `if`'s arms
     [[nodiscard]] auto yields_nothing(gsl::span<const inst_id> body) const -> bool;
+    // Reports an unlabeled loop used as a value, which it never has
+    [[nodiscard]] auto reject_unlabeled_loop(ref value, const source& src) -> result<void>;
+    // Whether `returned` is an `&` or `^` of a local or parameter, or of a field or element of one
+    [[nodiscard]] auto addresses_frame(ref returned) -> bool;
+    [[nodiscard]] auto is_comptime_param(inst_id param) const -> bool;
     // A runtime condition's value when running it again at compile time knows it
     [[nodiscard]] auto folded_condition(ref cond, const source& src) -> result<stdx::option<bool>>;
     // What `r` computes when run again at compile time, keeping nothing that records, if computable
@@ -2382,11 +2459,16 @@ class analyzer {
     [[nodiscard]] auto bind_generic(generic_fn&               g,
                                     gsl::span<const call_arg> args,
                                     const source&             src) -> result<generic_binding>;
+    // Why a parameter not written `comptime` is one, none for a written or runtime one
+    [[nodiscard]] auto inferred_comptime_reason(const unit& owner, inst_id func, inst_id param) const
+        -> stdx::option<std::string>;
     // A comptime argument's value, reporting one only known at runtime
-    [[nodiscard]] auto comptime_argument(const call_arg&         arg,
-                                         stdx::option<gs::type&> declared,
-                                         const use_site&         use,
-                                         const source&           src) -> result<ip::index>;
+    [[nodiscard]] auto comptime_argument(const call_arg&           arg,
+                                         stdx::option<gs::type&>   declared,
+                                         const use_site&           use,
+                                         const source&             src,
+                                         stdx::option<std::string> reason = stdx::none)
+        -> result<ip::index>;
     // The narrowest of `i32`, `i64`, `u64`, `i128` and `u128` holding a `comptime_int`
     [[nodiscard]] auto fitted_int_type(ip::index value) -> gs::type&;
     // The type an argument gives an `auto` parameter or return
@@ -2524,7 +2606,13 @@ class analyzer {
     [[nodiscard]] auto known_text(ip::index value) -> stdx::option<std::string>;
     [[nodiscard]] auto builtin_limit(gsl::span<const ref> args, const source& src, bool recursion)
         -> result<operand>;
+    // Reports a builtin call given other than `wanted` arguments
+    [[nodiscard]] auto expect_arity(gsl::span<const ref> args, usize wanted, const source& src)
+        -> result<void>;
     [[nodiscard]] auto builtin_layout(gsl::span<const ref> args, const source& src, bool size)
+        -> result<operand>;
+    // Reports an assertion whose condition is known to fail
+    [[nodiscard]] auto static_assert_failed(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
     [[nodiscard]] auto builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
         -> result<operand>;
@@ -2547,9 +2635,12 @@ class analyzer {
         stdx::option<gs::type&> elem{};
     };
 
-    // Memory builtins (math.cc)
     // Inline assembly (asm.cc)
     [[nodiscard]] auto analyze_asm(inst_id inst) -> result<operand>;
+    // Reports an `asm` whose options, constraints, operands or template don't fit together
+    [[nodiscard]] auto check_asm_form(const source& src) -> result<void>;
+
+    // Memory builtins (math.cc)
     [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
     // A buffer taken apart into its data, element count and, for a destination, byte count
     [[nodiscard]] auto
@@ -2692,6 +2783,10 @@ class analyzer {
     // A runtime `@assert` or `@verify`, a call to the handler where the condition fails
     [[nodiscard]] auto builtin_llvm_intrinsic(gsl::span<const ref> args, const source& src)
         -> result<operand>;
+    // Reports a type among `args`, which a math or target builtin takes only as values
+    [[nodiscard]] auto reject_type_arguments(syntax::builtin_t    which,
+                                             gsl::span<const ref> args,
+                                             const source&        src) -> result<void>;
     [[nodiscard]] auto builtin_return_address(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_entry_main(const source& src) -> result<operand>;
     [[nodiscard]] auto builtin_field(gsl::span<const ref> args, const source& src)
@@ -2845,6 +2940,10 @@ class analyzer {
     stdx::option<std::vector<gsl::not_null<gs::type*>>> collected_returns_;
     // The `@branchHint` leading each body being analyzed, innermost last
     std::vector<stdx::option<inst_id>> body_hints_;
+    // The next body is a block statement among others, which no `@branchHint` leads
+    bool hintless_body_{false};
+    // The next call goes through a local binding, which takes no declaration's defaults
+    bool defaults_hidden_{false};
     // What `@setRuntimeSafety` set in each body being analyzed, innermost last
     std::vector<stdx::option<bool>> safety_scopes_;
     // The known values of temporaries built at runtime, which only vector folds read
@@ -2946,6 +3045,8 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 [[nodiscard]] auto intern_int(ip::pool& pool, const big_int& value, gs::type& type) -> ip::index;
 // An integer of any width as the nearest `format` float, rounded once
 [[nodiscard]] auto float_of_int(const big_int& value, float_format format) -> f128;
+// Whether a type is `mut?` itself or views a `mut?` place
+[[nodiscard]] auto holds_poly(const gs::type& type) -> bool;
 // The low `bits` of an integer's two's complement pattern, read as signed or unsigned
 [[nodiscard]] auto wrap_int(const big_int& value, u64 bits, bool is_signed) -> big_int;
 
@@ -2978,5 +3079,26 @@ value_out_of_range(const gs::context& ctx, const big_int& value, const gs::type&
 }
 // An integer constant's value, none for any other kind of constant
 [[nodiscard]] auto int_of(const ip::value& v) -> stdx::option<big_int>;
+
+// The name a call's errors give its callee, an instance's as the source writes it
+[[nodiscard]] auto callee_name(const instance& fn) -> std::string_view;
+// The position a call writes the argument for parameter slot `slot` at, from 1
+[[nodiscard]] auto written_position(const instance& fn, usize slot) -> usize;
+
+// What a function literal's signature says about its `self` and how many parameters it takes
+struct self_shape {
+    bool                         has_self{false};
+    ast::type_modifier::modifier how{ast::type_modifier::modifier::VALUE};
+    usize                        count{0};
+};
+[[nodiscard]] auto shape_of_signature(const module_t& m, inst_id func) -> self_shape;
+
+// An interface's associated type (`types`) or constant, with whether it has a default
+struct associated_item {
+    std::string_view name;
+    bool             defaulted;
+};
+[[nodiscard]] auto associated_items(const module_t& m, inst_id iface, bool types)
+    -> std::vector<associated_item>;
 
 } // namespace ghoti::uir::sema

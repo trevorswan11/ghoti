@@ -156,6 +156,14 @@ auto analyzer::cast_target_inferred(cast_ref cast, stdx::option<gs::type&> targe
 
     if (!target) {
         const auto name{syntax::builtin_name(which)};
+        if (which == builtin_t::SPLAT) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                "'@splat': needs a vector result type, as in "
+                                "'let v: @Vector(4, f32) = @splat(x)'");
+        }
+
         return comp_.report(
             u_,
             src,
@@ -212,9 +220,19 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
     if (value.is<cast_ref>()) {
         return comp_.unsupported(u_, src, "a cast whose operand's target is inferred");
     }
+    if (const auto known{comptime_value(value)};
+        which == builtin_t::SPLAT && known && comp_.constants().is_type(*known)) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("'@splat': expects a value, but was given the type '{}'",
+                        comp_.ctx().type_display_name(comp_.constants().type_at(*known))));
+    }
 
     auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
+    TRY(reject_runtime_to_comptime(value, target, src));
 
     if (which != builtin_t::SPLAT && which != builtin_t::BIT_CAST &&
         (gs::is_vector(from) || gs::is_vector(target))) {
@@ -933,6 +951,16 @@ auto analyzer::fold_cast(builtin_t       which,
         if (exact) {
             return gir::value::constant(pool, float_of_int(*exact, format_of(target)), target)
                 .constant_index();
+        }
+
+        // A finite value past the target's range has no value there
+        if (!gs::comptime_float_fits(*number, target)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::LITERAL_OUT_OF_RANGE,
+                                fmt::format("float value {} is out of range for type '{}'",
+                                            *number,
+                                            comp_.ctx().type_display_name(target)));
         }
 
         return gir::value::constant(pool, number->round_to(format_of(target)), target)

@@ -1104,7 +1104,7 @@ TEST_CASE("a rejecting ctor from another module works in a generic signature") {
             pub const main = fn(): i32 { let mut f: f32 = 1.0; _ = lg(f32, f); return 0; };
         )",
                                                  imports)};
-        CHECK(res.message_contains("Failed to instantiate 'Log2Int'"));
+        CHECK(res.message_contains("Log2Int requires an integer argument type, got f32"));
     }
 }
 

@@ -53,29 +53,63 @@ auto analyzer::analyze_range(inst_id inst) -> result<operand> {
     return anon_init{inst};
 }
 
+auto analyzer::check_range_bounds(const range_operands& r, const source& src) -> result<void> {
+    for (const auto& bound : {r.lo, r.hi}) {
+        if (!bound) { continue; }
+        if (const auto known{comptime_value(*bound)}; known && comp_.constants().is_type(*known)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "A range bound must be a value, not a type");
+        }
+        auto& type{type_of(*bound)};
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        if (!is_int_like(type)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A range's bounds must be integers; found '{}'",
+                                            comp_.ctx().type_display_name(type)));
+        }
+    }
+
+    return {};
+}
+
 auto analyzer::range_value(inst_id inst, stdx::option<gs::type&> elem, const source& src)
     -> result<operand> {
     const auto bounds{bounds_of(mod(), inst)};
     if (!bounds.lo || !bounds.hi) {
         return comp_.report(u_,
                             src,
-                            gs::error::COMPTIME_EVALUATION_FAILED,
-                            "a range used as a value needs both of its bounds");
+                            gs::error::ILLEGAL_OPEN_RANGE,
+                            "An open-ended range is only valid inside a subscript (`x[lo..]`, "
+                            "`x[..hi]`, `x[..]`) or a `for` loop paired with an array or slice");
     }
 
     // Both bounds are known at compile time
     auto&      pool{comp_.constants()};
     const auto bound{[&](ref r) -> result<operand> {
-        const auto scope{comptime_scope()};
-        const auto value{TRY(resolve_value(r, src))};
-        if (!comptime_value(value) || !int_of(pool.value_at(*comptime_value(value)))) {
+        const auto value{[&] {
+            const auto scope{comptime_scope()};
+            return resolve_value(r, src);
+        }()};
+        if (!value && value.error() != stop::RUNTIME) { return stdx::err{value.error()}; }
+        if (value && comptime_value(*value) && pool.is_type(*comptime_value(*value))) {
             return comp_.report(u_,
                                 src,
-                                gs::error::COMPTIME_EVALUATION_FAILED,
-                                "a range used as a value needs bounds known at compile time");
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "A range bound must be a value, not a type");
+        }
+        if (!value || !comptime_value(*value) || !int_of(pool.value_at(*comptime_value(*value)))) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_OPEN_RANGE,
+                                "A range used as a value needs bounds known at compile time; only "
+                                "a `for` loop or a subscript takes runtime bounds");
         }
 
-        return value;
+        return *value;
     }};
     const auto lo{TRY(bound(*bounds.lo))};
     const auto hi{TRY(bound(*bounds.hi))};
@@ -196,7 +230,7 @@ auto analyzer::comptime_slice(ref               object_ref,
         if (const auto s{type.get_data().as_opt<gs::types::slice>()}) { return s->underlying; }
         return stdx::none;
     }()};
-    if (!elem) { return comp_.unsupported(u_, src, "slicing this type at compile time"); }
+    if (!elem) { return unsliceable(type, src); }
 
     // A copy of mutable elements would miss writes through the slice
     if (!type.is_constant()) {
@@ -215,17 +249,21 @@ auto analyzer::comptime_slice(ref               object_ref,
                                slice_type)};
 }
 
-auto analyzer::pack_slice(pack_ref          pack,
-                          stdx::option<ref> lo_ref,
-                          stdx::option<ref> hi_ref,
-                          bool              inclusive,
-                          const source&     src) -> result<operand> {
+auto analyzer::indexed_pack_name(const source& src) const -> std::string_view {
     // The pack's name, which the diagnostics spell, is the indexed expression's
     const auto node{src.as_opt<ast::node_id>()};
     const auto index{node ? u_.source->ast.get_as_opt<ast::index_expr>(*node) : stdx::none};
     const auto ident{index ? u_.source->ast.get_as_opt<ast::identifier_expr>(index->array)
                            : stdx::none};
-    const auto name{ident ? std::string_view{ident->name} : std::string_view{"pack"}};
+    return ident ? std::string_view{ident->name} : std::string_view{"pack"};
+}
+
+auto analyzer::pack_slice(pack_ref          pack,
+                          stdx::option<ref> lo_ref,
+                          stdx::option<ref> hi_ref,
+                          bool              inclusive,
+                          const source&     src) -> result<operand> {
+    const auto name{indexed_pack_name(src)};
     const auto len{static_cast<i128>(packs_[pack.index].size())};
     const auto bound{[&](stdx::option<ref> at, i128 fallback) -> result<i128> {
         if (!at) { return fallback; }
@@ -268,6 +306,23 @@ auto analyzer::pack_slice(pack_ref          pack,
     return operand{pack_ref{.index = static_cast<u32>(packs_.size() - 1)}};
 }
 
+auto analyzer::unsliceable(gs::type& type, const source& src) -> result<operand> {
+    const auto name{comp_.ctx().type_display_name(type)};
+    if (type.get_kind() == gs::type_kind::VECTOR) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("A vector can't be sliced; convert '{}' to an array first", name));
+    }
+
+    return comp_.report(
+        u_,
+        src,
+        gs::error::TYPE_MISMATCH,
+        fmt::format("Can only index slices, arrays, and pointers; found '{}'", name));
+}
+
 auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -280,6 +335,26 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
     const auto object{TRY(resolve(object_ref, src))};
     if (const auto pack{object.as_opt<pack_ref>()}) {
         return pack_slice(*pack, lo_ref, hi_ref, inclusive, src);
+    }
+
+    // Only a loop or a range value counts down, a subscript never does
+    if (lo_ref && hi_ref) {
+        const auto known_bound{[&](ref r) -> result<stdx::option<big_int>> {
+            const auto value{comptime_value(TRY(resolve_value(r, src)))};
+            if (!value || comp_.constants().is_type(*value)) { return stdx::option<big_int>{}; }
+            return int_of(comp_.constants().value_at(*value));
+        }};
+        const auto lo{TRY(known_bound(*lo_ref))};
+        const auto hi{TRY(known_bound(*hi_ref))};
+        if (lo && hi && *lo > (inclusive ? *hi + big_int{i128{1}} : *hi)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_OPEN_RANGE,
+                                fmt::format("A subscript range cannot count down ({} to {}); only "
+                                            "`for` loops and range values may",
+                                            lo->to_string(),
+                                            hi->to_string()));
+        }
     }
 
     if (is_comptime()) { return comptime_slice(object_ref, lo_ref, hi_ref, inclusive, src); }
@@ -312,10 +387,14 @@ auto analyzer::analyze_slice(inst_id inst) -> result<operand> {
 
         return stdx::none;
     }()};
-    if (!elem) { return comp_.unsupported(u_, src, "slicing this type"); }
+    if (!elem) { return unsliceable(source_type, src); }
     const bool from_pointer{source_type.get_kind() == gs::type_kind::POINTER};
-    if (from_pointer && !hi_ref) {
-        return comp_.unsupported(u_, src, "slicing a pointer with no end");
+    if (from_pointer && (!hi_ref || !lo_ref)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_OPEN_RANGE,
+                            "An open-ended range needs a known length; index a pointer with an "
+                            "explicit `lo..hi` range instead");
     }
     const auto mut{source_type.is_constant() ? gs::types::mut::CONSTANT : gs::types::mut::MUTABLE};
     auto&      result_type{ctx.get_slice(mut, false, *elem)};
@@ -436,8 +515,26 @@ auto analyzer::run_for(inst_id                  inst,
     };
     std::vector<source_values> sources;
     stdx::option<usize>        length;
-    const auto bound_by{[&](usize n) { length = length ? std::min(*length, n) : n; }};
+    const auto                 not_static{[&](std::string_view why) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::UNROLLED_LOOP_COUNT_NOT_STATIC,
+                            fmt::format("`unroll for`'s {}", why));
+    }};
+
+    // An unrolled loop's drivers all run the same number of times
+    const auto bound_by{[&](usize n) -> result<void> {
+        if (unrolled && length && *length != n) {
+            return not_static(fmt::format(
+                "driving iterables must all have the same length ({} vs {})", *length, n));
+        }
+        length = length ? std::min(*length, n) : n;
+        return {};
+    }};
     const auto known_int{[&](const operand& op) -> result<big_int> {
+        if (unrolled && !comptime_value(op)) {
+            return not_static("range bounds must be compile-time constant");
+        }
         return *int_of(pool.value_at(TRY(require_comptime(op, src))));
     }};
     const auto aliased{[&](usize at) {
@@ -457,6 +554,7 @@ auto analyzer::run_for(inst_id                  inst,
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
+            TRY(check_range_bounds(r, src));
             // An unrolled range between untyped bounds counts in their default type
             const auto untyped{[&](const stdx::option<operand>& bound) {
                 return bound && type_of(*bound).get_kind() == gs::type_kind::COMPTIME_INT;
@@ -476,7 +574,9 @@ auto analyzer::run_for(inst_id                  inst,
                 values.descending = start > end;
                 auto span{values.descending ? start - end : end - start};
                 if (bounds.inclusive) { span = span + big_int{i128{1}}; }
-                bound_by(static_cast<usize>(*span.to_u128()));
+                TRY(bound_by(static_cast<usize>(*span.to_u128())));
+            } else if (unrolled && sources.empty()) {
+                return not_static("driving range must have a compile-time-known upper bound");
             }
 
             sources.emplace_back(std::move(values));
@@ -512,7 +612,7 @@ auto analyzer::run_for(inst_id                  inst,
                 values.elements.emplace_back<operand>({memory_address(element, alias)});
             }
 
-            bound_by(values.elements.size());
+            TRY(bound_by(values.elements.size()));
             sources.emplace_back(std::move(values));
             continue;
         }
@@ -525,7 +625,7 @@ auto analyzer::run_for(inst_id                  inst,
                                  .descending = false,
                                  .elem       = &builtin(gs::type_kind::VOID_),
                                  .elements   = packs_[pack->index]};
-            bound_by(values.elements.size());
+            TRY(bound_by(values.elements.size()));
             sources.emplace_back(std::move(values));
             continue;
         }
@@ -544,7 +644,8 @@ auto analyzer::run_for(inst_id                  inst,
         }
 
         if (!is_comptime() && !known) {
-            return comp_.unsupported(u_, src, "an `unroll for` over a runtime container");
+            return not_static("iterable must be a parameter pack, a compile-time-known range, or "
+                              "a compile-time-known array/slice value");
         }
 
         const auto container{known ? *known : TRY(require_comptime(given, src))};
@@ -573,11 +674,16 @@ auto analyzer::run_for(inst_id                  inst,
             }
         }
 
-        bound_by(values.elements.size());
+        TRY(bound_by(values.elements.size()));
         sources.emplace_back(std::move(values));
     }
 
-    if (!length) { return comp_.unsupported(u_, src, "a comptime `for` with no end"); }
+    if (!length) {
+        if (unrolled) {
+            return not_static("driving range must have a compile-time-known upper bound");
+        }
+        return comp_.unsupported(u_, src, "a comptime `for` with no end");
+    }
 
     const auto owns{
         [&](jump::kind k) { return jump_ && jump_->what == k && jump_->target == inst; }};
@@ -693,6 +799,19 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
     auto&                 pool{comp_.constants()};
     std::vector<iterable> infos;
 
+    // An open range only counts alongside something that bounds the loop
+    const bool unbounded{std::ranges::all_of(iterables, [&](ref r) {
+        const auto inst{as_inst(r)};
+        return inst && mod().tag_of(*inst) == tag::range && !bounds_of(mod(), *inst).hi;
+    })};
+    if (unbounded) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_OPEN_RANGE,
+                            "An open-ended range loop needs an array or slice iterable to bound "
+                            "it, e.g. `for (arr, 0..) |v, i|`");
+    }
+
     // Open ranges' known starts, and the length of an array they run alongside
     std::vector<std::pair<usize, big_int>> open_starts;
     stdx::option<usize>                    array_len;
@@ -708,6 +827,7 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
             }
 
             if (bounds.hi) { r.hi.emplace(TRY(resolve_value(*bounds.hi, src))); }
+            TRY(check_range_bounds(r, src));
             auto& elem{counter_type(r)};
             TRY(check_alias(infos.size(), elem, true, false));
             const auto convert{[&](const operand& bound) -> result<gir::value> {
@@ -782,7 +902,13 @@ auto analyzer::analyze_for(inst_id inst) -> result<operand> {
                 .is_slice   = true,
             });
         } else {
-            return comp_.unsupported(u_, src, "a `for` over this type");
+            if (container_type.is_poison()) { return stdx::err{stop::POISON}; }
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A `for` iterates over ranges, arrays and slices, not "
+                                            "a '{}'",
+                                            ctx.type_display_name(container_type)));
         }
 
         auto& elem{*infos.back().elem};

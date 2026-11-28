@@ -688,7 +688,7 @@ TEST_CASE("an interface still cannot hold itself by value") {
     CHECK(helpers::raised(R"(
         const I = interface { pub const eq = fn(&self, other: I): bool; };
 )",
-                          sema::error::CYCLIC_DEPENDENCY));
+                          sema::error::INTERFACE_NOT_A_VALUE));
 }
 
 TEST_CASE("a `dyn` view of its own interface is still checked for `dyn`-safety") {

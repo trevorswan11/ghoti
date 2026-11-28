@@ -233,17 +233,41 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
         bound.emplace_back(name, TRY(resolve_type(type_ref, at)));
     }
 
+    auto& ctx{comp_.ctx()};
     if (iface.get_kind() != gs::type_kind::INTERFACE) {
-        return comp_.unsupported(u_, src, "a `dyn` of something other than an interface");
+        if (iface.is_poison()) { return stdx::err{stop::POISON}; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("`dyn` requires an interface; found `{}`", ctx.type_display_name(iface)));
     }
 
     const auto n{comp_.nominal_of(iface)};
     if (!n) { return comp_.unsupported(u_, src, "a `dyn` of an interface UIR didn't declare"); }
-    auto&       ctx{comp_.ctx()};
     const auto& names{iface.get_data().as<gs::types::interface_t>().assoc_type_names};
+    const auto  iface_name{ctx.type_display_name(iface)};
     for (const auto& [name, type] : bound) {
         if (!std::ranges::contains(names, name)) {
-            return comp_.unsupported(u_, src, "a `dyn` binding an associated type it doesn't have");
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_UNBOUND_ASSOC,
+                                fmt::format("`{}` has no associated type `{}`", iface_name, name));
+        }
+    }
+
+    // A call through a `dyn` passes only a pointer, so no method may take `self` by value
+    const auto& im{*n->owner->uir};
+    for (const auto& method : comp_.interface_methods(*n)) {
+        const auto shape{shape_of_signature(im, method.func)};
+        if (shape.has_self && shape.how == ast::type_modifier::modifier::VALUE) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_BY_VALUE_SELF,
+                                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, "
+                                            "`@This()`, or an unbound associated type by value",
+                                            iface_name,
+                                            method.name));
         }
     }
 
@@ -259,6 +283,18 @@ auto analyzer::analyze_dyn_type(inst_id inst) -> result<operand> {
         std::ranges::all_of(names, [&](auto name) { return written(name).has_value(); })};
     if (!every_bound && comp_.declares_associated_items(*n) &&
         !comp_.defaults_every_associated_item(*n)) {
+        for (const auto& item : associated_items(im, n->inst, true)) {
+            if (item.defaulted || written(item.name)) { continue; }
+            return comp_.report(u_,
+                                src,
+                                gs::error::DYN_UNBOUND_ASSOC,
+                                fmt::format("`&dyn {}` needs associated type `{}` bound: write "
+                                            "`dyn {}({} = ...)`",
+                                            iface_name,
+                                            item.name,
+                                            iface_name,
+                                            item.name));
+        }
         return comp_.unsupported(u_, src, "a `dyn` of an associated item with no default");
     }
 
@@ -366,7 +402,28 @@ auto analyzer::call_dyn(inst_id              call,
     record_reader rec{m, m.data_of(slot->func).pl.extra};
     const auto    params{params_of(m, rec.body_field())};
     const auto    ret{rec.body_field()};
-    analyzer      sig{comp_, owner};
+
+    // A `mut?` method takes its mutability from the receiver's type, which `dyn` erases
+    const bool poly_self{!params.empty() && [&] {
+        record_reader p{m, m.data_of(params.front()).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        const auto bits{p.u32_field()};
+        const auto modifier{static_cast<ast::type_modifier::modifier>(p.u32_field())};
+        return (bits & flags::PARAM_SELF) != 0 &&
+               (modifier == ast::type_modifier::modifier::POLY_REF ||
+                modifier == ast::type_modifier::modifier::POLY_PTR);
+    }()};
+    if (poly_self) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_POLY_MUTABILITY,
+                            fmt::format("`{}` takes a `mut?` parameter, so it can't be called "
+                                        "through `dyn {}`",
+                                        name,
+                                        comp_.ctx().type_display_name(iface_type)));
+    }
+
+    analyzer sig{comp_, owner};
     // An associated type the `dyn` binds is that binding, any other its default
     if (slot != methods.end() && slot->closure) {
         const auto&   bound{dyn->get_data().as<gs::types::dyn_t>().assoc_bindings};

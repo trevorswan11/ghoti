@@ -137,10 +137,17 @@ auto analyzer::attribute_features(const attribute_item& item) -> std::vector<std
     for (const auto arg : item.args) {
         const auto& src{attribute_arg_src(arg, item.src)};
         const auto  feature_type{comp_.prelude_type("CpuFeature", u_, src)};
+        const auto  reported{comp_.report_count()};
         const auto  index{feature_type ? attribute_value(arg, **feature_type, src) : stdx::none};
         const auto  variant{index ? variant_name(*index) : stdx::none};
         const auto  at{variant && family ? std::ranges::find(family->ghoti_names, *variant)
                                          : std::vector<std::string>::const_iterator{}};
+        // Another architecture's feature already said it names no variant here
+        const auto named{as_inst(arg)};
+        if (!index && comp_.report_count() != reported && named &&
+            mod().tag_of(*named) == tag::implicit_access) {
+            continue;
+        }
         if (!variant || !family || at == family->ghoti_names.end()) {
             DISCARD(comp_.report(u_,
                                  src,
@@ -186,6 +193,21 @@ auto analyzer::check_deprecation_message(const attribute_item& item) -> void {
                          attribute_arg_src(item.args.front(), item.src),
                          gs::error::ILLEGAL_ATTRIBUTE,
                          "Attribute 'deprecated' takes a string literal message"));
+}
+
+auto analyzer::check_bodyless_attributes(gsl::span<const inst_id> attrs) -> void {
+    if (attrs.empty()) { return; }
+    const auto items{attribute_items(attrs)};
+    if (!items) { return; }
+
+    // A member with no body has no literal for an attribute only a literal takes
+    for (const auto& item : *items) {
+        const auto targets{ast::attribute_spec_of(item.kind).targets};
+        if (static_cast<bool>(targets & attribute_target::FN) &&
+            !static_cast<bool>(targets & attribute_target::FN_DECL)) {
+            report_misplaced(item, {.target = attribute_target::DECL});
+        }
+    }
 }
 
 auto analyzer::fold_attributes(gsl::span<const inst_id> body, const attribute_site& site)

@@ -48,6 +48,23 @@ auto analyzer::local_alignment(gsl::span<const inst_id> attrs) -> result<stdx::o
     return resolved.alignment;
 }
 
+auto analyzer::reject_untyped_undefined(const operand& value, const source& src) -> result<void> {
+    // Operands still waiting on a type report it too, so only `undefined` itself is refused
+    const auto known{comptime_value(value)};
+    if (type_of(value).get_kind() != gs::type_kind::UNDEFINED || !known ||
+        comp_.constants().is_type(*known) ||
+        !comp_.constants().value_at(*known).data.is<ip::undefined_value>()) {
+        return {};
+    }
+
+    return comp_.report(
+        u_,
+        src,
+        gs::error::COMPILE_TIME_ONLY_VALUE,
+        "'undefined' only exists at compile time, so it cannot be stored in a 'let' "
+        "or 'let mut' binding; use 'const' to alias it");
+}
+
 auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -66,6 +83,28 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
             .runtime_depth       = runtime_depth_,
             .keeps_comptime_type = is_comptime_alloc,
         });
+    }
+
+    // A type only exists at compile time, so a runtime slot can't hold one
+    if (type && type->get_kind() == gs::type_kind::TYPE) {
+        return comp_.report(
+            u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
+    }
+    if (type) { TRY(check_storable(*type, src)); }
+    if (type && gs::is_comptime_numeric(type->get_kind())) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::COMPILE_TIME_ONLY_VALUE,
+            fmt::format("'{}' only exists at compile time, so it cannot be stored in "
+                        "a 'let mut' binding; use 'comptime let mut'",
+                        comp_.ctx().type_display_name(*type)));
+    }
+    if (type && type->get_kind() == gs::type_kind::NORETURN) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "'noreturn' has no values, so nothing can be stored with this type");
     }
 
     if (!type) {
@@ -513,6 +552,11 @@ auto analyzer::comptime_elem_place(const comptime_place& p, ref index_ref, const
         return b.to_i128();
     })
                         : stdx::none};
+    // A runtime index can't pick which compile-time element a store writes
+    if ((arr || vec) && !at) {
+        return comp_.report(
+            u_, src, gs::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE, std::string{ASSIGN_NOT_FOLDABLE});
+    }
     if ((!arr && !vec) || !small) {
         return comp_.unsupported(u_, src, "an element of comptime memory");
     }
@@ -558,7 +602,54 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     const auto type_ref{written_type_of(rec.ref_field())};
     const auto init_ref{*rec.ref_field()};
     const auto alignment{TRY(local_alignment(rec.body_field()))};
-    auto       init{TRY(resolve_value(init_ref, src))};
+    TRY(reject_unlabeled_loop(init_ref, src));
+    auto init{TRY(resolve_value(init_ref, src))};
+
+    // A pack is only ever expanded or indexed, so no binding holds one
+    if (init.is<pack_ref>()) {
+        const auto init_inst{as_inst(init_ref)};
+        if (init_inst && mod().tag_of(*init_inst) == tag::slice) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::MALFORMED_PACK_USE,
+                                "A pack slice has no value of its own; expand it as "
+                                "'rest[lo..hi]...'");
+        }
+
+        return comp_.report(u_,
+                            src,
+                            gs::error::PACK_USE_OUT_OF_POSITION,
+                            "A parameter pack is not a value; use 'rest.len', 'rest[k]', "
+                            "'rest...', or an `unroll for` iterable");
+    }
+
+    // A runtime choice between untyped integers is stored in their default type
+    if (const auto m{init.as_opt<merge_ref>()}; m && !type_ref && !is_comptime()) {
+        auto& stored_as{comp_.ctx().default_concrete(builtin(gs::type_kind::COMPTIME_INT))};
+        for (const auto& arrival : merges_[m->index].arrivals) {
+            const auto known{comptime_value(arrival.value)};
+            const auto value{known ? int_of(comp_.constants().value_at(*known)) : stdx::none};
+            if (value && type_of(arrival.value).get_kind() == gs::type_kind::COMPTIME_INT &&
+                !gs::comptime_int_fits(*value, stored_as, comp_.ptr_bits())) {
+                return comp_.report(
+                    u_,
+                    arrival.src,
+                    gs::error::LITERAL_OUT_OF_RANGE,
+                    fmt::format("integer value {} is out of range for '{}', the type an untyped "
+                                "integer chosen at runtime is stored as; give it a type, as in "
+                                "`let y: i64 = ...`",
+                                value->to_string(),
+                                comp_.ctx().type_display_name(stored_as)));
+            }
+        }
+    }
+
+    // A binding of a range capture holds its counter's type, which converts no further
+    if (const auto slot{init.as_opt<slot_value>()}; slot && slot->range && !type_ref) {
+        TRY(require_runtime(src));
+        init = operand{
+            load(place{.address = slot->address, .pointee = slot->type, .is_mutable = false})};
+    }
 
     // A `let` of `&f` names the function, like a `let` of `f`
     if (const auto init_inst{as_inst(init_ref)};
@@ -594,11 +685,22 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
+    if (!type_ref) { TRY(reject_untyped_undefined(init, src)); }
 
     // A range with no type takes its bounds' type
     if (const auto literal{init.as_opt<anon_init>()};
         !type_ref && literal && mod().tag_of(literal->inst) == tag::range) {
         init = TRY(concrete(init, src));
+    }
+
+    if (!type_ref && init.is<enum_literal>()) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::MUTABLE_TYPE_BINDING,
+            "an enum literal only exists at compile time, so it cannot be stored in "
+            "a 'let' or 'let mut' binding; give the binding an enum type (`let x: "
+            "E = .a`) or use 'const'");
     }
 
     if (!type_ref && (init.is<anon_init>() || init.is<enum_literal>())) {
@@ -609,6 +711,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
     stdx::option<gs::type&> declared;
     if (type_ref) {
         declared.emplace(*TRY(resolve_type(*type_ref, src)));
+        TRY(check_storable(*declared, src));
         value = TRY(coerce_to(
             init,
             *declared,
@@ -722,6 +825,16 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         return analyze_body(body);
     }()};
     if (!value && value.error() == stop::RUNTIME) {
+        // An initializer that is wrong as well as runtime reports what is wrong with it
+        if (gir_fn_ && !is_comptime()) {
+            const auto reported{comp_.diagnostic_count()};
+            const auto checked{analyze_unemitted(body)};
+            if (!checked && checked.error() == stop::UNSUPPORTED) {
+                return stdx::err{stop::UNSUPPORTED};
+            }
+            if (comp_.diagnostic_count() != reported) { return stdx::err{stop::POISON}; }
+        }
+
         return comp_.report_runtime_need(
             u_, init_src, gs::error::COMPTIME_MUT_NOT_FOLDABLE, std::string{CONST_CONSTANT});
     }
@@ -917,10 +1030,33 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     }
 
     if (!destination.is_mutable) {
+        // A parameter the body made compile-time says why it can't be written
+        if (lhs_inst && mod().tag_of(*lhs_inst) == tag::param && fn_) {
+            if (const auto reason{inferred_comptime_reason(u_, fn_->func, *lhs_inst)}) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::ASSIGNMENT_TO_CONST,
+                                    fmt::format("Cannot assign to '{}', which is a `comptime` "
+                                                "parameter{}",
+                                                record(*lhs_inst).str_field(),
+                                                *reason));
+            }
+        }
+
         return comp_.report(u_, src, gs::error::ASSIGNMENT_TO_CONST, std::string{ASSIGN_CONSTANT});
     }
 
     if (!destination.address.type) {
+        TRY(reject_untyped_undefined(value, src));
+
+        // A type only exists at compile time, so a runtime slot can't hold one
+        if (const auto index{comptime_value(value)}; index && comp_.constants().is_type(*index)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::MUTABLE_TYPE_BINDING,
+                                std::string{messages::MUTABLE_TYPE_BINDING});
+        }
+
         // An untyped `let mut` takes its initializer's concrete type, never volatile
         const auto typed{TRY(concrete(value, src))};
         auto&      type{*comp_.ctx().pool.strip_volatile(type_of(typed))};
@@ -1048,7 +1184,11 @@ auto analyzer::declaration_use(const operand& value, bool as_place, const source
 
         // A global's initializer may take another global's address
         if (!gir_fn_ && as_place) { return value; }
-        return comp_.unsupported(u_, src, "a compile-time use of a `let mut` global");
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "A `let mut` global changes at runtime, so it isn't known at compile "
+                            "time");
     }
 
     auto&       type{*global->type};

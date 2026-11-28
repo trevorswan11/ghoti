@@ -237,7 +237,7 @@ const f = fn(x: u8): u8 {
     }
 decl#1 VALUE f CONSTANT
     value {
-        %26 = func conv=C
+        %26 = func conv=C, flags=has_errdefer
             params {
                 %6 = param name="x", flags=comptime, modifier=VALUE
                     type {

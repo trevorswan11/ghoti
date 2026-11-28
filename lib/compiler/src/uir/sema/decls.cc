@@ -43,6 +43,36 @@ constexpr std::string_view GLOBAL_CONSTANT{
            gs::is_comptime_numeric(return_type.get_kind());
 }
 
+// Whether `func` writes a `return`, `unreachable` or `@compileError` anywhere in its body, whose
+// instructions all come before it
+[[nodiscard]] auto writes_return(const module_t& m, inst_id func) -> bool {
+    record_reader     rec{m, m.data_of(func).pl.extra};
+    stdx::option<u32> first;
+    for (const auto& part : {rec.body_field(), rec.body_field(), rec.body_field()}) {
+        if (part.empty()) { continue; }
+        const auto at{std::to_underlying(part.front())};
+        first = first ? std::min(*first, at) : at;
+    }
+
+    for (u32 i{first.value_or(std::to_underlying(func))}; i < std::to_underlying(func); ++i) {
+        const inst_id at{i};
+        const auto    t{m.tag_of(at)};
+        if (t == tag::ret || t == tag::ret_value || t == tag::ret_residual ||
+            t == tag::ret_failure || t == tag::unreachable) {
+            return true;
+        }
+        if (t == tag::builtin) {
+            record_reader call{m, m.data_of(at).pl.extra};
+            if (static_cast<syntax::builtin_t>(call.u32_field()) ==
+                syntax::builtin_t::COMPILE_ERROR) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 } // namespace
 
 auto analyzer::default_wrapper(const unit& owner, decl_id decl, usize written, const source& src)
@@ -164,6 +194,11 @@ auto compilation::declared_type(const unit&                   u,
 auto compilation::analyze_members(const unit& u, gs::type& owner) -> void {
     const auto n{nominal_of(owner)};
     if (!n || n->in_call) { return; }
+    if (owner.get_kind() == gs::type_kind::INTERFACE) {
+        check_interface(*n);
+        return;
+    }
+
     const auto ns{u.uir->namespace_of(n->inst)};
     if (!ns) { return; }
     for (const auto decl : ns->decls) {
@@ -309,7 +344,13 @@ auto compilation::declared_names(const unit& user, const source& use)
     // An impl's methods are its interface's, or its own when it implements none
     for (const auto entry : impls_) {
         const auto& u{*entry->owner};
-        if (const auto iface{TRY(impl_interface(*entry))}) {
+        // An impl of something not an interface reports itself and declares nothing
+        const auto implemented{impl_interface(*entry)};
+        if (!implemented && implemented.error() == stop::UNSUPPORTED) {
+            return stdx::err{stop::UNSUPPORTED};
+        }
+        if (!implemented) { continue; }
+        if (const auto iface{*implemented}) {
             const auto n{nominal_of(*iface)};
             if (!n) { return unsupported(user, use, "an impl of an interface UIR didn't declare"); }
             for (const auto& method : interface_methods(*n)) {
@@ -403,19 +444,46 @@ auto compilation::declare_function(const unit&           u,
     const auto    attrs{rec.body_field()};
     const auto    bound_count{rec.count()};
 
+    // A bodyless method is only an interface's, which declares it without analyzing it here
+    const bool takes_self{std::ranges::any_of(params, [&](inst_id param) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_SELF) != 0;
+    })};
+    if ((fn_flags & flags::BODYLESS) != 0 && takes_self) {
+        return report(u,
+                      src,
+                      gs::error::FUNCTION_DECLARATION_MISSING_BODY,
+                      "A method needs a body; only interface methods may omit it");
+    }
+
     // A bodyless literal written as a value is the function type it spells
     const bool type_expr{(fn_flags & flags::BODYLESS) != 0 && (fn_flags & flags::TYPE_EXPR) != 0};
+    const bool has_pack{std::ranges::any_of(params, [&](inst_id param) {
+        record_reader p{m, m.data_of(param).pl.extra};
+        p.skip_str().skip_body().skip_body();
+        return (p.u32_field() & flags::PARAM_PACK) != 0;
+    })};
+    if (type_expr && has_pack) {
+        return report(u,
+                      src,
+                      gs::error::MALFORMED_PACK_USE,
+                      "a parameter pack cannot appear in a `fn(...): type` value expression");
+    }
     if (type_expr && bound_count == 0 && !is_generic(u, func)) {
         return function_type_of(u, func, member);
     }
 
     if ((fn_flags & flags::BODYLESS) != 0) {
-        return unsupported(u, src, "a function without a body");
+        return report(u,
+                      src,
+                      gs::error::FUNCTION_DECLARATION_MISSING_BODY,
+                      "A function needs a body, unless it is an `extern` declaration");
     }
 
     // `@[testing]` only lets the body use the test builtins
     constexpr auto DEFINED_FLAGS{flags::EXPLICIT_CONV | flags::TESTING | flags::MOVE |
-                                 flags::VARIADIC};
+                                 flags::VARIADIC | flags::HAS_ERRDEFER};
     if ((fn_flags & ~DEFINED_FLAGS) != 0) {
         return unsupported(u, src, "an extern, erased or `impl` function");
     }
@@ -423,7 +491,10 @@ auto compilation::declare_function(const unit&           u,
     // A C-variadic function takes its extra arguments as a C function does
     const bool variadic{(fn_flags & flags::VARIADIC) != 0};
     if (variadic && (bound_count != 0 || is_generic(u, func))) {
-        return unsupported(u, src, "a generic C-variadic function");
+        return report(u,
+                      src,
+                      gs::error::MALFORMED_PACK_USE,
+                      "A generic function can't be C-variadic; take a parameter pack instead");
     }
 
     if (bound_count != 0 || is_generic(u, func)) { return declare_generic(u, decl, func, member); }
@@ -454,7 +525,9 @@ auto compilation::declare_function(const unit&           u,
         }
 
         if (modifier != 0) { return unsupported(u, param_src, "a parameter modifier"); }
-        auto&      type{*TRY(sig.eval_type(type_body, param_src))};
+        auto& type{*TRY(sig.eval_type(type_body, param_src))};
+        TRY(sig.check_storable(type, param_src));
+        TRY(sig.check_passable(type, param_src));
         const bool is_void{type.get_kind() == gs::type_kind::VOID_};
         if ((!gs::is_value_type(type.get_kind()) && !is_void) ||
             gs::is_comptime_numeric(type.get_kind())) {
@@ -466,9 +539,45 @@ auto compilation::declare_function(const unit&           u,
         param_types.emplace_back(&type);
     }
 
-    auto&      return_type{*TRY(sig.eval_type(ret, src))};
+    auto& return_type{*TRY(sig.eval_type(ret, src))};
+    TRY(sig.check_storable(return_type, src));
+    TRY(sig.check_passable(return_type, src));
+
+    // An `errdefer` runs on a failure, which only a `Rewrappable` result can carry
+    if ((fn_flags & flags::HAS_ERRDEFER) != 0 && !return_type.is_generic_value() &&
+        return_type.get_kind() != gs::type_kind::AUTO &&
+        !TRY(sig.is_rewrappable(return_type, src))) {
+        return report(u,
+                      src,
+                      gs::error::ERRDEFER_IN_INFALLIBLE_FN,
+                      fmt::format("errdefer can only be used in a function returning a fallible "
+                                  "type, but '{}' does not implement 'builtin.Rewrappable'",
+                                  ctx_.type_display_name(return_type)));
+    }
+
+    // A `mut?` result takes its mutability from a `mut?` parameter, so it needs one
+    const bool poly_self{self_modifier &&
+                         (*self_modifier == ast::type_modifier::modifier::POLY_REF ||
+                          *self_modifier == ast::type_modifier::modifier::POLY_PTR)};
+    if (holds_poly(return_type) && !poly_self &&
+        std::ranges::none_of(param_types, [](const auto& t) { return holds_poly(*t); })) {
+        return report(u,
+                      src,
+                      gs::error::ILLEGAL_POLY_MUTABILITY,
+                      "A `mut?` result needs a `mut?` parameter to take its mutability from");
+    }
+
     const bool comptime_only{is_comptime_only(return_type)};
     const bool infers_return{return_type.get_kind() == gs::type_kind::AUTO};
+
+    // A compile-time-only result never reaches the runtime check for a missing `return`
+    if (comptime_only && !writes_return(m, func)) {
+        return report(u,
+                      src,
+                      gs::error::RETURN_TYPE_MISMATCH,
+                      fmt::format("Function returning '{}' never returns a value",
+                                  ctx_.type_display_name(return_type)));
+    }
     const bool no_value{return_type.get_kind() == gs::type_kind::VOID_ ||
                         return_type.get_kind() == gs::type_kind::NORETURN};
     if (!no_value && !comptime_only && !infers_return &&
@@ -539,12 +648,21 @@ auto compilation::function_type_of(const unit& u, inst_id func, const member_con
         p.skip_str();
         const auto type_body{p.body_field()};
         param_types.emplace_back(TRY(sig.eval_type(type_body, m.src_of(param))));
+        TRY(sig.check_passable(*param_types.back(), m.src_of(param)));
     }
 
     auto& return_type{*TRY(sig.eval_type(ret, src))};
-    auto  span{ctx_.pool.get_many_unsafe(param_types.size())};
+    TRY(sig.check_passable(return_type, src));
+    auto span{ctx_.pool.get_many_unsafe(param_types.size())};
     for (usize i{0}; i < param_types.size(); ++i) { span[i] = param_types[i]; }
     const bool thin{(fn_flags & flags::EXTERN_FN) != 0};
+    if (!thin && (fn_flags & flags::EXPLICIT_CONV) != 0) {
+        return report(u,
+                      src,
+                      gs::error::CALLCONV_REQUIRES_EXTERN_FN,
+                      "`callconv(...)` only applies to a thin `extern fn(...)` type; an erased "
+                      "`fn(...)` callable has no C calling convention");
+    }
     return operand{
         ctx_.get_function(span, return_type, (fn_flags & flags::VARIADIC) != 0, conv, !thin)
             .get_ip_index()};
@@ -639,6 +757,7 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
         const auto unhandled{d.flags &
                              ~(HANDLED_FLAGS | decl_flags::EXTERN | decl_flags::THREADLOCAL)};
         auto&      type{*TRY(eval_type(mod().body(*d.type_body), src))};
+        TRY(check_extern_type(type, src));
         if (unhandled != decl_flags::NONE) {
             return comp_.unsupported(u_, src, "an extern declaration with these modifiers");
         }
@@ -680,6 +799,11 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
     bool                    infers{false};
     if (d.type_body) {
         auto& type{*TRY(eval_type(mod().body(d.type_body), src))};
+        // A `const` may name a compile-time-only type, which it folds into its readers
+        TRY(check_unpolymorphic(type, src));
+        if (type.get_kind() != gs::type_kind::UNDEFINED || !d.has(decl_flags::CONSTANT)) {
+            TRY(check_storable(type, src));
+        }
         infers = type.get_kind() == gs::type_kind::AUTO;
         if (!infers) { declared.emplace(type); }
     }
@@ -712,12 +836,21 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
         }()};
         const auto erased{TRY(held)};
         if (!erased) {
-            return comp_.unsupported(u_, src, "a function declaration with an explicit type");
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("A function can't be stored as '{}'",
+                                            comp_.ctx().type_display_name(*declared)));
         }
 
         // A constant one is folded where it is read, with no storage
         if (!is_mut) { return *erased; }
         return analyze_global(decl, *erased, declared, attrs, src);
+    }
+
+    // A `let` global has storage, which `undefined` with no type to take can't fill
+    if (!d.type_body && !d.has(decl_flags::CONSTANT)) {
+        TRY(reject_untyped_undefined(*value, src));
     }
 
     const bool needs_concrete{infers || (!d.type_body && d.has(decl_flags::MUT))};

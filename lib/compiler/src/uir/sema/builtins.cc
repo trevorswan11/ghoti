@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <gsl/util>
 #include <llvm/TargetParser/Triple.h>
@@ -17,6 +18,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -51,6 +53,79 @@ constexpr std::string_view DEFAULT_ASSERT_FAILURE{"Compile-time assertion failed
 
 } // namespace
 
+namespace {
+
+// Where a math or target builtin's value arguments start, none for a builtin that may take types
+[[nodiscard]] auto value_args_from(syntax::builtin_t which) noexcept -> stdx::option<usize> {
+    using syntax::builtin_t;
+    switch (which) {
+    case builtin_t::MUL_ADD:                  return 1UZ;
+    case builtin_t::CLZ:
+    case builtin_t::CTZ:
+    case builtin_t::POPCOUNT:
+    case builtin_t::SQRT:
+    case builtin_t::SIN:
+    case builtin_t::COS:
+    case builtin_t::TAN:
+    case builtin_t::EXP:
+    case builtin_t::EXP2:
+    case builtin_t::LOG:
+    case builtin_t::LOG2:
+    case builtin_t::LOG10:
+    case builtin_t::FLOOR:
+    case builtin_t::CEIL:
+    case builtin_t::ABS:
+    case builtin_t::MIN:
+    case builtin_t::MAX:
+    case builtin_t::DIV_TRUNC:
+    case builtin_t::DIV_FLOOR:
+    case builtin_t::DIV_EXACT:
+    case builtin_t::REM:
+    case builtin_t::MOD:
+    case builtin_t::ADD_WITH_OVERFLOW:
+    case builtin_t::SUB_WITH_OVERFLOW:
+    case builtin_t::MUL_WITH_OVERFLOW:
+    case builtin_t::SHL_WITH_OVERFLOW:
+    case builtin_t::TARGET_TRIPLE:
+    case builtin_t::TARGET_OS:
+    case builtin_t::TARGET_ARCH:
+    case builtin_t::TARGET_ABI:
+    case builtin_t::TARGET_FAMILY:
+    case builtin_t::OPTIMIZE_MODE:
+    case builtin_t::RUNTIME_SAFETY:
+    case builtin_t::BRANCH_HINT:
+    case builtin_t::SET_RUNTIME_SAFETY:
+    case builtin_t::TARGET_ENDIAN:
+    case builtin_t::TARGET_PTR_BITS:
+    case builtin_t::SET_EVAL_RECURSION_LIMIT:
+    case builtin_t::SET_EVAL_UNROLL_LIMIT:
+    case builtin_t::RETURN_ADDRESS:           return 0UZ;
+    default:                                  return stdx::none;
+    }
+}
+
+} // namespace
+
+auto analyzer::reject_type_arguments(syntax::builtin_t    which,
+                                     gsl::span<const ref> args,
+                                     const source&        src) -> result<void> {
+    // Each argument was analyzed before the call, so resolving it again only reads its result
+    for (const auto arg : args) {
+        const auto value{TRY(resolve(arg, src))};
+        const auto known{comptime_value(value)};
+        if (!known || !comp_.constants().is_type(*known)) { continue; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_USED_AS_VALUE,
+            fmt::format("'{}' expects a value, but was given the type '{}'",
+                        syntax::builtin_name(which),
+                        comp_.ctx().type_display_name(comp_.constants().type_at(*known))));
+    }
+
+    return {};
+}
+
 auto compile_error_message(const module_t& m, gsl::span<const ref> args) -> std::string {
     return std::string{string_literal(m, args, 0).value_or(DEFAULT_COMPILE_ERROR)};
 }
@@ -61,6 +136,10 @@ auto analyzer::analyze_builtin(inst_id inst) -> result<operand> {
     const auto  args{rec.refs_field()};
     const auto& src{src_of(inst)};
     using syntax::builtin_t;
+    if (const auto first{value_args_from(which)}) {
+        TRY(reject_type_arguments(which, args.subspan(std::min(*first, args.size())), src));
+    }
+
     switch (which) {
     case builtin_t::COMPILE_ERROR:            return builtin_compile_error(args, src);
     case builtin_t::SET_EVAL_RECURSION_LIMIT: return builtin_limit(args, src, true);
@@ -195,6 +274,10 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     const auto  count{rec.count()};
+    if (count == 0) {
+        return comp_.report(
+            u_, src, gs::error::ARITY_MISMATCH, "'@TypeOf' expects at least 1 argument, found 0");
+    }
 
     std::vector<gs::peer_operand> peers;
     std::vector<source>           sources;
@@ -263,10 +346,18 @@ auto analyzer::analyze_unemitted(gsl::span<const inst_id> body) -> result<flow> 
 }
 
 auto analyzer::hint_inst_of(gsl::span<const inst_id> body) const -> stdx::option<inst_id> {
-    for (const auto inst : body) {
+    for (usize i{0}; i < body.size(); ++i) {
+        const auto inst{body[i]};
         const auto t{mod().tag_of(inst)};
         if (t == tag::implicit_access || t == tag::str) { continue; }
+
+        // A branch written as a block is that block alone, while a nested block statement is
+        // followed by the rest of its body and leads nothing
         if (t == tag::block) {
+            const bool alone{std::ranges::all_of(body.subspan(i + 1), [&](inst_id after) {
+                return mod().tag_of(after) == tag::yield;
+            })};
+            if (!alone) { return stdx::none; }
             auto rec{record(inst)};
             rec.skip_str();
             return hint_inst_of(rec.body_field());
@@ -400,8 +491,22 @@ auto analyzer::builtin_set_runtime_safety(gsl::span<const ref> args, const sourc
 
 auto analyzer::builtin_compile_error(gsl::span<const ref> args, const source& src)
     -> result<operand> {
+    // A message built from compile-time strings is folded to its text
     if (!args.empty() && !string_literal(mod(), args, 0)) {
-        return comp_.unsupported(u_, src, "a `@compileError` message that isn't a literal");
+        const auto message{[&] {
+            const auto scope{comptime_scope()};
+            return resolve_value(args[0], src);
+        }()};
+        const auto known{message ? comptime_value(*message) : stdx::none};
+        const auto text{known ? known_text(*known) : stdx::none};
+        if (!text) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::COMPTIME_EVALUATION_FAILED,
+                                "'@compileError' needs a message known at compile time");
+        }
+
+        return comp_.report(u_, src, gs::error::COMPILE_ERROR_REACHED, *text);
     }
 
     return comp_.report(
@@ -425,9 +530,18 @@ auto analyzer::builtin_limit(gsl::span<const ref> args, const source& src, bool 
     return void_value();
 }
 
+auto analyzer::expect_arity(gsl::span<const ref> args, usize wanted, const source& src)
+    -> result<void> {
+    if (args.size() == wanted) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::ARITY_MISMATCH,
+                        fmt::format("Builtin expects {} arguments, found {}", wanted, args.size()));
+}
+
 auto analyzer::builtin_layout(gsl::span<const ref> args, const source& src, bool size)
     -> result<operand> {
-    if (args.size() != 1) { return comp_.unsupported(u_, src, "a layout builtin's arity"); }
+    TRY(expect_arity(args, 1, src));
     auto& type{*TRY(resolve_type(args.front(), src))};
     TRY(layout_ready(type, src));
     const auto  layout{codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str)};
@@ -437,7 +551,7 @@ auto analyzer::builtin_layout(gsl::span<const ref> args, const source& src, bool
 }
 
 auto analyzer::builtin_bit_size(gsl::span<const ref> args, const source& src) -> result<operand> {
-    if (args.size() != 1) { return comp_.unsupported(u_, src, "a layout builtin's arity"); }
+    TRY(expect_arity(args, 1, src));
     auto& type{*TRY(resolve_type(args.front(), src))};
     TRY(layout_ready(type, src));
     const auto layout{codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str)};
@@ -633,6 +747,7 @@ auto analyzer::builtin_as(inst_id inst, gsl::span<const ref> args, const source&
 
 auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> result<operand> {
     auto value{TRY(resolve_value(value_ref, src))};
+    TRY(reject_runtime_to_comptime(value, target, src));
 
     // A vector takes its lanes from a list, an array or another vector
     if (gs::is_vector(target)) {
@@ -646,8 +761,16 @@ auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> resu
 
     auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
+    if (target.get_kind() == gs::type_kind::BOOL && gs::is_numeric(from.get_kind())) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "`@as` cannot convert to `bool`; use `@boolFromInt` instead");
+    }
+
+    // Outside numbers it converts only as a value is implicitly converted
     if (!gs::is_numeric(from.get_kind()) || !gs::is_numeric(target.get_kind())) {
-        return comp_.unsupported(u_, src, "an `@as` between non-numeric types");
+        return coerce_to(value, target, src, {.what = use_site::kind::STORE});
     }
 
     // A negative untyped integer that the same-width signed type holds wraps into unsigned
@@ -754,13 +877,7 @@ auto analyzer::builtin_c_va(syntax::builtin_t which, gsl::span<const ref> args, 
     auto&      ctx{comp_.ctx()};
     const auto lists{which == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
     const auto wanted{which == syntax::builtin_t::C_VA_ARG ? 2UZ : lists};
-    if (args.size() != wanted) {
-        return comp_.report(
-            u_,
-            src,
-            gs::error::ARITY_MISMATCH,
-            fmt::format("Builtin expects {} arguments, found {}", wanted, args.size()));
-    }
+    TRY(expect_arity(args, wanted, src));
 
     // Every va builtin addresses caller-provided `va_list` storage through a pointer
     std::vector<gir::value> values;
@@ -803,23 +920,32 @@ auto analyzer::builtin_trap(const source& src) -> result<operand> {
     return void_value();
 }
 
+auto analyzer::static_assert_failed(gsl::span<const ref> args, const source& src, bool verify)
+    -> result<operand> {
+    const auto text{string_literal(mod(), args, 1)};
+    return comp_.report(u_,
+                        src,
+                        gs::error::STATIC_ASSERTION_FAILED,
+                        fmt::format("{} failed at compile time{}",
+                                    verify ? "@verify" : "@assert",
+                                    text ? fmt::format(": {}", *text) : std::string{}));
+}
+
 auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool verify)
     -> result<operand> {
-    if (args.empty()) { return comp_.unsupported(u_, src, "an `@assert` without a condition"); }
+    if (args.empty() || args.size() > 2) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ARITY_MISMATCH,
+                            fmt::format("Builtin expects 1 or 2 arguments, found {}", args.size()));
+    }
+
     if (!is_comptime()) { return runtime_assert(args, src, verify); }
     const auto cond{TRY(resolve_value(args.front(), src))};
     if (TRY(known_bool(cond, src))) { return void_value(); }
 
-    // Outside a call the old resolver folds the condition itself and reports it as static
-    if (!comp_.in_comptime_call()) {
-        const auto text{string_literal(mod(), args, 1)};
-        return comp_.report(u_,
-                            src,
-                            gs::error::STATIC_ASSERTION_FAILED,
-                            fmt::format("{} failed at compile time{}",
-                                        verify ? "@verify" : "@assert",
-                                        text ? fmt::format(": {}", *text) : std::string{}));
-    }
+    // Outside a call the condition is folded where it is written, which makes it static
+    if (!comp_.in_comptime_call()) { return static_assert_failed(args, src, verify); }
 
     return comp_.report(
         u_,
@@ -830,19 +956,78 @@ auto analyzer::builtin_assert(gsl::span<const ref> args, const source& src, bool
 
 auto analyzer::builtin_llvm_intrinsic(gsl::span<const ref> args, const source& src)
     -> result<operand> {
-    if (args.size() < 2) { return comp_.unsupported(u_, src, "an `@llvmIntrinsic` of this arity"); }
+    if (args.size() < 2) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::ARITY_MISMATCH,
+            fmt::format("Builtin expects at least 2 arguments, found {}", args.size()));
+    }
     TRY(require_runtime(src));
-    const auto name{string_literal(mod(), args, 0)};
+
+    // The name is a compile-time string
+    const auto name{TRY([&] -> result<stdx::option<std::string>> {
+        if (const auto literal{string_literal(mod(), args, 0)}) {
+            return stdx::option<std::string>{std::string{*literal}};
+        }
+        const auto value{[&] {
+            const auto scope{comptime_scope()};
+            return resolve_value(args[0], src);
+        }()};
+        const auto known{value ? comptime_value(*value) : stdx::none};
+        if (!known || comp_.constants().is_type(*known)) { return stdx::option<std::string>{}; }
+        return comp_.constants().value_at(*known).data.as_opt<std::string>().transform(
+            [](const std::string& s) { return s; });
+    }())};
     if (!name) {
-        return comp_.unsupported(u_, src, "an `@llvmIntrinsic` name that isn't a literal");
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_EVALUATION_FAILED,
+                            "'@llvmIntrinsic' needs a compile-time string naming the intrinsic, "
+                            "like \"llvm.x86.sse2.pause\"");
     }
 
     // The call carries the intrinsic's name, with the result type written second
-    auto&                   result_type{*TRY(resolve_type(args[1], src))};
-    std::vector<gir::value> values;
+    auto&                                       result_type{*TRY(resolve_type(args[1], src))};
+    std::vector<gir::value>                     values;
+    std::vector<gsl::not_null<const gs::type*>> types;
+    std::vector<bool>                           known;
     for (const auto arg : args.subspan(2)) {
         const auto given{TRY(resolve_value(arg, src))};
-        values.emplace_back(TRY(as_runtime(given, src)));
+        if (const auto index{comptime_value(given)}; index && comp_.constants().is_type(*index)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_USED_AS_VALUE,
+                                "'@llvmIntrinsic' arguments are values, not types");
+        }
+
+        // An untyped literal is an `i32` or `f64`, as when it binds an `auto` parameter
+        known.emplace_back(comptime_value(given).has_value());
+        const auto typed{TRY(concrete(given, src))};
+        const auto value{TRY(as_runtime(typed, src))};
+        types.emplace_back(value.type.get());
+        values.emplace_back(value);
+    }
+
+    std::vector<usize> immediates;
+    if (const auto problem{codegen::check_llvm_intrinsic(
+            *name,
+            result_type,
+            types,
+            codegen::resolve_target_triple(comp_.ctx().target_opts.triple_str),
+            immediates)}) {
+        return comp_.report(u_, src, gs::error::INVALID_LLVM_INTRINSIC, *problem);
+    }
+
+    // LLVM takes these as part of the instruction, so they must be known now
+    for (const auto index : immediates) {
+        if (index < known.size() && !known[index]) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::COMPTIME_EVALUATION_FAILED,
+                fmt::format("argument {} of '{}' must be known at compile time", index + 1, *name));
+        }
     }
 
     const auto result{
@@ -877,7 +1062,23 @@ auto analyzer::builtin_field(gsl::span<const ref> args, const source& src) -> re
 
     // `@field` reads a field through a pointer without checking it for null
     const auto field_name{comp_.lasting_name(*name)};
-    return field_value(args[0], field_name, src, false);
+    const auto value{TRY(field_value(args[0], field_name, src, false))};
+
+    // On a type it reads only static data, never a method to bind
+    const auto owner{comptime_value(TRY(resolve(args[0], src)))};
+    if (owner && comp_.constants().is_type(*owner) &&
+        (value.is<function_ref>() || value.is<generic_ref>())) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::FIELD_NOT_FOUND,
+            fmt::format("@field: '{}' has no static data member named '{}' (methods and bound "
+                        "access are not supported)",
+                        comp_.ctx().type_display_name(comp_.constants().type_at(*owner)),
+                        field_name));
+    }
+
+    return value;
 }
 
 auto analyzer::field_name_arg(ref arg, const source& src) -> result<stdx::option<std::string>> {
@@ -887,8 +1088,8 @@ auto analyzer::field_name_arg(ref arg, const source& src) -> result<stdx::option
     }()};
     if (!given && given.error() != stop::RUNTIME) { return stdx::err{given.error()}; }
     const auto known{given ? comptime_value(*given) : stdx::none};
-    const auto text{known ? comp_.constants().value_at(*known).data.as_opt<std::string>()
-                          : stdx::none};
+    if (!known || comp_.constants().is_type(*known)) { return stdx::option<std::string>{}; }
+    const auto text{comp_.constants().value_at(*known).data.as_opt<std::string>()};
     return text ? stdx::option<std::string>{*text} : stdx::none;
 }
 
@@ -1068,10 +1269,13 @@ auto analyzer::runtime_assert(gsl::span<const ref> args, const source& src, bool
     auto&      ctx{comp_.ctx()};
     const auto cond{TRY(resolve_value(args.front(), src))};
 
-    // A condition known to hold needs no check, and only `@verify` checks without safety
+    // A condition known to hold needs no check, one known to fail never runs
     if (const auto known{TRY(speculated_value(args.front(), src))}) {
         const auto held{comp_.constants().value_at(*known).data.as_opt<bool>()};
         if (held && *held) { return void_value(); }
+        // An arm a known condition skips never runs it
+        if (held && untaken_ > 0) { return void_value(); }
+        if (held) { return static_assert_failed(args, src, verify); }
     }
 
     if (!verify && !runtime_safety()) { return void_value(); }

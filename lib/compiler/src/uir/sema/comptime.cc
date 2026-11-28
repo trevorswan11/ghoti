@@ -273,8 +273,11 @@ auto analyzer::eval_call(gsl::span<const ip::index> args) -> result<operand> {
     DISCARD(TRY(analyze_body(body)));
     if (jump_ && jump_->what == jump::kind::RETURN) { return *jump_->value; }
     if (fn_->return_type->get_kind() == gs::type_kind::VOID_) { return void_value(); }
-    return comp_.unsupported(
-        u_, src_of(fn_->func), "a compile-time call that ends without returning");
+    return comp_.report(u_,
+                        src_of(fn_->func),
+                        gs::error::RETURN_TYPE_MISMATCH,
+                        fmt::format("Function returning '{}' never returns a value",
+                                    comp_.ctx().type_display_name(*fn_->return_type)));
 }
 
 auto analyzer::require_comptime(const operand& op, const source& src) -> result<ip::index> {

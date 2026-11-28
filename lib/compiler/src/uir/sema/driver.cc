@@ -175,6 +175,15 @@ auto compilation::analyze_roots() -> void {
                 if (is_deferred_error(u, d) || (!opts_.check_all && !is_lazy_root(u, d))) { break; }
 
                 const auto value{analyze_decl(u, decl, *d.node)};
+                // A generic function has no one symbol to export
+                if (value && d.has(decl_flags::EXPORT) && value->is<generic_ref>()) {
+                    DISCARD(report(u,
+                                   source{*d.node},
+                                   gs::error::TYPE_MISMATCH,
+                                   "'export' can't export a generic function; export a "
+                                   "non-generic wrapper that calls one instantiation"));
+                    break;
+                }
                 if (!value || !opts_.check_all) { break; }
                 if (const auto type{declared_type(u, d.value_body, *value)}) {
                     analyze_members(u, *type);
@@ -305,8 +314,12 @@ auto compilation::infer_return(instance& fn, const unit& caller, const source& u
     -> result<void> {
     if (!fn.infers_return || fn.return_type->get_kind() != gs::type_kind::AUTO) { return {}; }
     if (fn.analyzed) {
-        return unsupported(
-            caller, use, "a recursive call of a function whose return type is inferred");
+        return report(caller,
+                      use,
+                      gs::error::COMPTIME_RECURSION_LIMIT_EXCEEDED,
+                      fmt::format("'{}' calls itself with the same arguments, so its return type "
+                                  "must be written out instead of inferred",
+                                  fn.source_name));
     }
 
     const auto analyzed{analyze_body(fn)};
@@ -421,6 +434,7 @@ auto compilation::report(const unit&                          u,
                          std::string                          message,
                          const stdx::option<diagnostic_note>& note) -> stdx::err<stop> {
     const auto span{span_of(u, src)};
+    ++reports_;
 
     // A body run at compile time and analyzed for runtime reports its errors once
     const bool repeated{std::ranges::any_of(diagnostics_, [&](const gs::diagnostic& seen) {

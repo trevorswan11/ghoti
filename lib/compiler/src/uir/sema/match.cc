@@ -284,7 +284,17 @@ auto analyzer::pattern_node(inst_id pat, gs::type& type, bool place_is_const, bo
 
         const auto known{TRY(known_pattern(body, type, src))};
         if (!known) { return opaque_pattern(pat, type, top_level); }
-        if (pool.is_type(*known)) { return opaque_pattern(pat, type, true); }
+        if (pool.is_type(*known)) {
+            // Only a type is matched against a type
+            if (type.get_kind() != gs::type_kind::TYPE) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::ILLEGAL_MATCH_PATTERN,
+                                    fmt::format("A type can't match a value of type '{}'",
+                                                comp_.ctx().type_display_name(type)));
+            }
+            return opaque_pattern(pat, type, true);
+        }
         const auto  value{*known};
         const auto& data{pool.value_at(value).data};
         if (type.get_kind() == gs::type_kind::BOOL) {
@@ -381,8 +391,21 @@ auto analyzer::known_pattern(gsl::span<const inst_id> body, gs::type& type, cons
         return stdx::option<ip::index>{*index};
     }
 
-    const auto typed{TRY(coerce_to(known, type, src, {.what = use_site::kind::STORE}))};
-    return stdx::option<ip::index>{TRY(require_comptime(typed, src))};
+    // A pattern that can't be the subject's type can never match it
+    const auto attempt{comp_.speculate()};
+    const auto typed{coerce_to(known, type, src, {.what = use_site::kind::STORE})};
+    if (!typed) {
+        if (typed.error() == stop::UNSUPPORTED) { return stdx::err{stop::UNSUPPORTED}; }
+        comp_.abandon(attempt, false);
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_MATCH_PATTERN,
+                            fmt::format("A pattern of type '{}' can't match a value of type '{}'",
+                                        comp_.ctx().type_display_name(type_of(known)),
+                                        comp_.ctx().type_display_name(type)));
+    }
+
+    return stdx::option<ip::index>{TRY(require_comptime(*typed, src))};
 }
 
 auto analyzer::opaque_pattern(inst_id pat, gs::type& type, bool top_level)
@@ -538,7 +561,20 @@ auto analyzer::aggregate_pattern(inst_id pat, gs::type& type, bool place_is_cons
     -> result<pattern::node_ptr> {
     const auto& src{src_of(pat)};
     auto        rec{record(pat)};
-    rec.skip_body();
+
+    // A qualified pattern names the type it matches, which is the matched value's
+    if (const auto qualifier{rec.body_field()}; !qualifier.empty()) {
+        auto& named_type{*TRY(eval_type(qualifier, src))};
+        if (!gs::is_same_unqualified(named_type, type)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_MATCH_PATTERN,
+                                fmt::format("This pattern names '{}', but the value is a '{}'",
+                                            comp_.ctx().type_display_name(named_type),
+                                            comp_.ctx().type_display_name(type)));
+        }
+    }
+
     std::vector<std::pair<std::string_view, inst_id>> entries;
     const auto                                        count{rec.count()};
     for (u32 i{0}; i < count; ++i) {
@@ -724,6 +760,40 @@ auto analyzer::variant_pattern(inst_id pat, gs::type& type, bool place_is_const)
     return out;
 }
 
+auto analyzer::check_match_subject(const gs::type& type, const source& src) -> result<void> {
+    const auto kind{type.get_kind()};
+    if (gs::is_float(kind) || kind == gs::type_kind::COMPTIME_FLOAT) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "Cannot match on floats due to precision; use an if statement with "
+                            "explicit precision handling");
+    }
+
+    if (const auto ut{type.get_data().as_opt<gs::types::union_t>()}; ut && ut->is_untagged) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "Cannot match on an untagged union; it has no runtime tag");
+    }
+
+    if (kind == gs::type_kind::VOID_ || kind == gs::type_kind::UNDEFINED) {
+        return comp_.report(u_, src, gs::error::TYPE_MISMATCH, "Empty types cannot be matched on");
+    }
+
+    if (kind == gs::type_kind::OPAQUE || kind == gs::type_kind::NORETURN ||
+        kind == gs::type_kind::NULLPTR) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
+                        comp_.ctx().type_display_name(type)));
+    }
+
+    return {};
+}
+
 auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -758,6 +828,7 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     }
 
     auto& type{through_ref ? *gs::pointee_of(matched_type) : matched_type};
+    TRY(check_match_subject(type, src));
 
     // A type or an untyped number is only matched at compile time, by each pattern's value
     const bool by_value{type.get_kind() == gs::type_kind::TYPE ||
@@ -780,10 +851,53 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
     const auto& ast_match{u_.source->ast.get_as<ast::match_expr>(*src.as_opt<ast::node_id>())};
     std::vector<std::vector<pattern::node_ptr>> patterns(arms.size());
     for (usize a{0}; a < arms.size(); ++a) {
-        for (const auto p : arms[a].patterns) {
-            auto node{TRY(pattern_node(*as_inst(p), type))};
-            if (const auto& capture{ast_match.arms[a].capture}) {
+        const auto& written{ast_match.arms[a]};
+        using signature = std::vector<std::pair<std::string_view, gsl::not_null<gs::type*>>>;
+        stdx::option<signature> expected;
+        for (usize alt{0}; alt < arms[a].patterns.size(); ++alt) {
+            const auto p{arms[a].patterns[alt]};
+            auto       node{TRY(pattern_node(*as_inst(p), type))};
+            if (written.capture && pattern::binds_any_name(*node)) {
+                return comp_.report(
+                    u_,
+                    source{*written.capture->payload},
+                    gs::error::ILLEGAL_MATCH_PATTERN,
+                    "An arm binding names in its pattern can't also capture after `=>`");
+            }
+            if (const auto& capture{written.capture}) {
                 pattern::attach_arm_capture(*capture, false, *node);
+            }
+
+            // Each alternative binds the same names, and a bit-packed field only by value
+            signature names;
+            for (const auto& site : pattern::captures_of(*node)) {
+                const auto how{site.capture.modifier};
+                if ((how.is_ref() || how.is_ptr()) && site.place_is_bit_packed) {
+                    return comp_.report(u_,
+                                        source{*site.capture.payload},
+                                        gs::error::ILLEGAL_MATCH_PATTERN,
+                                        "A bit-packed field has no address, so it can only be "
+                                        "captured by value");
+                }
+                const auto& ident{
+                    u_.source->ast.get_as<ast::identifier_expr>(*site.capture.payload)};
+                names.emplace_back(ident.name, &site.value_type);
+            }
+            std::ranges::sort(names, {}, [](const auto& entry) { return entry.first; });
+            if (!expected) {
+                expected.emplace(std::move(names));
+            } else if (!std::ranges::equal(*expected, names, [](const auto& l, const auto& r) {
+                           return l.first == r.first &&
+                                  gs::is_same_unqualified(*l.second, *r.second);
+                       })) {
+                return comp_.report(u_,
+                                    src_of(*as_inst(p)),
+                                    gs::error::ILLEGAL_MATCH_PATTERN,
+                                    written.capture
+                                        ? "A capture on a multi-variant match arm requires every "
+                                          "listed variant to carry the same payload type"
+                                        : "Every alternative of a match arm must bind the same "
+                                          "names with the same types");
             }
 
             patterns[a].emplace_back(std::move(node));
@@ -792,10 +906,12 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
 
     // The catch-all arm is tried last, whatever its place
     std::vector<pattern::row_input> rows;
+    std::vector<inst_id>            row_patterns;
     const auto                      add_arm{[&](usize a) {
-        for (const auto& alternative : patterns[a]) {
+        for (usize i{0}; i < patterns[a].size(); ++i) {
             rows.emplace_back<pattern::row_input>(
-                {.arm = a, .root = alternative.get(), .guarded = !arms[a].guard.empty()});
+                {.arm = a, .root = patterns[a][i].get(), .guarded = !arms[a].guard.empty()});
+            row_patterns.emplace_back(*as_inst(arms[a].patterns[i]));
         }
     }};
     for (usize a{0}; a < arms.size(); ++a) {
@@ -826,6 +942,15 @@ auto analyzer::analyze_match(inst_id inst) -> result<operand> {
                             gs::error::MISSING_FIELD,
                             fmt::format("Match expression is non-exhaustive; missing: {}",
                                         fmt::join(tree.missing, ", ")));
+    }
+
+    // A written arm an earlier one already covers never runs, unlike a catch-all left over
+    for (usize i{0}; i < rows.size() && i < tree.row_reached.size(); ++i) {
+        if (tree.row_reached[i] || (catch_all && rows[i].arm == *catch_all)) { continue; }
+        return comp_.report(u_,
+                            src_of(row_patterns[i]),
+                            gs::error::ILLEGAL_MATCH_PATTERN,
+                            "This match arm pattern can never match; an earlier arm covers it");
     }
 
     // A capture that may write through the scrutinee keeps the match at runtime
@@ -915,8 +1040,9 @@ auto analyzer::match_by_value(const std::vector<match_arm>& arms,
     auto&      pool{comp_.constants()};
     const auto same{[&](ip::index pattern) {
         if (pattern == value) { return true; }
-        if (pool.is_type(pattern) && pool.is_type(value)) {
-            return &pool.type_at(pattern) == &pool.type_at(value);
+        if (pool.is_type(pattern) || pool.is_type(value)) {
+            return pool.is_type(pattern) && pool.is_type(value) &&
+                   &pool.type_at(pattern) == &pool.type_at(value);
         }
 
         const auto lhs{int_of(pool.value_at(pattern))};
@@ -933,13 +1059,43 @@ auto analyzer::match_by_value(const std::vector<match_arm>& arms,
     if (catch_all) { order.emplace_back(*catch_all); }
     for (const auto a : order) {
         const auto& arm{arms[a]};
-        if (!arm.guard.empty()) { return comp_.unsupported(u_, src, "a match guard"); }
-        bool hit{false};
+        bool        hit{false};
         for (const auto p : arm.patterns) {
             const auto pat{*as_inst(p)};
             if (mod().tag_of(pat) == tag::pat_wildcard) {
                 hit = true;
                 break;
+            }
+
+            // An untyped number is in a range when it is within both of its bounds
+            if (mod().tag_of(pat) == tag::pat_range) {
+                auto       range{record(pat)};
+                const auto lo_body{range.body_field()};
+                const auto hi_body{range.body_field()};
+                const bool inclusive{(range.u32_field() & flags::INCLUSIVE) != 0};
+                if (lo_body.empty() || hi_body.empty()) {
+                    return comp_.report(u_,
+                                        src_of(pat),
+                                        gs::error::ILLEGAL_MATCH_PATTERN,
+                                        "An open-ended range needs a value with a fixed integer "
+                                        "type");
+                }
+
+                const auto bound{
+                    [&](gsl::span<const inst_id> body) -> result<stdx::option<big_int>> {
+                        const auto known{comptime_value(TRY(pattern_operand(body, src_of(pat))))};
+                        if (!known || pool.is_type(*known)) { return stdx::option<big_int>{}; }
+                        return int_of(pool.value_at(*known));
+                    }};
+                const auto lo{TRY(bound(lo_body))};
+                const auto hi{TRY(bound(hi_body))};
+                const auto at{pool.is_type(value) ? stdx::none : int_of(pool.value_at(value))};
+                if (lo && hi && at && *at >= *lo && (inclusive ? *at <= *hi : *at < *hi)) {
+                    hit = true;
+                    break;
+                }
+
+                continue;
             }
 
             if (mod().tag_of(pat) != tag::pat_value) {
@@ -977,6 +1133,27 @@ auto analyzer::match_by_value(const std::vector<match_arm>& arms,
 
         if (!hit) { continue; }
         if (arm.capture) { values_.insert_or_assign(*as_inst(*arm.capture), operand{value}); }
+
+        // A guard picks between arms the value alike, so it is known when they are picked
+        if (!arm.guard.empty()) {
+            const auto passed{[&] -> result<operand> {
+                const auto scope{comptime_scope()};
+                const auto out{TRY(analyze_body(arm.guard))};
+                if (!out.yielded) {
+                    return comp_.unsupported(u_, src, "a guard that yields nothing");
+                }
+                return *out.yielded;
+            }()};
+            if (!passed && passed.error() == stop::RUNTIME) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::COMPTIME_EVALUATION_FAILED,
+                                    "A guard in a 'match comptime' must be known at compile time");
+            }
+            const auto guard_value{TRY(passed)};
+            if (!TRY(known_bool(guard_value, src))) { continue; }
+        }
+
         const auto out{TRY(analyze_body(arm.body))};
         if (jump_ || (!is_comptime() && terminated())) { return void_value(); }
         return out.yielded.value_or(void_value());
@@ -1428,7 +1605,7 @@ auto analyzer::emit_decision(const match_lowering& m, usize node) -> result<void
 
         // A failed guard carries on to the rows after this one
         const auto on_fail{new_segment()};
-        bind_slots(m, d.arm);
+        bind_slots(m, d.arm, true);
         const auto out{TRY(analyze_body(arm.guard))};
         if (!out.yielded) { return comp_.unsupported(u_, m.src, "a guard that yields nothing"); }
         builder_.emit_cond_goto(TRY(condition(*out.yielded, m.src)), m.bodies[d.arm], on_fail);
@@ -1522,13 +1699,63 @@ auto analyzer::slot_operand(const capture_slot& slot) -> operand {
     return slot_value{.address = slot.address, .type = slot.type};
 }
 
-void analyzer::bind_slots(const match_lowering& m, usize arm) {
+void analyzer::bind_slots(const match_lowering& m, usize arm, bool read_only) {
+    auto& ctx{comp_.ctx()};
     bind_arm_names(m.arms[arm], [&](std::string_view name) -> stdx::option<operand> {
         const auto slot{std::ranges::find_if(
             m.slots[arm], [&](const capture_slot& s) { return s.name == name; })};
         if (slot == m.slots[arm].end()) { return stdx::none; }
-        return slot_operand(*slot);
+
+        // A guard only reads, so an alias capture is a read-only view while it runs
+        auto&      type{*slot->type};
+        const auto pointee{gs::pointee_of(type)};
+        if (!read_only || !slot->is_alias || !pointee || type.is_constant()) {
+            return slot_operand(*slot);
+        }
+        auto& view{type.get_kind() == gs::type_kind::REFERENCE
+                       ? ctx.get_reference(gs::types::mut::CONSTANT, *pointee)
+                       : ctx.get_pointer(gs::types::mut::CONSTANT, *pointee)};
+        return operand{slot_value{.address = gir::value{slot->address.data, view}, .type = &view}};
     });
+}
+
+auto analyzer::arms_ruled_out(usize                                  count,
+                              const std::vector<pattern::row_input>& rows,
+                              const operand& scrutinee) -> std::vector<bool> {
+    std::vector<bool> ruled_out(count, false);
+    const auto        known{comptime_value(scrutinee)};
+    if (!known) { return ruled_out; }
+    const auto& value{comp_.constants().value_at(*known)};
+    const auto  number{int_of(value)};
+    const auto  flag{value.data.as_opt<bool>()};
+
+    // Rows are tried in order, so the first one certain to match decides the arm
+    std::vector<bool>   may_match(count, false);
+    stdx::option<usize> chosen;
+    for (const auto& row : rows) {
+        const auto& n{*row.root};
+        const auto  hit{[&] -> stdx::option<bool> {
+            switch (n.kind) {
+            case pattern::node_kind::WILDCARD: return true;
+            case pattern::node_kind::INT_RANGE:
+                if (!number) { return stdx::none; }
+                return n.lo <= *number && *number <= n.hi;
+            case pattern::node_kind::BOOL_VALUE:
+                if (!flag) { return stdx::none; }
+                return n.boolean == *flag;
+            default: return stdx::none;
+            }
+        }()};
+        if (!hit || *hit) { may_match[row.arm] = true; }
+        if (hit && *hit && !row.guarded) {
+            chosen = row.arm;
+            break;
+        }
+    }
+
+    if (!chosen) { return ruled_out; }
+    for (usize a{0}; a < count; ++a) { ruled_out[a] = a != *chosen && !may_match[a]; }
+    return ruled_out;
 }
 
 auto analyzer::emit_match(const std::vector<match_arm>&          arms,
@@ -1583,6 +1810,7 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
         if (tree.row_reached[i]) { reached[rows[i].arm] = true; }
     }
 
+    const auto            ruled_out{arms_ruled_out(arms.size(), rows, scrutinee)};
     std::vector<incoming> arrivals;
     for (usize a{0}; a < arms.size(); ++a) {
         if (!reached[a]) { continue; }
@@ -1603,7 +1831,11 @@ auto analyzer::emit_match(const std::vector<match_arm>&          arms,
             values_.insert_or_assign(*as_inst(*capture), slot_operand(*slot));
         }
 
-        const auto out{TRY(analyze_body(arms[a].body))};
+        // An arm a known subject never reaches keeps its type errors but runs no checks
+        untaken_ += ruled_out[a] ? 1 : 0;
+        auto analyzed{analyze_body(arms[a].body)};
+        untaken_ -= ruled_out[a] ? 1 : 0;
+        const auto out{TRY(std::move(analyzed))};
         if (terminated()) { continue; }
 
         // What a destructuring binds has no value once its `else` carries on

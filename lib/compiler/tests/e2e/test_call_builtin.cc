@@ -92,7 +92,9 @@ TEST_CASE("@call rejects a modifier it can't honor") {
         auto [ctx, idx]{helpers::expect_compile_error(source)};
         const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
         REQUIRE(diags);
-        return std::string{(*diags)[0].get_message().value_or("")};
+        std::string messages;
+        for (const auto& diag : *diags) { messages += diag.get_message().value_or(""); }
+        return messages;
     }};
 
     SECTION("an inline modifier against the function's own attribute") {
@@ -123,8 +125,8 @@ TEST_CASE("@call rejects a modifier it can't honor") {
 
     SECTION("a tail call to a different prototype") {
         CHECK(error_of(R"(
-            const f = fn(x: i32): i64 { return @intCast(i64, x); };
-            const g = fn(x: i32): i32 { return @call(.always_tail, f, x); };
+            const f = fn(x: i64): i32 { return @intCast(i32, x); };
+            const g = fn(x: i32): i32 { return @call(.always_tail, f, @intCast(i64, x)); };
             pub const main = fn(): i32 { return g(1); };
         )")
                   .contains("needs the same parameters, result, and calling convention"));

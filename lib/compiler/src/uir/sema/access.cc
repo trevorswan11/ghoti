@@ -148,8 +148,15 @@ auto analyzer::address_of(ref r, const source& src) -> result<place> {
         return global_place(g->symbol, *g->type, false);
     }
 
-    if (op.is<comptime_place>() || op.is<function_ref>() || op.is<anon_init>() ||
-        op.is<enum_literal>()) {
+    if (op.is<enum_literal>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            "an enum literal has no address; give it its enum type first, as in "
+                            "`const e: E = .a;`");
+    }
+
+    if (op.is<comptime_place>() || op.is<function_ref>() || op.is<anon_init>()) {
         return comp_.unsupported(u_, src, "the address of a value with no runtime storage");
     }
 
@@ -269,6 +276,19 @@ auto analyzer::field_index(gs::type& type, std::string_view name, const source& 
         return {};
     }()};
     if (const auto found{index_of(names, name)}) {
+        // A field without `pub` is only reached from the module that declares its type
+        const auto st{type.get_data().as_opt<gs::types::struct_t>()};
+        const auto n{st ? comp_.nominal_of(type) : stdx::none};
+        if (st && !(n && n->in_call) && &st->enclosing != u_.source.get() &&
+            !st->is_field_public(*found)) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_PRIVATE_ACCESS,
+                                fmt::format("Field '{}' of '{}' is private",
+                                            name,
+                                            comp_.ctx().type_display_name(type)));
+        }
+
         warn_deprecated_field(type, *found, src);
         note_field(src, type, *found);
         return *found;
@@ -327,7 +347,8 @@ auto analyzer::field_place(const place& object, std::string_view name, const sou
     }
 
     if (type.get_kind() != gs::type_kind::STRUCT && type.get_kind() != gs::type_kind::UNION) {
-        return comp_.unsupported(u_, src, fmt::format("a field of a `{}`", type.to_string()));
+        if (type.is_poison()) { return stdx::err{stop::POISON}; }
+        return no_field(type, name, src);
     }
 
     const auto index{TRY(field_index(type, name, src))};
@@ -446,7 +467,23 @@ auto analyzer::field_value(ref object_ref, std::string_view name, const source& 
         return comptime_field(g->value, name, src);
     }
 
-    if (object.is<function_ref>()) { return comp_.unsupported(u_, src, "a field of a function"); }
+    if (object.is<function_ref>() || object.is<generic_ref>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("A function has no field named '{}'; call it to use what "
+                                        "it returns",
+                                        name));
+    }
+
+    if (object.is<enum_literal>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("An enum literal has no field named '{}'; patterns in a "
+                                        "list are separated by commas",
+                                        name));
+    }
     TRY(require_runtime(src));
 
     // A bit-packed value's field is its bits, read without storing the value
@@ -649,8 +686,24 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src,
         return index;
     }};
 
+    // A known index past a known length is an error now, a sentinel slot still readable
+    const auto known{index.is_constant()
+                         ? int_of(comp_.constants().value_at(index.constant_index()))
+                         : stdx::none};
+    const auto out_of_bounds{[&](u64 len, bool sentinel) -> result<void> {
+        const auto small{known ? known->to_i128() : stdx::none};
+        const i128 readable{static_cast<i128>(len) + (sentinel ? 1 : 0)};
+        if (!known || (small && *small >= 0 && *small < readable)) { return {}; }
+        return comp_.report(
+            u_,
+            src,
+            gs::error::SLICE_OUT_OF_BOUNDS,
+            fmt::format("Index {} is out of bounds for a length of {}", known->to_string(), len));
+    }};
+
     // A lane is read from and written into the vector loaded after its index
     if (const auto vec{gs::vector_of(type)}) {
+        TRY(out_of_bounds(vec->len, false));
         auto&                    usize_type{builtin(gs::type_kind::USIZE)};
         stdx::option<gir::value> loaded;
         if (!written) { loaded.emplace(builder_.emit_load(base.address, type), type); }
@@ -675,6 +728,7 @@ auto analyzer::elem_place(const place& object, ref index_ref, const source& src,
     }
 
     if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        TRY(out_of_bounds(arr->len, arr->null_terminated));
         if (safety) {
             const auto bound{
                 constant(comp_.constants().intern(u64{arr->len}, index_type), index_type)};
@@ -841,6 +895,13 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
     // `&mut?` takes the mutability of what it refers to, so it never requires a mutable place
     const bool is_mut{(bits & flags::MUT) != 0 && (bits & flags::POLY) == 0};
     const auto target{TRY(resolve(operand_ref, src))};
+    if ((bits & flags::POLY) != 0 && addresses_frame(inst_ref(inst))) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_POLY_MUTABILITY,
+                            "`&mut?` needs a place reached through a `mut?` parameter, which is "
+                            "where its mutability comes from");
+    }
     auto&      ctx{comp_.ctx()};
     const auto mut{(bits & flags::POLY) != 0 ? gs::types::mut::POLY
                    : is_mut                  ? gs::types::mut::MUTABLE
@@ -887,6 +948,15 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
         auto& address_type{is_pointer ? ctx.get_pointer(mut, pointee)
                                       : ctx.get_reference(mut, pointee)};
         return operand{memory_address(*memory, address_type)};
+    }
+
+    // Runtime code can't address compile-time memory, which has no storage
+    if (target.is<comptime_place>() && !is_comptime()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPTIME_MUT_ADDRESS_OF,
+                            fmt::format("Cannot take {} a `comptime let mut`; it has no storage",
+                                        is_pointer ? "the address of" : "a reference to"));
     }
 
     // A function's address at compile time is the function, which a `^fn` holds as its value
@@ -943,7 +1013,15 @@ auto analyzer::analyze_ref_of(inst_id inst, bool is_pointer) -> result<operand> 
         return gir::value{held.data, pointer_type};
     }
 
-    if (target.is<function_ref>() || target_type.get_kind() == gs::type_kind::REFERENCE) {
+    if (target_type.get_kind() == gs::type_kind::REFERENCE) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_REFERENCE_TO_REFERENCE,
+                            "Cannot take a reference to an already-reference-typed value; pass it "
+                            "directly to alias the same referent");
+    }
+
+    if (target.is<function_ref>()) {
         return comp_.unsupported(u_, src, "the address of a function or reference");
     }
 
@@ -1277,7 +1355,34 @@ auto analyzer::comptime_field(ip::index object, std::string_view name, const sou
                            ptr_type);
     }
 
+    if (type.get_kind() == gs::type_kind::ENUM) { return no_field(type, name, src); }
     return comp_.unsupported(u_, src, fmt::format("a field of a comptime `{}`", type.to_string()));
+}
+
+auto analyzer::no_field(gs::type& type, std::string_view name, const source& src)
+    -> stdx::err<stop> {
+    auto& ctx{comp_.ctx()};
+    if (const auto en{type.get_data().as_opt<gs::types::enum_t>()};
+        en && std::ranges::contains(en->variant_names, name)) {
+        return comp_.report(
+            u_,
+            src,
+            gs::error::TYPE_MISMATCH,
+            fmt::format("'{}' is a variant of '{}', not a member of a value of it; write '.{}' or "
+                        "'{}.{}'",
+                        name,
+                        ctx.type_display_name(type),
+                        name,
+                        ctx.type_display_name(type),
+                        name));
+    }
+
+    return comp_.report(u_,
+                        src,
+                        gs::error::TYPE_MISMATCH,
+                        fmt::format("A value of type '{}' has no field named '{}'",
+                                    ctx.type_display_name(type),
+                                    name));
 }
 
 auto element_type_of(gs::type& t) -> stdx::option<gs::type&> {
@@ -1291,10 +1396,23 @@ auto analyzer::pack_elem(pack_ref pack, ref at_ref, const source& src) -> result
     const auto at{comptime_value(TRY(resolve_value(at_ref, src)))};
     const auto exact{at ? int_of(comp_.constants().value_at(*at)) : stdx::none};
     const auto small{exact ? exact->to_i128() : stdx::none};
-    if (!small) { return comp_.unsupported(u_, src, "a pack indexed at runtime"); }
+    const auto name{indexed_pack_name(src)};
+    if (!small) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::PACK_INDEX_NOT_CONST,
+                            fmt::format("'{}[k]' requires a compile-time constant index", name));
+    }
+
     const auto& elements{packs_[pack.index]};
     if (*small < 0 || *small >= static_cast<i128>(elements.size())) {
-        return comp_.report(u_, src, gs::error::COMPTIME_EVALUATION_FAILED, "index out of bounds");
+        return comp_.report(u_,
+                            src,
+                            gs::error::PACK_INDEX_OUT_OF_RANGE,
+                            fmt::format("pack index {} out of range for '{}' (len {})",
+                                        static_cast<i64>(*small),
+                                        name,
+                                        elements.size()));
     }
 
     // A runtime value read out of a pack is copied through a slot of its own
@@ -1308,7 +1426,22 @@ auto analyzer::pack_elem(pack_ref pack, ref at_ref, const source& src) -> result
 }
 
 auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) -> result<operand> {
-    auto&       pool{comp_.constants()};
+    auto& pool{comp_.constants()};
+    if (pool.is_type(object)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' is a type, not a value to index",
+                                        comp_.ctx().type_display_name(pool.type_at(object))));
+    }
+    if (pool.is_type(at)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_MISMATCH,
+                            fmt::format("An index must be an integer; found the type '{}'",
+                                        comp_.ctx().type_display_name(pool.type_at(at))));
+    }
+
     const auto& value{pool.value_at(object)};
     const auto  agg{value.data.as_opt<ip::aggregate_value>()};
     const auto  text{value.data.as_opt<std::string>()};
@@ -1329,6 +1462,16 @@ auto analyzer::comptime_elem(ip::index object, ip::index at, const source& src) 
     }
 
     if ((!agg && !text) || !index || !elem_type) {
+        const bool indexable{value.type && (element_type_of(*value.type) ||
+                                            value.type->get_kind() == gs::type_kind::POINTER)};
+        if (!indexable && value.type) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                fmt::format("Can only index slices, arrays, and pointers; found '{}'",
+                            comp_.ctx().type_display_name(*value.type)));
+        }
         return comp_.unsupported(u_, src, "indexing this comptime value");
     }
 

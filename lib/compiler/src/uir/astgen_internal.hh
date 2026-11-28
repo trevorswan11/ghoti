@@ -123,6 +123,9 @@ struct function_state {
     std::vector<jump_target> targets{};
     usize                    target_floor{0}; // targets below it are outside the defer body
     bool                     in_defer{false};
+    bool                     has_errdefer{false};
+    // The errdefers some failure path copied, by statement
+    std::vector<u32> copied_errdefers{};
 };
 
 // How an expression's result is wanted
@@ -357,6 +360,8 @@ class astgen {
     // which takes the errdefers too and binds their `|e|`
     auto               emit_defers(usize height, stdx::option<ref> residual) -> void;
     auto               emit_defer(const defer_entry& entry, stdx::option<ref> residual) -> void;
+    // Lowers the errdefers above `height` no failure path copied, so their bodies are checked
+    auto               check_uncopied_errdefers(usize height) -> void;
     auto               emit_return(ast::node_id id, ref value) -> void;
     [[nodiscard]] auto has_errdefers(usize height) const -> bool;
 
@@ -436,6 +441,8 @@ class astgen {
     std::vector<std::pair<source_location, std::string_view>> mutation_sites_;
     std::string_view pending_type_name_;           // the declaration an aggregate value initializes
     stdx::option<std::string_view> pending_label_; // a label waiting for the loop it names
+    // The locals whose initializers are being lowered, named before they are bound
+    std::vector<std::pair<std::string_view, source_location>> initializing_;
     bool                           statement_arms_{
         false};               // the next `if` or `match` is a statement, whose arms have no value
     usize prunable_depth_{0}; // inside arms `comptime` may prune

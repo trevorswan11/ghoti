@@ -101,6 +101,7 @@ auto astgen::block_in_current_scope(ast::block_handle h) -> std::vector<inst_id>
         const body_guard guard{*this, body};
         if (!block_statements(statements)) { emit_defers(height, stdx::none); }
     }
+    check_uncopied_errdefers(height);
     auto& defers{functions_.back().defers};
     defers.erase(defers.begin() + static_cast<idiff>(height), defers.end());
     return body;
@@ -150,6 +151,8 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 writer().str_field(name).ref_field(type_ref).body_field(value).body_field(attrs));
         return;
     }
+
+    initializing_.emplace_back(name, location_of(decl.name));
     if (is_comptime && !is_mut) {
         std::vector<inst_id> value;
         if (decl.value) {
@@ -189,6 +192,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
                  writer().str_field(name).ref_field(type_ref).ref_field(init).body_field(attrs),
                  id)};
     }
+    initializing_.pop_back();
     b.name_node = ast::node_id{decl.name};
     b.decl_node = id;
     note_declared(decl.name, id, stdx::none);
@@ -201,6 +205,15 @@ auto astgen::find_target(ast::node_id                                id,
                          std::string_view stmt_name) -> stdx::option<jump_target> {
     const auto& state{functions_.back()};
     const auto  report_unknown{[&] {
+        // A defer body runs at an exit, where no loop of its own is open
+        if (state.in_defer && !label) {
+            report(location_of(id),
+                   sema::error::DEFER_BODY_JUMP,
+                   "cannot '{}' from inside a 'defer' body",
+                   stmt_name);
+            return;
+        }
+
         if (label) {
             report(location_of(*label),
                    sema::error::ILLEGAL_CONTROL_FLOW,

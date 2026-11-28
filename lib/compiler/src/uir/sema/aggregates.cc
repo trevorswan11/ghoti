@@ -341,6 +341,13 @@ auto analyzer::resolve_struct(nominal& n) -> result<void> {
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         alignments[i]  = resolved.alignment.value_or(0);
         field_types[i] = *TRY(field_type_of(type_body, default_body, name, field_src));
+        TRY(check_storable(*field_types[i], field_src));
+        TRY(check_inhabited(*field_types[i], field_src));
+        // A type constructor's instance may hold a `mut?` view its call was given
+        if (!n.in_call && n.captures.empty()) {
+            TRY(check_unpolymorphic(*field_types[i], field_src));
+        }
+        if (is_extern) { TRY(check_extern_field(*field_types[i], "struct", name, field_src)); }
         if (bit_packed) {
             TRY(check_packed_field(*field_types[i], name, "struct", field_src));
             if (resolved.alignment) { TRY(reject_packed_alignment(name, "struct", field_src)); }
@@ -419,6 +426,12 @@ auto analyzer::resolve_union(nominal& n) -> result<void> {
         const auto& field_src{type_body.empty() ? src : src_of(type_body.back())};
         const auto  resolved{TRY(fold_attributes(attrs, {.target = ast::attribute_target::FIELD}))};
         field_types[i] = *TRY(field_type_of(type_body, stdx::none, name, field_src));
+        TRY(check_storable(*field_types[i], field_src));
+        // A type constructor's instance may hold a `mut?` view its call was given
+        if (!n.in_call && n.captures.empty()) {
+            TRY(check_unpolymorphic(*field_types[i], field_src));
+        }
+        if (is_extern) { TRY(check_extern_field(*field_types[i], "union", name, field_src)); }
         if (bit_packed) { TRY(check_packed_field(*field_types[i], name, "union", field_src)); }
         if (resolved.alignment) {
             DISCARD(comp_.report(u_,
@@ -530,6 +543,15 @@ auto analyzer::resolve_enum(nominal& n) -> result<void> {
             return comp_.unsupported(u_, src, "an enum value past 64 bits");
         }
 
+        // Each variant names a value of its own
+        if (std::ranges::contains(n.enum_values, static_cast<i64>(*small))) {
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_MISMATCH,
+                fmt::format("Two enum variants share the value {}", next.to_string()));
+        }
+
         n.enum_values.emplace_back(static_cast<i64>(*small));
         next = next + big_int{i128{1}};
     }
@@ -607,12 +629,6 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
 
     // A builtin type has only the members impls add to it
     const auto n{comp_.nominal_of(owner)};
-    if (!n) {
-        const auto impls{TRY(comp_.impls_of(owner))};
-        if (impls.empty()) {
-            return comp_.unsupported(u_, src, "a member of a type UIR didn't declare");
-        }
-    }
 
     // A use from another module is located at what it reaches in that module
     const auto ns{n ? n->owner->uir->namespace_of(n->inst) : stdx::option<const namespace_info&>{}};
@@ -634,6 +650,35 @@ auto analyzer::member_of(gs::type& owner, std::string_view name, const source& s
         const auto& impl_unit{*applied->entry->owner};
         const auto& use{&impl_unit == &u_ ? src : impl_unit.uir->src_of(applied->entry->inst)};
         if (const auto member{TRY(comp_.impl_member(*applied, name, use))}) { return *member; }
+    }
+
+    // A field belongs to each value of the type, not to the type
+    if (n) { TRY(comp_.require_fields(u_, src, owner)); }
+    const bool sequence_field{
+        (owner.get_kind() == gs::type_kind::ARRAY || owner.get_kind() == gs::type_kind::SLICE) &&
+        (name == "len" || name == "ptr")};
+    const bool aggregate_field{[&] {
+        if (const auto s{owner.get_data().as_opt<gs::types::struct_t>()}) {
+            return std::ranges::contains(s->field_names, name);
+        }
+        if (const auto un{owner.get_data().as_opt<gs::types::union_t>()}) {
+            return std::ranges::contains(un->field_names, name);
+        }
+        return false;
+    }()};
+    // A type with no namespace of its own has nothing to reach through it, unlike `type` itself
+    const bool namespaceless{!n && owner.get_kind() != gs::type_kind::TYPE};
+    if (sequence_field || aggregate_field || namespaceless) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            namespaceless && !sequence_field
+                                ? fmt::format("Type '{}' has no members, so '{}' names nothing",
+                                              comp_.ctx().type_display_name(owner),
+                                              name)
+                                : fmt::format("'{}' is a field of each '{}' value, not of the type",
+                                              name,
+                                              comp_.ctx().type_display_name(owner)));
     }
 
     return comp_.report(u_,

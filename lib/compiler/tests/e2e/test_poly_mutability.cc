@@ -137,7 +137,7 @@ TEST_CASE("an interface's `mut?` method needs a `mut?` impl and can't be called 
         impl I for S {{ pub const get = fn(&mut self): &mut i32 {{ return &mut self.v; }}; }}
     )",
                              iface),
-                 sema::error::IMPL_SIGNATURE_MISMATCH);
+                 sema::error::IMPL_SELF_MISMATCH);
     expect_error(fmt::format(R"({}
         impl I for S {{ pub const get = fn(&mut? self): &mut? i32 {{ return &mut? self.v; }}; }}
         const use = fn(x: &dyn I): i32 {{ return x.get(); }};

@@ -29,6 +29,24 @@ namespace {
 
 [[nodiscard]] auto is_poison(const gs::type& t) noexcept -> bool { return t.is_poison(); }
 
+// Whether a view of `target` grants no write through it that `from` doesn't, at every level
+[[nodiscard]] auto writes_permitted(const gs::type& from, const gs::type& target) -> bool {
+    const auto viewed{[](const gs::type& t) -> stdx::option<const gs::type&> {
+        if (const auto p{t.get_data().as_opt<gs::types::pointer>()}) { return p->underlying; }
+        if (const auto r{t.get_data().as_opt<gs::types::reference>()}) { return r->underlying; }
+        if (const auto s{t.get_data().as_opt<gs::types::slice>()}) { return s->underlying; }
+        return stdx::none;
+    }};
+    const auto from_inner{viewed(from)};
+    const auto target_inner{viewed(target)};
+    if (!from_inner || !target_inner) { return true; }
+    // `mut?` takes either mutability, so it settles nothing here
+    if (!from.is_poly() && !target.is_poly() && from.is_constant() && !target.is_constant()) {
+        return false;
+    }
+    return writes_permitted(*from_inner, *target_inner);
+}
+
 } // namespace
 
 auto int_of(const ip::value& v) -> stdx::option<big_int> {
@@ -137,6 +155,16 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             return operand{TRY(union_of(target, index, void_value(), src))};
         }
 
+        // A type with no members has nothing for `.name` to name
+        if (gs::is_numeric(kind) || kind == gs::type_kind::BOOL) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Can only access inner objects inside of structs, "
+                                            "unions, and enums; found '{}'",
+                                            comp_.ctx().type_display_name(target)));
+        }
+
         if (target.get_kind() != gs::type_kind::ENUM) { return stdx::none; }
         return enum_constant(target, name, src);
     }
@@ -153,6 +181,16 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
 
     if (const auto lit{op.as_opt<slice_literal>()}) {
         if (target.get_kind() != gs::type_kind::SLICE) { return stdx::none; }
+
+        // The sugar only makes a slice of constant elements
+        if (!target.is_constant()) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::TYPE_MISMATCH,
+                                fmt::format("Only struct and union types may be used in "
+                                            "initializer expressions; found '{}'",
+                                            comp_.ctx().type_display_name(target)));
+        }
         return slice_literal_as(*lit, target, src);
     }
 
@@ -227,7 +265,10 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }
     }
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
-    if (gs::is_same_unqualified(from, target)) { return op; }
+    if (gs::is_same_unqualified(from, target)) {
+        if (!writes_permitted(from, target)) { return stdx::option<operand>{}; }
+        return op;
+    }
     if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
     if (from.get_kind() == gs::type_kind::ENUM && target.get_kind() == gs::type_kind::ENUM &&
         gs::is_enum_widenable(from, target)) {
@@ -264,6 +305,7 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         // A mutable slice would alias the array, which a compile-time slice value can't
         if (const auto known{comptime_value(op)}; known && is_comptime()) {
             if (!target.is_constant()) {
+                if (gir_fn_) { return comp_.needs_runtime(u_, src); }
                 return comp_.unsupported(u_, src, "a mutable slice of a compile-time array");
             }
 
@@ -363,6 +405,13 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         if (to_float && int_of(v)) {
             const auto format{gs::float_format_of(target).value_or(float_format::QUAD)};
             const auto as_float{float_of_int(*int_of(v), format)};
+            if (as_float.is_infinite() && from.get_kind() == gs::type_kind::COMPTIME_INT) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::LITERAL_OUT_OF_RANGE,
+                                    fmt::format("literal is out of range for type '{}'",
+                                                ctx.type_display_name(target)));
+            }
             return operand{gir::value::constant(pool, as_float, target).constant_index()};
         }
 
@@ -370,6 +419,19 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
             f && gs::is_float(target.get_kind()) &&
             (from.get_kind() == gs::type_kind::COMPTIME_FLOAT ||
              gs::is_implicit_widenable(from, target))) {
+            // A finite value that rounds to infinity has no value in the target, while a pole
+            // is already infinite
+            if (const auto format{gs::float_format_of(target)};
+                format && from.get_kind() == gs::type_kind::COMPTIME_FLOAT && f->is_finite() &&
+                f->round_to(*format).is_infinite()) {
+                return comp_.report(u_,
+                                    src,
+                                    gs::error::LITERAL_OUT_OF_RANGE,
+                                    fmt::format("float value {} is out of range for type '{}'",
+                                                *f,
+                                                ctx.type_display_name(target)));
+            }
+
             // An untyped math result is computed again in the float it becomes, rounding once
             const auto known{comptime_value(op)};
             const auto origin{known && from.get_kind() == gs::type_kind::COMPTIME_FLOAT
@@ -590,10 +652,31 @@ auto analyzer::read_through_reference(const operand& op, const source& src) -> r
         gir::value{builder_.emit_load(gir::value{address.data, referent}, referent), referent}};
 }
 
+auto analyzer::reject_runtime_to_comptime(const operand& op, gs::type& target, const source& src)
+    -> result<void> {
+    // A compile-time number is only ever known, never read from a runtime value
+    const auto value{op.as_opt<gir::value>()};
+    if (!value || !value->type || !gs::is_comptime_numeric(target.get_kind()) || is_comptime() ||
+        gs::is_comptime_numeric(value->type->get_kind()) ||
+        !gs::is_numeric(value->type->get_kind())) {
+        return {};
+    }
+
+    return comp_.report(u_,
+                        src,
+                        gs::error::COMPTIME_EVALUATION_FAILED,
+                        fmt::format("a runtime '{}' cannot become '{}'; the value must be known at "
+                                    "compile time",
+                                    comp_.ctx().type_display_name(*value->type),
+                                    comp_.ctx().type_display_name(target)));
+}
+
 auto analyzer::coerce_to(const operand&  op,
                          gs::type&       target,
                          const source&   src,
                          const use_site& site) -> result<operand> {
+    TRY(reject_runtime_to_comptime(op, target, src));
+
     // A runtime integer converted to another integer type folds when it is known at compile time
     if (const auto value{op.as_opt<gir::value>()};
         value && site.from && !is_comptime() && value->type &&
@@ -618,6 +701,16 @@ auto analyzer::coerce_to(const operand&  op,
     if (auto coerced{TRY(coerce(op, target, src))}) { return std::move(*coerced); }
     auto&       ctx{comp_.ctx()};
     const auto& from{type_of(op)};
+
+    // A type given where a value of a value type belongs
+    if (const auto known{comptime_value(op)};
+        known && comp_.constants().is_type(*known) && gs::is_value_type(target.get_kind())) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::TYPE_USED_AS_VALUE,
+                            fmt::format("'{}' is a type, not a value",
+                                        ctx.type_display_name(comp_.constants().type_at(*known))));
+    }
 
     // A reference to a closure is the environment an erased `fn` holds
     if (const auto referent{gs::pointee_of(from)};
@@ -652,15 +745,11 @@ auto analyzer::coerce_to(const operand&  op,
         return operand{constant(value, target)};
     }
 
-    if (callable(from) || callable(target) || op.is<function_ref>() || op.is<generic_ref>()) {
+    // Only a callable converts to a callable, so anything else is a plain mismatch
+    const bool from_callable{callable(from) || op.is<function_ref>() || op.is<generic_ref>()};
+    if (from_callable || callable(target)) {
         if (const auto erased{TRY(as_erased_callable(op, target, src))}) { return *erased; }
-        return comp_.unsupported(u_,
-                                 src,
-                                 fmt::format("a conversion between function types ('{}' to '{}')",
-                                             ctx.type_display_name(from),
-                                             ctx.type_display_name(target)));
     }
-
     if (from.get_kind() == gs::type_kind::VECTOR || target.get_kind() == gs::type_kind::VECTOR) {
         if (const auto converted{TRY(coerce_vector(op, from, target, src))}) { return *converted; }
     }
@@ -686,8 +775,9 @@ auto analyzer::coerce_to(const operand&  op,
     UNREACHABLE("every use site has a message");
 }
 
-auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
-    -> result<gsl::not_null<gs::type*>> {
+auto analyzer::peer_type(gsl::span<const operand>       ops,
+                         const source&                  src,
+                         stdx::option<std::string_view> what) -> result<gsl::not_null<gs::type*>> {
     std::vector<gs::peer_operand> peers;
     peers.reserve(ops.size());
     for (const auto& op : ops) {
@@ -699,8 +789,9 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
     auto&      ctx{comp_.ctx()};
     const auto peer{gs::peer_type(ctx, peers)};
     if (!peer) {
-        return comp_.report(
-            u_, src, gs::error::NO_PEER_TYPE, gs::peer_error_message(ctx, peers, peer.error()));
+        auto message{gs::peer_error_message(ctx, peers, peer.error())};
+        if (what) { message = fmt::format("'{}': {}", *what, message); }
+        return comp_.report(u_, src, gs::error::NO_PEER_TYPE, std::move(message));
     }
 
     return *peer;
@@ -791,7 +882,12 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
 
     if (const auto index{comptime_value(typed)}) {
         if (comp_.constants().is_type(*index)) {
-            return comp_.unsupported(u_, src, "a type used as a runtime value");
+            return comp_.report(
+                u_,
+                src,
+                gs::error::TYPE_USED_AS_VALUE,
+                fmt::format("'{}' is a type, not a value",
+                            comp_.ctx().type_display_name(comp_.constants().type_at(*index))));
         }
 
         const auto& data{comp_.constants().value_at(*index).data};
@@ -837,6 +933,14 @@ auto analyzer::as_runtime(const operand& op, const source& src) -> result<gir::v
         comp_.request_body(*fn->fn);
         auto& type{*fn->fn->type};
         return constant(comp_.constants().intern(fn->fn->symbol, type), type);
+    }
+
+    if (typed.is<pack_ref>()) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::PACK_USE_OUT_OF_POSITION,
+                            "A parameter pack is not a value; use 'rest.len', 'rest[k]', "
+                            "'rest...', or an `unroll for` iterable");
     }
 
     return comp_.unsupported(u_, src, "a function or place used as a runtime value");

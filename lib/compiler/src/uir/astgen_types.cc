@@ -509,6 +509,8 @@ auto astgen::lower_function(ast::node_id                        id,
         if (!block_statements(statements)) { emit_defers(0, stdx::none); }
     }
 
+    check_uncopied_errdefers(0);
+    const bool has_errdefer{functions_.back().has_errdefer};
     functions_.pop_back();
     auto captures{scopes_.back()->captures};
     auto copy{std::move(*scopes_.back())};
@@ -522,6 +524,7 @@ auto astgen::lower_function(ast::node_id                        id,
     if (fn.has_explicit_conv) { bits |= flags::EXPLICIT_CONV; }
     if (is_testing_fn(fn, decl)) { bits |= flags::TESTING; }
     if (!fn.body) { bits |= flags::BODYLESS; }
+    if (has_errdefer) { bits |= flags::HAS_ERRDEFER; }
 
     auto record{writer()};
     record.body_field(params)

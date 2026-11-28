@@ -88,7 +88,10 @@ auto compilation::declare_local(const unit& u, const instance& enclosing, local_
     const bool  generic{is_generic(u, decl.func)};
     const auto& src{u.uir->src_of(decl.func)};
     if (decl.self_slot && !generic && is_closure) {
-        return unsupported(u, src, "a closure that names itself");
+        return report(u,
+                      src,
+                      gs::error::ILLEGAL_RECURSIVE_CLOSURE,
+                      "A closure cannot call itself by name; use @fnCtx() instead");
     }
 
     // A generic is named for its binding, which its instances' symbols start with
@@ -333,7 +336,7 @@ auto analyzer::wrapping_closure(inst_id func) const -> bool {
     return false;
 }
 
-auto analyzer::binding_name_of(inst_id value) const -> std::string_view {
+auto analyzer::binder_of(inst_id value) const -> stdx::option<inst_id> {
     // A binding is numbered before its initializer, so any instruction may be the one
     const auto& m{mod()};
     for (u32 at{0}; at < m.instruction_count(); ++at) {
@@ -341,21 +344,28 @@ auto analyzer::binding_name_of(inst_id value) const -> std::string_view {
         const auto    t{m.tag_of(next)};
         if (t != tag::let_value && t != tag::const_local) { continue; }
         record_reader rec{m, m.data_of(next).pl.extra};
-        const auto    name{rec.str_field()};
+        rec.skip_str();
         DISCARD(rec.ref_field());
         if (t == tag::let_value) {
-            if (as_inst(*rec.ref_field()) == value) { return name; }
+            if (as_inst(*rec.ref_field()) == value) { return next; }
             continue;
         }
 
         const auto body{rec.body_field()};
         if (!body.empty() && m.tag_of(body.back()) == tag::yield &&
             as_inst(m.data_of(body.back()).un.operand) == value) {
-            return name;
+            return next;
         }
     }
 
-    return "anonymous";
+    return stdx::none;
+}
+
+auto analyzer::binding_name_of(inst_id value) const -> std::string_view {
+    const auto binder{binder_of(value)};
+    if (!binder) { return "anonymous"; }
+    record_reader rec{mod(), mod().data_of(*binder).pl.extra};
+    return rec.str_field();
 }
 
 auto analyzer::local_generic_signature(inst_id func, gsl::span<const ref> captured)
@@ -665,6 +675,18 @@ auto analyzer::local_closure(inst_id inst) -> result<operand> {
     }
     if (is_comptime()) { return comp_.needs_runtime(u_, src); }
 
+    // A `const` names a compile-time value, which an environment of runtime values isn't, while a
+    // generic's instances are each built where they are called
+    if (const auto binder{binder_of(inst)};
+        binder && mod().tag_of(*binder) == tag::const_local && !comp_.is_generic(u_, func)) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_BINDING_KIND,
+                            fmt::format("A 'const' function cannot capture the runtime value '{}'; "
+                                        "declare the closure with 'let'",
+                                        captures.front().name));
+    }
+
     auto declared{comp_.local_function_of(u_, inst, &*fn_, known)};
     if (!declared) {
         auto member{member_context_here()};
@@ -918,6 +940,22 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
 
     auto& ctx{comp_.ctx()};
 
+    // A generic's instance for the signature's parameters still has to give its result
+    const auto misfit{[&](const gs::type& got) -> result<stdx::option<operand>> {
+        const auto& have{got.get_data().as<gs::types::function>()};
+        const auto  why{gs::is_same_unqualified(have.return_type, erased->return_type)
+                            ? std::string{"its parameters differ"}
+                            : fmt::format("it returns '{}', not '{}'",
+                                          ctx.type_display_name(have.return_type),
+                                          ctx.type_display_name(erased->return_type))};
+        return comp_.report(u_,
+                            src,
+                            gs::error::CLOSURE_SIGNATURE_MISMATCH,
+                            fmt::format("This generic function doesn't fit '{}': {}",
+                                        ctx.type_display_name(signature),
+                                        why));
+    }};
+
     // A function item is its code address, called through a trampoline
     if (const auto fn{op.as_opt<function_ref>()}) {
         auto& thin{*fn->fn->type};
@@ -932,7 +970,7 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
     if (const auto generic{op.as_opt<generic_ref>()}; generic && !generic->fn->env) {
         auto& target_fn{*TRY(instance_for_signature(*generic->fn, *erased, src))};
         auto& thin{*target_fn.type};
-        if (&ctx.with_erasure(thin, true) != &signature) { return stdx::none; }
+        if (&ctx.with_erasure(thin, true) != &signature) { return misfit(thin); }
         TRY(require_runtime(src));
         comp_.request_body(target_fn);
         const auto code{constant(comp_.constants().intern(target_fn.symbol, thin), thin)};
@@ -965,7 +1003,7 @@ auto analyzer::as_erased_callable(const operand& op, gs::type& target, const sou
         auto        params{ctx.pool.get_many_unsafe(impl.params.size() - 1)};
         for (usize i{1}; i < impl.params.size(); ++i) { params[i - 1] = impl.params[i]; }
         auto& visible{ctx.get_function(params, impl.return_type, false, impl.conv, false)};
-        if (&ctx.with_erasure(visible, true) != &signature) { return stdx::none; }
+        if (&ctx.with_erasure(visible, true) != &signature) { return misfit(visible); }
         TRY(require_runtime(src));
         const auto env{TRY(environment())};
         comp_.request_body(target_fn);

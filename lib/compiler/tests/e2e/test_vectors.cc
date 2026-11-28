@@ -253,7 +253,8 @@ TEST_CASE("@Vector rejects lanes and lengths it can't hold") {
         const f = fn(n: usize): i32 { let a: @Vector(n, i32) = undefined; return a[0]; };
         pub const g = fn(): i32 { let mut k: usize = 4; k += 1; return f(k); };
     )")};
-    CHECK(unknown.message_contains("'n' is compile-time because the function reads it"));
+    CHECK(unknown.message_contains("argument to a comptime parameter must be a compile-time "
+                                   "constant"));
 }
 
 TEST_CASE("Vector operators reject mismatched shapes and lanes") {
@@ -265,7 +266,7 @@ TEST_CASE("Vector operators reject mismatched shapes and lanes") {
         };
     )")};
     CHECK(shapes.message_contains(
-        "Operator '+' cannot be applied to types '@Vector(4, i32)' and '@Vector(2, i32)'"));
+        "Vector operands need the same lanes; found '@Vector(4, i32)' and '@Vector(2, i32)'"));
 
     const auto broadcast{helpers::type_check_diags(R"(
         pub const f = fn(): void {
@@ -322,7 +323,7 @@ TEST_CASE("Vector lanes have no address, and a vector can't be sliced") {
 TEST_CASE("Vector initializers take one value per lane") {
     const auto res{helpers::type_check_diags(
         "pub const f = fn(): void { let a: @Vector(4, i32) = .{ 1, 2, 3 }; };")};
-    CHECK(res.message_contains("Vector of length 4 initialized with 3 value(s)"));
+    CHECK(res.message_contains("A vector of 4 lanes needs 4 values; found 3"));
 }
 
 TEST_CASE("A packed aggregate holds no vectors") {
@@ -627,7 +628,7 @@ TEST_CASE("A compile-time vector's lanes are range-checked by @intCast") {
 TEST_CASE("@bitCast between a vector and another type needs as many bits") {
     const auto mismatch{helpers::type_check_diags(
         "pub const f = fn(a: @Vector(4, u8)): u16 { return @bitCast(a); };")};
-    CHECK(mismatch.message_contains("'@Vector(4, u8)' is 32 bit(s) but 'u16' is 16 bit(s)"));
+    CHECK(mismatch.message_contains("'@Vector(4, u8)' is 4 byte(s) but 'u16' is 2 byte(s)"));
     const auto bools{helpers::type_check_diags(
         "pub const f = fn(a: @Vector(4, i8)): u4 { return @bitCast(a > @as(@Vector(4, i8), "
         "@splat(0))); };")};

@@ -16,6 +16,7 @@
 #include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/ip/index.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -199,14 +200,34 @@ auto analyzer::analyze_elem_type(inst_id inst, tag t) -> result<operand> {
     const auto  bits{rec.u32_field()};
     // `volatile T` is written like a pointer's modifier but names `T` itself, qualified
     if ((bits & flags::VOLATILE) != 0 && t == tag::ptr_type) {
+        const auto name{comp_.ctx().type_display_name(elem)};
+        const auto illegal{[&](std::string message) {
+            return comp_.report(u_, src, gs::error::ILLEGAL_VOLATILE_QUALIFIER, std::move(message));
+        }};
+        if (gs::pointee_of(elem) || elem.get_kind() == gs::type_kind::SLICE) {
+            return illegal(fmt::format("`volatile` can't qualify '{}' itself; to make what it "
+                                       "reaches volatile, put `volatile` after its `^`, `&`, or "
+                                       "`[]` (`^volatile T`)",
+                                       name));
+        }
+        if (elem.get_kind() == gs::type_kind::ARRAY) {
+            return illegal(fmt::format("`volatile` on an array qualifies its elements; write "
+                                       "`[N]volatile T` instead of `volatile {}`",
+                                       name));
+        }
+        if (elem.is_volatile()) { return illegal(fmt::format("'{}' is already volatile", name)); }
         return interned_type(*comp_.ctx().pool.with_volatile(elem, true));
     }
 
     if ((bits & flags::VOLATILE) != 0 && t == tag::ref_type) {
         return comp_.unsupported(u_, src, "a volatile type");
     }
-    if (elem.get_kind() == gs::type_kind::INTERFACE) {
-        return comp_.unsupported(u_, src, "a pointer to an interface type");
+    // A slice's elements are stored by value, which a pointer or reference's pointee isn't
+    if (t == tag::slice_type || elem.get_kind() == gs::type_kind::INTERFACE) {
+        TRY(check_storable(elem, src));
+    }
+    if (t == tag::slice_type && writes_reference(*record(inst).ref_field())) {
+        TRY(check_element(elem, src));
     }
 
     auto&      ctx{comp_.ctx()};
@@ -255,15 +276,7 @@ auto analyzer::analyze_fn_type(inst_id inst) -> result<operand> {
                                 fmt::format("Function types cannot have 'auto' {}", end));
         }
 
-        if (type.get_kind() == gs::type_kind::OPAQUE) {
-            return comp_.report(u_,
-                                at,
-                                gs::error::ILLEGAL_OPAQUE_TYPE,
-                                "An 'opaque' value has no size, so it can't be passed or returned; "
-                                "use a pointer to it instead");
-        }
-
-        return {};
+        return check_passable(type, at);
     }};
 
     auto& ctx{comp_.ctx()};
@@ -294,11 +307,28 @@ auto analyzer::analyze_array_type(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     const auto  len_ref{rec.ref_field()};
-    auto&       elem{*TRY(resolve_type(*rec.ref_field(), src))};
+    const auto  elem_ref{*rec.ref_field()};
+    auto&       elem{*TRY(resolve_type(elem_ref, src))};
     const auto  bits{rec.u32_field()};
     if ((bits & flags::POLY) != 0) { return comp_.unsupported(u_, src, "a `mut?` type"); }
     if (!len_ref) { return comp_.unsupported(u_, src, "an array type sized by its items"); }
     const auto len{TRY(array_length(*len_ref, src))};
+    TRY(check_storable(elem, src));
+    TRY(check_inhabited(elem, src));
+    if (writes_reference(elem_ref)) { TRY(check_element(elem, src)); }
+
+    // Past 2^48 bytes no target can address the array, and sizes start overflowing
+    constexpr u128 MAX_ARRAY_BYTES{u128{1} << 48U};
+    const bool scalar{gs::is_numeric(elem.get_kind()) || elem.get_kind() == gs::type_kind::BOOL ||
+                      elem.get_kind() == gs::type_kind::POINTER};
+    const auto elem_bytes{
+        scalar
+            ? gir::size_of(elem, codegen::type_layout::resolve(comp_.ctx().target_opts.triple_str))
+            : usize{1}};
+    if (u128{len} > MAX_ARRAY_BYTES || u128{len} * u128{elem_bytes} > MAX_ARRAY_BYTES) {
+        return comp_.report(u_, src, gs::error::TYPE_MISMATCH, "Array type is too large");
+    }
+
     return interned_type(comp_.ctx().get_array(
         container_mutability(bits), (bits & flags::SENTINEL) != 0, len, elem));
 }
@@ -326,6 +356,209 @@ auto analyzer::array_length(ref len_ref, const source& src) -> result<usize> {
     }
 
     return static_cast<usize>(*small);
+}
+
+namespace {
+
+// A vector in a C signature passes like `__m128` / `__m256` / `__m512`, which no other width has
+[[nodiscard]] auto nonabi_vector(const gs::type& t, u32 ptr_bits) -> stdx::option<const gs::type&> {
+    const auto scan{[ptr_bits](const gs::type& inner) { return nonabi_vector(inner, ptr_bits); }};
+    return t.get_data().visit(
+        [&t, ptr_bits](gs::types::vector vec) -> stdx::option<const gs::type&> {
+            const auto bits{gs::vector_bits(vec, ptr_bits)};
+            if (bits == 128 || bits == 256 || bits == 512) { return stdx::none; }
+            return t;
+        },
+        [&scan](gs::types::pointer p) { return scan(p.underlying); },
+        [&scan](gs::types::reference r) { return scan(r.underlying); },
+        [&scan](gs::types::slice sl) { return scan(sl.underlying); },
+        [&scan](gs::types::array ar) { return scan(ar.underlying); },
+        [&scan](gs::types::function fn) -> stdx::option<const gs::type&> {
+            for (const auto param : fn.params) {
+                if (const auto found{scan(*param)}) { return found; }
+            }
+            return scan(fn.return_type);
+        },
+        [](const auto&) -> stdx::option<const gs::type&> { return stdx::none; });
+}
+
+// What an `extern` aggregate field's type holds that has no C ABI
+struct abi_holdings {
+    bool dyn{false};
+    bool erased_fn{false};
+    bool reference{false};
+};
+
+auto scan_holdings(const gs::type& t, abi_holdings& found) -> void {
+    t.get_data().visit([&](const gs::types::dyn_t&) { found.dyn = true; },
+                       [&](const gs::types::reference& r) {
+                           found.reference = true;
+                           scan_holdings(r.underlying, found);
+                       },
+                       [&](const gs::types::pointer& p) { scan_holdings(p.underlying, found); },
+                       [&](const gs::types::slice& s) { scan_holdings(s.underlying, found); },
+                       [&](const gs::types::array& a) { scan_holdings(a.underlying, found); },
+                       [&](const gs::types::function& fn) {
+                           if (fn.erased) { found.erased_fn = true; }
+                           for (const auto param : fn.params) { scan_holdings(*param, found); }
+                           scan_holdings(fn.return_type, found);
+                       },
+                       [](const auto&) {});
+}
+
+} // namespace
+
+auto analyzer::check_extern_field(const gs::type&  type,
+                                  std::string_view kind,
+                                  std::string_view name,
+                                  const source&    src) -> result<void> {
+    abi_holdings found;
+    scan_holdings(type, found);
+    const auto refuse{[&](std::string message) -> result<void> {
+        return comp_.report(u_, src, gs::error::ILLEGAL_REFERENCE_FIELD, std::move(message));
+    }};
+    if (found.dyn) {
+        return refuse(fmt::format("extern {} field '{}' cannot involve `dyn` in any form; a `&dyn` "
+                                  "/ `^dyn` fat pointer has no C ABI representation",
+                                  kind,
+                                  name));
+    }
+    if (found.erased_fn) {
+        return refuse(
+            fmt::format("extern {} field '{}' holds an erased `fn(...)` callable, which has "
+                        "no C ABI representation; use a thin `extern fn(...)`",
+                        kind,
+                        name));
+    }
+    if (found.reference) {
+        return refuse(fmt::format("extern {} field '{}' cannot have a reference type; an 'extern' "
+                                  "aggregate has no ABI representation for references, so use a "
+                                  "pointer",
+                                  kind,
+                                  name));
+    }
+
+    return check_extern_type(type, src);
+}
+
+auto analyzer::check_storable(const gs::type& type, const source& src) -> result<void> {
+    auto& ctx{comp_.ctx()};
+    if (type.get_kind() == gs::type_kind::INTERFACE) {
+        const auto name{ctx.type_display_name(type)};
+        return comp_.report(u_,
+                            src,
+                            gs::error::INTERFACE_NOT_A_VALUE,
+                            fmt::format("`{}` is an interface and cannot be stored by value; use "
+                                        "`&dyn {}`, `^dyn {}`, or an `impl {}` parameter",
+                                        name,
+                                        name,
+                                        name,
+                                        name));
+    }
+
+    if (type.get_kind() == gs::type_kind::DYN) {
+        const auto name{ctx.type_display_name(type)};
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_UNSIZED_TYPE,
+                            fmt::format("`{}` is unsized; use `&{}` or `^{}`", name, name, name));
+    }
+
+    // Only a parameter infers its elements' type from what it is given
+    const auto element{[](const gs::type& t) -> stdx::option<const gs::type&> {
+        if (const auto arr{t.get_data().as_opt<gs::types::array>()}) { return arr->underlying; }
+        if (const auto s{t.get_data().as_opt<gs::types::slice>()}) { return s->underlying; }
+        return stdx::none;
+    }};
+    for (auto elem{element(type)}; elem; elem = element(*elem)) {
+        if (elem->get_kind() == gs::type_kind::AUTO) {
+            return comp_.report(u_,
+                                src,
+                                gs::error::ILLEGAL_AUTO_USAGE,
+                                "Array elements can only have type 'auto' in a function parameter");
+        }
+    }
+
+    // `undefined`'s own type has no runtime representation, also as an array's elements
+    const gs::type* leaf{&type};
+    while (const auto arr{leaf->get_data().as_opt<gs::types::array>()}) { leaf = &arr->underlying; }
+    if (leaf->get_kind() == gs::type_kind::UNDEFINED) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPILE_TIME_ONLY_VALUE,
+                            "'@TypeOf(undefined)' only exists at compile time; only a 'const' "
+                            "binding can have this type");
+    }
+
+    return {};
+}
+
+auto analyzer::check_inhabited(const gs::type& type, const source& src) -> result<void> {
+    const gs::type* leaf{&type};
+    while (const auto arr{leaf->get_data().as_opt<gs::types::array>()}) { leaf = &arr->underlying; }
+    if (leaf->get_kind() != gs::type_kind::NORETURN) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::TYPE_MISMATCH,
+                        "'noreturn' has no values, so nothing can be stored with this type");
+}
+
+auto analyzer::writes_reference(ref r) const -> bool {
+    const auto inst{as_inst(r)};
+    return inst && mod().tag_of(*inst) == tag::ref_type;
+}
+
+auto analyzer::check_element(const gs::type& type, const source& src) -> result<void> {
+    if (type.get_kind() != gs::type_kind::REFERENCE) { return {}; }
+    return comp_.report(
+        u_,
+        src,
+        gs::error::ILLEGAL_REFERENCE_FIELD,
+        "an array or slice element cannot be a reference; use a raw pointer (`^T`)");
+}
+
+auto analyzer::check_passable(const gs::type& type, const source& src) -> result<void> {
+    if (type.get_kind() != gs::type_kind::OPAQUE) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::ILLEGAL_OPAQUE_TYPE,
+                        "An 'opaque' value has no size, so it can't be passed or returned; use a "
+                        "pointer to it instead");
+}
+
+auto holds_poly(const gs::type& type) -> bool {
+    if (type.is_poly()) { return true; }
+    if (const auto arr{type.get_data().as_opt<gs::types::array>()}) {
+        return holds_poly(arr->underlying);
+    }
+    if (const auto slice{type.get_data().as_opt<gs::types::slice>()}) {
+        return holds_poly(slice->underlying);
+    }
+
+    const auto inner{gs::pointee_of(type)};
+    return inner && holds_poly(*inner);
+}
+
+auto analyzer::check_unpolymorphic(const gs::type& type, const source& src) -> result<void> {
+    if (!holds_poly(type)) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::ILLEGAL_POLY_MUTABILITY,
+                        "`mut?` takes its mutability from a function's `mut?` parameter, so only a "
+                        "function's parameters, result, and locals can use it");
+}
+
+auto analyzer::check_extern_type(const gs::type& type, const source& src) -> result<void> {
+    if (const auto vec{nonabi_vector(type, comp_.ptr_bits())}) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ILLEGAL_EXTERN_VECTOR,
+                            fmt::format("'{}' has no C ABI; a vector crossing an `extern` boundary "
+                                        "must be 16, 32, or 64 bytes",
+                                        comp_.ctx().type_display_name(*vec)));
+    }
+
+    return {};
 }
 
 auto analyzer::analyze_func(inst_id inst) -> result<operand> {
