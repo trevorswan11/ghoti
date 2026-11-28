@@ -1999,7 +1999,7 @@ class analyzer {
     [[nodiscard]] auto emit_decision(const match_lowering& m, usize node) -> result<void>;
     [[nodiscard]] auto slot_operand(const capture_slot& slot) -> operand;
     // Binds the names an arm's patterns capture to the arm's slots
-    void bind_slots(const match_lowering& m, usize arm);
+    void bind_slots(const match_lowering& m, usize arm, bool read_only = false);
 
     // Types with no declaration (synthesized.cc)
     [[nodiscard]] auto analyze_merge_enums(inst_id inst) -> result<operand>;
@@ -2170,6 +2170,10 @@ class analyzer {
     // Coercion (coerce.cc)
     [[nodiscard]] auto coerce(const operand& op, gs::type& target, const source& src)
         -> result<stdx::option<operand>>;
+    // Reports a runtime number converted to a compile-time one, which only a known value becomes
+    [[nodiscard]] auto
+    reject_runtime_to_comptime(const operand& op, gs::type& target, const source& src)
+        -> result<void>;
     // `coerce`, reporting a missing conversion in the words of `site`
     [[nodiscard]] auto
     coerce_to(const operand& op, gs::type& target, const source& src, const use_site& site)
@@ -2226,6 +2230,9 @@ class analyzer {
 
     // Locals and memory (memory.cc)
     [[nodiscard]] auto analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand>;
+    // Reports an untyped `undefined` bound at runtime, which has nothing to be
+    [[nodiscard]] auto reject_untyped_undefined(const operand& value, const source& src)
+        -> result<void>;
     [[nodiscard]] auto store_comptime(const comptime_place& p,
                                       const operand&        value,
                                       const source&         src) -> result<void>;

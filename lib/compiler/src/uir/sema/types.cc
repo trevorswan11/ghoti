@@ -448,6 +448,17 @@ auto analyzer::check_storable(const gs::type& type, const source& src) -> result
                             fmt::format("`{}` is unsized; use `&{}` or `^{}`", name, name, name));
     }
 
+    // `undefined`'s own type has no runtime representation, also as an array's elements
+    const gs::type* leaf{&type};
+    while (const auto arr{leaf->get_data().as_opt<gs::types::array>()}) { leaf = &arr->underlying; }
+    if (leaf->get_kind() == gs::type_kind::UNDEFINED) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPILE_TIME_ONLY_VALUE,
+                            "'@TypeOf(undefined)' only exists at compile time; only a 'const' "
+                            "binding can have this type");
+    }
+
     return {};
 }
 

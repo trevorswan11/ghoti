@@ -29,6 +29,24 @@ namespace {
 
 [[nodiscard]] auto is_poison(const gs::type& t) noexcept -> bool { return t.is_poison(); }
 
+// Whether a view of `target` grants no write through it that `from` doesn't, at every level
+[[nodiscard]] auto writes_permitted(const gs::type& from, const gs::type& target) -> bool {
+    const auto viewed{[](const gs::type& t) -> stdx::option<const gs::type&> {
+        if (const auto p{t.get_data().as_opt<gs::types::pointer>()}) { return p->underlying; }
+        if (const auto r{t.get_data().as_opt<gs::types::reference>()}) { return r->underlying; }
+        if (const auto s{t.get_data().as_opt<gs::types::slice>()}) { return s->underlying; }
+        return stdx::none;
+    }};
+    const auto from_inner{viewed(from)};
+    const auto target_inner{viewed(target)};
+    if (!from_inner || !target_inner) { return true; }
+    // `mut?` takes either mutability, so it settles nothing here
+    if (!from.is_poly() && !target.is_poly() && from.is_constant() && !target.is_constant()) {
+        return false;
+    }
+    return writes_permitted(*from_inner, *target_inner);
+}
+
 } // namespace
 
 auto int_of(const ip::value& v) -> stdx::option<big_int> {
@@ -227,7 +245,10 @@ auto analyzer::coerce(const operand& op, gs::type& target, const source& src)
         }
     }
     if (is_poison(from) || is_poison(target)) { return stdx::err{stop::POISON}; }
-    if (gs::is_same_unqualified(from, target)) { return op; }
+    if (gs::is_same_unqualified(from, target)) {
+        if (!writes_permitted(from, target)) { return stdx::option<operand>{}; }
+        return op;
+    }
     if (auto fat{TRY(coerce_to_dyn(op, target, src))}) { return std::move(*fat); }
     if (from.get_kind() == gs::type_kind::ENUM && target.get_kind() == gs::type_kind::ENUM &&
         gs::is_enum_widenable(from, target)) {
@@ -590,10 +611,31 @@ auto analyzer::read_through_reference(const operand& op, const source& src) -> r
         gir::value{builder_.emit_load(gir::value{address.data, referent}, referent), referent}};
 }
 
+auto analyzer::reject_runtime_to_comptime(const operand& op, gs::type& target, const source& src)
+    -> result<void> {
+    // A compile-time number is only ever known, never read from a runtime value
+    const auto value{op.as_opt<gir::value>()};
+    if (!value || !value->type || !gs::is_comptime_numeric(target.get_kind()) || is_comptime() ||
+        gs::is_comptime_numeric(value->type->get_kind()) ||
+        !gs::is_numeric(value->type->get_kind())) {
+        return {};
+    }
+
+    return comp_.report(u_,
+                        src,
+                        gs::error::COMPTIME_EVALUATION_FAILED,
+                        fmt::format("a runtime '{}' cannot become '{}'; the value must be known at "
+                                    "compile time",
+                                    comp_.ctx().type_display_name(*value->type),
+                                    comp_.ctx().type_display_name(target)));
+}
+
 auto analyzer::coerce_to(const operand&  op,
                          gs::type&       target,
                          const source&   src,
                          const use_site& site) -> result<operand> {
+    TRY(reject_runtime_to_comptime(op, target, src));
+
     // A runtime integer converted to another integer type folds when it is known at compile time
     if (const auto value{op.as_opt<gir::value>()};
         value && site.from && !is_comptime() && value->type &&

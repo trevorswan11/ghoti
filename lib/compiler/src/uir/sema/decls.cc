@@ -752,7 +752,10 @@ auto analyzer::decl_value(decl_id decl) -> result<operand> {
     bool                    infers{false};
     if (d.type_body) {
         auto& type{*TRY(eval_type(mod().body(d.type_body), src))};
-        TRY(check_storable(type, src));
+        // A `const` may name a compile-time-only type, which it folds into its readers
+        if (type.get_kind() != gs::type_kind::UNDEFINED || !d.has(decl_flags::CONSTANT)) {
+            TRY(check_storable(type, src));
+        }
         infers = type.get_kind() == gs::type_kind::AUTO;
         if (!infers) { declared.emplace(type); }
     }

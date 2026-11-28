@@ -215,6 +215,7 @@ auto analyzer::apply_cast(inst_id inst, builtin_t which, gs::type& target, ref o
 
     auto& from{type_of(value)};
     if (from.is_poison() || target.is_poison()) { return stdx::err{stop::POISON}; }
+    TRY(reject_runtime_to_comptime(value, target, src));
 
     if (which != builtin_t::SPLAT && which != builtin_t::BIT_CAST &&
         (gs::is_vector(from) || gs::is_vector(target))) {

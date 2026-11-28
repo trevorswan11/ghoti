@@ -48,6 +48,15 @@ auto analyzer::local_alignment(gsl::span<const inst_id> attrs) -> result<stdx::o
     return resolved.alignment;
 }
 
+auto analyzer::reject_untyped_undefined(const operand& value, const source& src) -> result<void> {
+    if (type_of(value).get_kind() != gs::type_kind::UNDEFINED) { return {}; }
+    return comp_.report(u_,
+                        src,
+                        gs::error::COMPILE_TIME_ONLY_VALUE,
+                        "'undefined' only exists at compile time, so it cannot be stored in a 'let' "
+                        "or 'let mut' binding; use 'const' to alias it");
+}
+
 auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
@@ -74,6 +83,14 @@ auto analyzer::analyze_alloc_mut(inst_id inst, bool is_comptime_alloc) -> result
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
     if (type) { TRY(check_storable(*type, src)); }
+    if (type && gs::is_comptime_numeric(type->get_kind())) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::COMPILE_TIME_ONLY_VALUE,
+                            fmt::format("'{}' only exists at compile time, so it cannot be stored in "
+                                        "a 'let mut' binding; use 'comptime let mut'",
+                                        comp_.ctx().type_display_name(*type)));
+    }
     if (type && type->get_kind() == gs::type_kind::NORETURN) {
         return comp_.report(u_,
                             src,
@@ -608,6 +625,7 @@ auto analyzer::analyze_let_value(inst_id inst) -> result<operand> {
         return comp_.report(
             u_, src, gs::error::MUTABLE_TYPE_BINDING, std::string{messages::MUTABLE_TYPE_BINDING});
     }
+    if (!type_ref) { TRY(reject_untyped_undefined(init, src)); }
 
     // A range with no type takes its bounds' type
     if (const auto literal{init.as_opt<anon_init>()};
@@ -946,6 +964,8 @@ auto analyzer::analyze_store(inst_id inst) -> result<operand> {
     }
 
     if (!destination.address.type) {
+        TRY(reject_untyped_undefined(value, src));
+
         // A type only exists at compile time, so a runtime slot can't hold one
         if (const auto index{comptime_value(value)};
             index && comp_.constants().is_type(*index)) {

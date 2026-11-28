@@ -718,6 +718,7 @@ auto analyzer::builtin_as(inst_id inst, gsl::span<const ref> args, const source&
 
 auto analyzer::as_to(gs::type& target, ref value_ref, const source& src) -> result<operand> {
     auto value{TRY(resolve_value(value_ref, src))};
+    TRY(reject_runtime_to_comptime(value, target, src));
 
     // A vector takes its lanes from a list, an array or another vector
     if (gs::is_vector(target)) {
