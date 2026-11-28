@@ -700,8 +700,9 @@ auto analyzer::coerce_to(const operand&  op,
     UNREACHABLE("every use site has a message");
 }
 
-auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
-    -> result<gsl::not_null<gs::type*>> {
+auto analyzer::peer_type(gsl::span<const operand>       ops,
+                         const source&                  src,
+                         stdx::option<std::string_view> what) -> result<gsl::not_null<gs::type*>> {
     std::vector<gs::peer_operand> peers;
     peers.reserve(ops.size());
     for (const auto& op : ops) {
@@ -713,8 +714,9 @@ auto analyzer::peer_type(gsl::span<const operand> ops, const source& src)
     auto&      ctx{comp_.ctx()};
     const auto peer{gs::peer_type(ctx, peers)};
     if (!peer) {
-        return comp_.report(
-            u_, src, gs::error::NO_PEER_TYPE, gs::peer_error_message(ctx, peers, peer.error()));
+        auto message{gs::peer_error_message(ctx, peers, peer.error())};
+        if (what) { message = fmt::format("'{}': {}", *what, message); }
+        return comp_.report(u_, src, gs::error::NO_PEER_TYPE, std::move(message));
     }
 
     return *peer;

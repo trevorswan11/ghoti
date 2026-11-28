@@ -2174,7 +2174,10 @@ class analyzer {
     [[nodiscard]] auto
     coerce_to(const operand& op, gs::type& target, const source& src, const use_site& site)
         -> result<operand>;
-    [[nodiscard]] auto peer_type(gsl::span<const operand> ops, const source& src)
+    // `what` names a builtin the operands are given to, which the error then names
+    [[nodiscard]] auto peer_type(gsl::span<const operand>       ops,
+                                 const source&                  src,
+                                 stdx::option<std::string_view> what = stdx::none)
         -> result<gsl::not_null<gs::type*>>;
     // The array of type `from` at `address` viewed as a slice of its elements
     [[nodiscard]] auto array_as_slice(const gir::value& address, gs::type& from, gs::type& target)
@@ -2586,6 +2589,8 @@ class analyzer {
     // Memory builtins (math.cc)
     // Inline assembly (asm.cc)
     [[nodiscard]] auto analyze_asm(inst_id inst) -> result<operand>;
+    // Reports an `asm` whose options, constraints, operands or template don't fit together
+    [[nodiscard]] auto check_asm_form(const source& src) -> result<void>;
     [[nodiscard]] auto analyze_mem_view(inst_id inst) -> result<operand>;
     // A buffer taken apart into its data, element count and, for a destination, byte count
     [[nodiscard]] auto

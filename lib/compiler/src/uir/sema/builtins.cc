@@ -274,6 +274,12 @@ auto analyzer::analyze_type_of(inst_id inst) -> result<operand> {
     auto        rec{record(inst)};
     const auto& src{src_of(inst)};
     const auto  count{rec.count()};
+    if (count == 0) {
+        return comp_.report(u_,
+                            src,
+                            gs::error::ARITY_MISMATCH,
+                            "'@TypeOf' expects at least 1 argument, found 0");
+    }
 
     std::vector<gs::peer_operand> peers;
     std::vector<source>           sources;

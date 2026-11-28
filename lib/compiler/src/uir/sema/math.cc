@@ -224,7 +224,7 @@ auto analyzer::binary_math_of(syntax::builtin_t which,
     }
 
     const std::array operands{lhs, rhs};
-    auto&            peer{*TRY(peer_type(operands, src))};
+    auto&            peer{*TRY(peer_type(operands, src, name))};
     const bool       both_known{comptime_value(lhs) && comptime_value(rhs)};
     auto&            work{both_known || !gs::is_comptime_numeric(peer.get_kind())
                               ? peer

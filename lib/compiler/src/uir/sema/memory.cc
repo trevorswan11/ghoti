@@ -737,6 +737,16 @@ auto analyzer::analyze_const_local(inst_id inst) -> result<operand> {
         return analyze_body(body);
     }()};
     if (!value && value.error() == stop::RUNTIME) {
+        // An initializer that is wrong as well as runtime reports what is wrong with it
+        if (gir_fn_ && !is_comptime()) {
+            const auto reported{comp_.diagnostic_count()};
+            const auto checked{analyze_unemitted(body)};
+            if (!checked && checked.error() == stop::UNSUPPORTED) {
+                return stdx::err{stop::UNSUPPORTED};
+            }
+            if (comp_.diagnostic_count() != reported) { return stdx::err{stop::POISON}; }
+        }
+
         return comp_.report_runtime_need(
             u_, init_src, gs::error::COMPTIME_MUT_NOT_FOLDABLE, std::string{CONST_CONSTANT});
     }
