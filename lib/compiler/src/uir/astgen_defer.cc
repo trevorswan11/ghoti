@@ -26,6 +26,16 @@ auto astgen::push_defer(ast::node_id id, bool is_errdefer) -> void {
                is_errdefer ? "errdefer" : "defer");
         return;
     }
+    state.has_errdefer = state.has_errdefer || is_errdefer;
+    if (is_errdefer) {
+        const auto& errdefer{ast_.get_as<ast::errdefer_stmt>(id)};
+        const auto  how{errdefer.modifier};
+        if (how.is_mutable_ref() || how.is_mutable_ptr() || how.is_volatile() || how.is_poly()) {
+            report(location_of(id),
+                   sema::error::ERRDEFER_MUTABLE_CAPTURE,
+                   "errdefer capture cannot have a mutable modifier");
+        }
+    }
     state.defers.emplace_back<defer_entry>({
         .stmt        = id,
         .is_errdefer = is_errdefer,
@@ -69,6 +79,7 @@ auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) ->
     }
 
     // Only a failure path copies an errdefer, and every failure path has a residual
+    state.copied_errdefers.emplace_back(entry.stmt.get_index());
     const auto&       errdefer{ast_.get_as<ast::errdefer_stmt>(entry.stmt)};
     const scope_guard scoped{*this, scope_kind::BLOCK};
     if (errdefer.capture && errdefer.capture->is<ast::identifier_expr>()) {
@@ -87,6 +98,23 @@ auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) ->
                         {.kind = binding_kind::VALUE, .value = value}));
     }
     DISCARD(stmt(errdefer.deferred));
+}
+
+auto astgen::check_uncopied_errdefers(usize height) -> void {
+    const std::vector<defer_entry> pending(functions_.back().defers.begin() +
+                                               static_cast<idiff>(height),
+                                           functions_.back().defers.end());
+    for (const auto& entry : pending) {
+        if (!entry.is_errdefer ||
+            std::ranges::contains(functions_.back().copied_errdefers, entry.stmt.get_index())) {
+            continue;
+        }
+
+        // The copy is never reached, so only what lowering it reports remains
+        std::vector<inst_id> unused;
+        const body_guard     guard{*this, unused};
+        emit_defer(entry, to_ref(well_known::undefined));
+    }
 }
 
 auto astgen::emit_return(ast::node_id id, ref value) -> void {

@@ -57,7 +57,8 @@ constexpr auto FN_FLAGS{std::to_array<std::string_view>({"variadic",
                                                          "move",
                                                          "type_expr",
                                                          "testing",
-                                                         "bodyless"})};
+                                                         "bodyless",
+                                                         "has_errdefer"})};
 constexpr auto ATTR_FLAGS{std::to_array<std::string_view>({"reads_params"})};
 constexpr auto AGG_FLAGS{std::to_array<std::string_view>({"extern", "packed"})};
 constexpr auto ENUM_FLAGS{std::to_array<std::string_view>({"non_exhaustive"})};

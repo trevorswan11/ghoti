@@ -339,6 +339,13 @@ auto astgen::expr(ast::expr_handle h) -> ref {
         return add_str(
             tag::implicit_access, name_of(ast_.get_as<ast::implicit_access_expr>(id).member), id);
     case node_kind::COMPTIME_EXPRESSION: {
+        if (ast_.get_as<ast::comptime_expr>(id).rhs.is<ast::function_expr>()) {
+            report(location_of(id),
+                   sema::error::COMPTIME_EVALUATION_FAILED,
+                   "Redundant 'comptime': a function literal is already known at compile time");
+            return to_ref(well_known::undefined);
+        }
+
         std::vector<inst_id> body;
         {
             const body_guard guard{*this, body};
@@ -535,6 +542,12 @@ auto astgen::call_args(const ast::call_expr& call)
 auto astgen::call(source src, source_location, const ast::call_expr& node) -> ref {
     const ast::node_id callee{node.function};
     if (const auto builtin{callee.get_builtin()}; builtin && callee.is<ast::identifier_expr>()) {
+        if (node.modifier) {
+            report(location_of(callee),
+                   sema::error::TYPE_MISMATCH,
+                   "'@call' calls a function; a builtin isn't one");
+            return to_ref(well_known::undefined);
+        }
         return builtin_call(src, callee, *builtin, node);
     }
 
@@ -833,6 +846,17 @@ auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
     }};
 
     if (node.payload_capture) {
+        // What a compile-time condition unwraps is a value, with no place to alias
+        for (const auto& capture : {node.payload_capture, node.else_capture}) {
+            if (node.comptime_condition && capture &&
+                (capture->modifier.is_ref() || capture->modifier.is_ptr())) {
+                report(location_of(capture->payload),
+                       sema::error::ILLEGAL_UNWRAP_CAPTURE,
+                       "A capture on `if comptime` is a compile-time value, so it takes no `&` or "
+                       "`^` modifier");
+            }
+        }
+
         const auto then_arm{captured_arm(node.payload_capture, node.consequence, 0)};
         const auto else_arm{node.alternate ? captured_arm(node.else_capture, *node.alternate, 1)
                                            : void_arm()};
@@ -1026,6 +1050,17 @@ auto astgen::lower_node(ast::node_id id, const ast::label_expr& node) -> ref {
     stdx::option<std::string_view> label;
     if (node.name) {
         label.emplace(name_of(*node.name));
+
+        // A label shares its names with the local its value initializes
+        const auto pending{std::ranges::find(
+            initializing_, *label, [](const auto& entry) { return entry.first; })};
+        if (pending != initializing_.end()) {
+            report(location_of(id),
+                   sema::error::SHADOWING_DECLARATION,
+                   "Attempt to shadow identifier '{}'; previous declaration here: {}",
+                   *label,
+                   pending->second);
+        }
         DISCARD(declare(*label, location_of(id), {.kind = binding_kind::LABEL}));
     }
     const ast::node_id body{node.body};

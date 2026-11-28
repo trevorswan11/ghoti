@@ -251,6 +251,7 @@ enum : u32 {
     TYPE_EXPR     = 1U << 6, // a bodyless signature used as a type
     TESTING       = 1U << 7, // `@[testing]`
     BODYLESS      = 1U << 8, // a signature with no body, unlike an empty `{}`
+    HAS_ERRDEFER  = 1U << 9, // a body holding an `errdefer`, which needs a fallible result
 
     // struct_decl, union_decl
     AGG_EXTERN = 1U << 0,
